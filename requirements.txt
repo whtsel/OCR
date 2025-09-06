@@ -1,0 +1,6 @@
+python-telegram-bot
+Pillow
+easyocr
+PyMuPDF
+python-docx
+numpy
