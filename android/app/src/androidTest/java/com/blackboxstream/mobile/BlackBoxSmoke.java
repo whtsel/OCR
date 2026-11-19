@@ -357,12 +357,12 @@ public final class BlackBoxSmoke extends Instrumentation {
                 () -> jsTrue(web, "!document.querySelector('#bgQueuePanel').hidden && "
                         + "document.querySelectorAll('#bgQueueList .bg-queue-title-v49')[6]?.textContent === 'Espresso'"));
         tapWeb(web, "#bgQueueClose");
-        verifyOfficialTrack(web, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", "51zjlMhdSTE", 175);
+        verifyOfficialTrack(web, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", "sc:1799087761", 175);
         tapWeb(web, "#musicClear");
         tapWeb(web, "#musicGenreChips [title='Open 30 Ghana Essentials picks']");
         await("Ghana Essentials shows its original 30 picks", 8000,
                 () -> jsTrue(web, "!document.querySelector('#viewMusicGenre').hidden && document.querySelectorAll('[data-genre-catalog] .music-genre-card-v50').length===30"));
-        verifyOfficialTrack(web, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", "Hb6I7GoTvzI", 185);
+        verifyOfficialTrack(web, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", "sc:1229321974", 185);
         tapWeb(web, "#musicGenrePage [title='Play Adonai (Remix) [feat. Castro]']");
         await("An unlinked recording offers its own sources without silently playing a substitute", 8000,
                 () -> jsTrue(web, "document.querySelector('#androidMusicSource')?.open && "
@@ -386,12 +386,14 @@ public final class BlackBoxSmoke extends Instrumentation {
                 if (state.optInt("error") != 0) throw new AssertionError(title + " provider error: " + state);
                 return state.optInt("state", -2) == 1 && state.optDouble("seconds", 0) >= 1
                         && Math.abs(state.optDouble("duration", 0) - seconds) <= 6
-                        && state.optString("url").contains("v=" + id);
+                        && (id.startsWith("sc:") ? id.substring(3).equals(state.optString("id"))
+                        : state.optString("url").contains("v=" + id));
             });
-            js(player, "player.seekTo(48, true)");
+            int seek = seconds * 2 / 3;
+            js(player, "bbxSeek(" + seek + ")");
             await(title + " advances from a seek beyond the preview window", 22000, () -> {
                 JSONObject state = officialState(embed);
-                return state.optInt("state", -2) == 1 && state.optDouble("seconds", 0) > 49;
+                return state.optInt("state", -2) == 1 && state.optDouble("seconds", 0) > seek + 1;
             });
         } catch (AssertionError failure) {
             throw new AssertionError(failure.getMessage() + "; official player=" + (player == null ? "not opened" : officialState(player)), failure);

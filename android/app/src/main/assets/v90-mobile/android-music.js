@@ -18,13 +18,16 @@
 
   // Original recordings published by the artists/labels, not text-search guesses or covers.
   // Match the recording, duration and release aliases already present in the supplied v90 data.
+  // SoundCloud references verified against the artists' accounts:
+  // https://soundcloud.com/sabrinacarpenter/sabrina-carpenter-espresso
+  // https://soundcloud.com/blacksherif/kweku-the-traveler
   const officialSources = [
-    ['Sabrina Carpenter', 'Espresso', 175, '51zjlMhdSTE', ['Espresso', "Short n' Sweet"]],
+    ['Sabrina Carpenter', 'Espresso', 175, '51zjlMhdSTE', ['Espresso', "Short n' Sweet"], 'sc:1799087761'],
     ['Billie Eilish', 'bad guy', 194, 'ZD6rXLXZOEI', ['WHEN WE ALL FALL ASLEEP, WHERE DO WE GO?']],
     ['The Weeknd', 'Blinding Lights', 200, 'fHI8X4OXluQ', ['After Hours', 'After Hours (Deluxe)', 'The Highlights']],
     ['Burna Boy', 'On the Low', 185, 'UFsskuvj8GQ', ['On the Low', 'African Giant']],
-    ['Black Sherif', 'Kwaku the Traveller', 185, 'Hb6I7GoTvzI', ['Kwaku the Traveller', 'The Villain I Never Was']],
-  ].map(([a, t, seconds, id, albums]) => ({artist:norm(a), track:norm(t), seconds, id, albums:albums.map(norm)}));
+    ['Black Sherif', 'Kwaku the Traveller', 185, 'Hb6I7GoTvzI', ['Kwaku the Traveller', 'The Villain I Never Was'], 'sc:1229321974'],
+  ].map(([a, t, seconds, youtube, albums, soundCloud]) => ({artist:norm(a), track:norm(t), seconds, id:soundCloud || youtube, youtube, soundCloud, albums:albums.map(norm)}));
   function official(item) {
     const a = norm(artist(item)), t = norm(title(item)), album = norm(item.album);
     return officialSources.find(s => s.artist === a && s.track === t && s.albums.includes(album)
@@ -138,9 +141,16 @@
     } else dialog.append(heading, el('p', 'sub', [artist(item), item.album].filter(Boolean).join(' · ')), info);
     controls.append(button('Choose audio on this phone', pickFile), button('Play linked source', event => useLink(event, false), 'primary'),
       button('Download audio file', event => useLink(event, true)), button('Close', () => dialog.close(), 'ghost'));
-    if (source) dialog.append(button('Play official source in BlackBox', () => {
-      dialog.close(); bbxAndroidOpen('music-video', source.id);
-    }));
+    if (source) {
+      const providers = el('div', 'android-tools-row');
+      if (source.soundCloud) providers.append(button('Play on SoundCloud here', () => {
+        dialog.close(); bbxAndroidOpen('music-video', source.soundCloud);
+      }));
+      providers.append(button('Play on YouTube here', () => {
+        dialog.close(); bbxAndroidOpen('music-video', source.youtube);
+      }));
+      dialog.append(providers);
+    }
     dialog.append(el('p', 'sub', 'Use an authorized direct audio file, or an official YouTube link for online-only playback.'), input, controls, status);
     dialog.addEventListener('close', () => { if (openDialog === dialog) openDialog = null; dialog.remove(); }, {once:true});
     openDialog = dialog; document.body.append(dialog); dialog.showModal();

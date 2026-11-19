@@ -36,6 +36,7 @@ public final class MusicVideoActivity extends Activity {
     private WebChromeClient.CustomViewCallback fullscreenCallback;
     private String id;
     private boolean loaded, requested, visible;
+    private boolean soundCloud;
     private long started;
     private int epoch;
 
@@ -51,8 +52,8 @@ public final class MusicVideoActivity extends Activity {
                     if (error != 0) status.setText(error == 101 || error == 150 || error == 100
                             ? "This recording isn't available in the embedded player. Go back to link an authorized source."
                             : "The online provider couldn't play this recording. Try reloading or link an authorized file.");
-                    else if (state == 1 || state == 2 || state == 0) status.setText("YouTube · online only · no offline copy");
-                    else if (data.optBoolean(2)) status.setText("Tap Play in the YouTube player to start this recording.");
+                    else if (state == 1 || state == 2 || state == 0) status.setText(provider() + " · online only · no offline copy");
+                    else if (data.optBoolean(2)) status.setText("Tap Play in the " + provider() + " player to start this recording.");
                     else if (SystemClock.uptimeMillis() - started > 22000)
                         status.setText("The online player is taking too long. Check your connection or link another source for this recording.");
                 } catch (org.json.JSONException pending) {
@@ -63,12 +64,15 @@ public final class MusicVideoActivity extends Activity {
         }
     };
 
-    static boolean validId(String id) { return id != null && id.matches("[A-Za-z0-9_-]{11}"); }
+    static boolean validId(String id) { return id != null && id.matches("(?:[A-Za-z0-9_-]{11}|sc:[1-9][0-9]{0,11})"); }
+
+    private String provider() { return soundCloud ? "SoundCloud" : "YouTube"; }
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         id = getIntent().getStringExtra(EXTRA_VIDEO);
         if (!validId(id) || V90Api.expired()) { finish(); return; }
+        soundCloud = id.startsWith("sc:");
         root = new FrameLayout(this);
         root.setBackgroundColor(Ui.BG);
         Ui.fitWindow(this, root);
@@ -81,7 +85,7 @@ public final class MusicVideoActivity extends Activity {
         content.addView(Ui.action(this, "← Music", false, v -> finish()));
         Ui.gap(content, 16);
         content.addView(Ui.text(this, "BlackBox Music", 25, Ui.INK, Ui.DISPLAY));
-        content.addView(Ui.text(this, "Official YouTube player · online listening only", 13, Ui.MUTED, null));
+        content.addView(Ui.text(this, "Official " + provider() + " player · online listening only", 13, Ui.MUTED, null));
         Ui.gap(content, 12);
         status = Ui.text(this, "Opening the selected recording…", 14, Ui.MUTED, null);
         try {
@@ -134,19 +138,23 @@ public final class MusicVideoActivity extends Activity {
         if (web == null) return;
         final String origin = "https://" + getPackageName();
         // The package-name origin provides the required Referer. No remote document runs with Android privileges.
-        web.loadDataWithBaseURL(origin + "/music/", page(origin, id), "text/html", "UTF-8", null);
+        web.loadDataWithBaseURL(origin + "/music/", soundCloud ? soundCloudPage(id.substring(3)) : youtubePage(origin, id), "text/html", "UTF-8", null);
         loaded = true; epoch++; started = SystemClock.uptimeMillis();
         status.setText("Opening the selected recording…");
         main.removeCallbacks(poll);
         main.postDelayed(poll, 750);
     }
 
-    private static String page(String origin, String id) {
+    private static String frameHeader(String host) {
         return "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
                 + "<meta name=referrer content=strict-origin-when-cross-origin>"
-                + "<meta http-equiv=Content-Security-Policy content=\"default-src 'none'; script-src 'unsafe-inline' https://www.youtube.com; "
-                + "style-src 'unsafe-inline'; frame-src https://www.youtube.com; base-uri 'none'; form-action 'none'\">"
-                + "<style>html,body,iframe{width:100%;height:100%;margin:0;border:0;background:#000;display:block}</style>"
+                + "<meta http-equiv=Content-Security-Policy content=\"default-src 'none'; script-src 'unsafe-inline' " + host
+                + "; style-src 'unsafe-inline'; frame-src " + host + "; base-uri 'none'; form-action 'none'\">"
+                + "<style>html,body,iframe{width:100%;height:100%;margin:0;border:0;background:#000;display:block}</style>";
+    }
+
+    private static String youtubePage(String origin, String id) {
+        return frameHeader("https://www.youtube.com")
                 + "<iframe id='recording' title='Official music video player' allow='autoplay; encrypted-media; fullscreen' allowfullscreen "
                 + "src='https://www.youtube.com/embed/" + id + "?enablejsapi=1&amp;playsinline=1&amp;rel=0&amp;origin=" + origin + "'></iframe>"
                 + "<script>let player, blocked=false; window.bbxMusicPlayerError=0; window.bbxMusicPlayerReady=false;"
@@ -157,8 +165,26 @@ public final class MusicVideoActivity extends Activity {
                 + "function bbxPlayerState(){return {ready:bbxMusicPlayerReady,error:bbxMusicPlayerError,state:player?.getPlayerState?.(),"
                 + "seconds:player?.getCurrentTime?.(),duration:player?.getDuration?.(),url:player?.getVideoUrl?.()}};"
                 + "function bbxStatus(){return [bbxMusicPlayerError,player?.getPlayerState?.(),blocked]};"
-                + "function bbxPause(){try{player?.pauseVideo?.()}catch(e){}};</script>"
+                + "function bbxSeek(s){player?.seekTo(s,true)};function bbxPause(){player?.pauseVideo?.()};</script>"
                 + "<script src='https://www.youtube.com/iframe_api'></script></html>";
+    }
+
+    private static String soundCloudPage(String id) {
+        return frameHeader("https://w.soundcloud.com")
+                + "<iframe id='recording' title='Official SoundCloud audio player' allow=autoplay "
+                + "src='https://w.soundcloud.com/player/?url=https%3A%2F%2Fapi.soundcloud.com%2Ftracks%2F" + id
+                + "&amp;auto_play=false&amp;visual=true&amp;show_reposts=false'></iframe>"
+                + "<script src='https://w.soundcloud.com/player/api.js'></script>"
+                + "<script>const recording={ready:false,error:0,state:-1,seconds:0,duration:0,id:''};"
+                + "const widget=window.SC?.Widget('recording'),ev=window.SC?.Widget.Events;"
+                + "if(widget){widget.bind(ev.READY,()=>{recording.ready=true;"
+                + "widget.getCurrentSound(sound=>{recording.id=String(sound?.id||sound?.urn?.split(':').pop()||'');});"
+                + "widget.getDuration(ms=>recording.duration=ms/1000);if(!document.hidden)widget.play();});"
+                + "widget.bind(ev.PLAY,()=>recording.state=1);widget.bind(ev.PAUSE,()=>recording.state=2);"
+                + "widget.bind(ev.FINISH,()=>recording.state=0);widget.bind(ev.ERROR,()=>recording.error=1);"
+                + "widget.bind(ev.PLAY_PROGRESS,e=>{recording.seconds=e.currentPosition/1000;});}"
+                + "function bbxPlayerState(){return recording};function bbxStatus(){return [recording.error,recording.state,false]};"
+                + "function bbxSeek(s){widget?.seekTo(s*1000)};function bbxPause(){widget?.pause()};</script></html>";
     }
 
     @Override protected void onResume() {
