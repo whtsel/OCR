@@ -19,7 +19,7 @@ def check(apk):
                 digest, name = line.split(maxsplit=1)
                 member = 'assets/v90/' + name
                 assert sha256(z.read(member)).hexdigest() == digest, f'Desktop source changed: {member}'
-            for name in ('android-api.js', 'android-port.js', 'android-v90.css'):
+            for name in ('android-api.js', 'android-port.js', 'android-catalogue.js', 'android-v90.css'):
                 assert 'assets/v90-mobile/' + name in z.namelist(), f'Missing Android adapter {name}'
         for entry in z.infolist():
             if entry.filename in ('resources.arsc', 'res/raw/dawn.mp4', 'res/raw/orbit.m4a'):

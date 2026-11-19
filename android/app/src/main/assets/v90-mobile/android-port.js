@@ -15,22 +15,28 @@
   }
   const player = () => node('playerWrap');
   const originalNoKey = renderNoKey;
+  let keylessRequest;
   function fillKeylessHome() {
+    const hero = node('hero'), rows = node('rows'), description = hero.querySelector('.hero-desc');
     const quick = node('heroTorrent');
     if (quick) quick.onclick = () => bbxAndroidOpen('torrent');
-    const hero = node('hero');
-    hero.classList.add('android-keyless');
-    const description = hero.querySelector('.hero-desc');
     if (!description || !quick) return;
+    hero.classList.add('android-keyless');
     description.textContent = 'Use your TMDB key for the full v90 movie and series catalogue. You can also look up torrent sources by title or play the open films below without a key.';
-    read('/api/mobile/open-films').then(({results}) => {
+    keylessRequest ||= read('/api/mobile/open-films');
+    keylessRequest.then(({results}) => {
       if (state.tmdb || !hero.classList.contains('android-keyless')) return;
-      const rows = node('rows');
       rows.replaceChildren(makeRow('Open films · full-length sources', results, null));
-    }).catch(() => {});
+    }).catch(error => {
+      keylessRequest = null;
+      rows.replaceChildren(el('p', 'msg err', `Open film list couldn't load. ${error.message}`));
+    });
   }
   renderNoKey = function () { originalNoKey(); fillKeylessHome(); };
   if (!state.tmdb && node('heroSettings')) fillKeylessHome();
+  document.addEventListener('DOMContentLoaded', () => {
+    if (!state.tmdb && node('heroSettings') && !node('rows').children.length) fillKeylessHome();
+  }, {once:true});
   const originalLoadHome = loadHome;
   loadHome = function (...args) {
     node('hero')?.classList.remove('android-keyless');

@@ -103,6 +103,15 @@ final class V90Api {
                 return select(parts[3], Integer.parseInt(parts[5]), selection.optString("job"), selection.optString("title"));
             }
             if (get && path.equals("/api/mobile/library")) return library();
+            if (get && path.equals("/api/mobile/music")) {
+                JSONArray tracks = new JSONArray();
+                String query = V90Online.searchText(param(uri, "q", ""));
+                if (!query.isEmpty()) for (Catalogue.Card track : Catalogue.music(Catalogue.Music.TRACKS, query)) {
+                    tracks.put(new JSONObject().put("title", track.title).put("track", track.title)
+                            .put("artist", track.detail.split(" · ", 2)[0]).put("listing", track.listing()));
+                }
+                return ok(new JSONObject().put("results", tracks));
+            }
             if (!get && path.equals("/api/mobile/direct")) {
                 JSONObject data = new JSONObject(body); String url = MediaSources.https(data.optString("url"));
                 if (MediaSources.playlist(url) || MediaSources.torrentDescriptor(url)) return fail(400, "Open this through the catalogue or torrent picker.");
@@ -192,6 +201,7 @@ final class V90Api {
         String title = V90Online.searchText(param(uri, "title", "")), year = param(uri, "year", ""), type = param(uri, "type", "movie");
         if (title.length() < 2 || !(type.equals("movie") || type.equals("tv") || type.equals("anime"))) return fail(400, "Choose a title to search.");
         int season = number(uri, "season", 1), episode = number(uri, "episode", 0);
+        String alternative = V90Online.searchText(param(uri, "alt", ""));
         Map<String, JSONObject> distinct = new LinkedHashMap<>();
         JSONArray providers = new JSONArray();
         Cinema.Film film = "movie".equals(type) ? Cinema.exactTitle(title) : null;
@@ -208,23 +218,29 @@ final class V90Api {
             try { distinct.putIfAbsent(TorrentMeta.hex(TorrentMeta.magnet(local.source).hash), V90Online.source(local.title, local.source, 0, 0, "Your Library")); }
             catch (IOException ignored) { }
         }
-        String index = deep ? "Torrents-CSV" : "Knaben";
+        String index = deep ? "Torrents-CSV" : "Knaben", indexStatus = "skipped";
         String note = "Source counts are reported by the index. BlackBox checks the actual manifest and pieces before playing.";
         // Pinned open-film manifests can be shown immediately, even without an index response.
         if (distinct.isEmpty() || deep) {
             try {
-                JSONArray found = online.sources(deep, title, year, type.equals("anime") ? "tv" : type, season, episode);
+                JSONArray found = online.sources(deep, title, year, type, season, episode);
+                indexStatus = "ok";
+                if (found.length() == 0 && alternative.length() > 1 && !alternative.equalsIgnoreCase(title))
+                    found = online.sources(deep, alternative, year, type, season, episode);
                 if (found.length() > 0) providers.put(index);
                 for (int i = 0; i < found.length(); i++) {
                     JSONObject item = found.getJSONObject(i);
                     distinct.putIfAbsent(TorrentMeta.hex(TorrentMeta.magnet(item.getString("magnet")).hash), item);
                 }
                 if (distinct.isEmpty()) note = index + " returned no exact v1 results for this title and episode/year. Try an authorized magnet or .torrent.";
-            } catch (IOException | JSONException failed) { note = index + " is unavailable right now. " + safeFailure(failed, "Try again or open a known source."); }
+            } catch (IOException | JSONException failed) {
+                indexStatus = "unavailable";
+                note = index + " is unavailable right now. " + safeFailure(failed, "Try again or open a known source.");
+            }
         } else note = film != null ? "The original Blender film is available from an exact, verified descriptor." : "Matching sources from your Library.";
         JSONArray sources = new JSONArray();
         for (JSONObject source : distinct.values()) sources.put(source);
-        return ok(new JSONObject().put("sources", sources).put("note", note).put("providers", providers));
+        return ok(new JSONObject().put("sources", sources).put("note", note).put("providers", providers).put("index", index).put("indexStatus", indexStatus));
     }
 
     private synchronized Reply resolve(String source) throws JSONException {
@@ -317,7 +333,7 @@ final class V90Api {
             boolean offline = db.isOffline(e);
             long progress = e.transfer >= 0 ? Downloads.received(db, e) : 0;
             result.put(new JSONObject().put("id", e.id).put("title", e.title).put("kind", e.kind.label)
-                    .put("label", e.sourceLabel()).put("offline", offline).put("queued", e.transfer >= 0)
+                    .put("label", e.sourceLabel()).put("kindId", e.kind.name()).put("offline", offline).put("queued", e.transfer >= 0)
                     .put("error", e.transferError == null ? "" : e.transferError).put("received", progress)
                     .put("total", e.totalBytes).put("position", e.positionMs));
             if (result.length() >= 400) break;

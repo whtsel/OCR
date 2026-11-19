@@ -41,7 +41,7 @@ public final class V90Activity extends Activity {
             + "frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'";
     private static final Set<String> ART_HOSTS = new HashSet<>(Arrays.asList("image.tmdb.org", "cdn.myanimelist.net",
             "s4.anilist.co", "i.ytimg.com", "img.youtube.com", "cdn-images.dzcdn.net", "is1-ssl.mzstatic.com"));
-    private static final Set<String> MOBILE_ASSETS = new HashSet<>(Arrays.asList("android-api.js", "android-port.js", "android-v90.css"));
+    private static final Set<String> MOBILE_ASSETS = new HashSet<>(Arrays.asList("android-api.js", "android-port.js", "android-catalogue.js", "android-v90.css"));
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor work = new ThreadPoolExecutor(6, 6, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(80));
     private volatile boolean closed;
@@ -133,6 +133,7 @@ public final class V90Activity extends Activity {
                 else if ("torrent".equals(action)) launch(TorrentActivity.class);
                 else if ("share".equals(action)) launch(LanShareActivity.class);
                 else if ("rooms".equals(action)) launch(CommunityActivity.class);
+                else if ("browser".equals(action)) openProviderPage(id);
             });
         }
     }
@@ -142,6 +143,21 @@ public final class V90Activity extends Activity {
         Intent request = new Intent(this, screen);
         if (screen == MainActivity.class) request.putExtra("device_library", true);
         startActivity(request);
+    }
+    private void openProviderPage(String url) {
+        // An explicit click leaves the app. No site is loaded inside the WebView with the Android bridge.
+        if (url == null || url.length() > 1800) return;
+        try {
+            Uri uri = Uri.parse(MediaSources.https(url));
+            String host = uri.getHost(), path = uri.getPath();
+            if (uri.getPort() != -1 || uri.getUserInfo() != null || path == null) return;
+            boolean allowed = "www.youtube.com".equals(host) && ("/results".equals(path) || "/watch".equals(path))
+                    || "www.themoviedb.org".equals(host) && path.matches("/(?:[a-z]{2}(?:-[A-Z]{2})?/)?(?:movie|tv)/[A-Za-z0-9_-]+(?:/watch)?/?")
+                    || "musicbrainz.org".equals(host) && path.matches("/recording/[a-f0-9-]{36}")
+                    || "studio.blender.org".equals(host) && path.matches("/projects/[a-z0-9-]+/?");
+            if (allowed) startActivity(new Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE));
+        } catch (android.content.ActivityNotFoundException unavailable) { toast("No app is available to open this provider page."); }
+        catch (IllegalArgumentException invalid) { toast("This provider link is not supported."); }
     }
     private void toast(String text) { if (!closed) Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
 
@@ -196,8 +212,8 @@ public final class V90Activity extends Activity {
         // Keep the desktop sources byte-for-byte on disk. Change only how the mobile shell loads them.
         html = html.replace("</head>", "<link rel=\"stylesheet\" href=\"/android-v90.css\" />\n</head>")
                 .replace("<script src=\"/app.js", "<script src=\"/android-api.js\"></script>\n<script src=\"/app.js")
-                .replaceAll("<script src=\"/(?:fast-source-v74|play-anyway-v74|local-share-v70|ads-v88|vote-gate-v75|votes-sync-v74|privacy-panel-v86)\\.js[^\"]*\"></script>", "")
-                .replace("</body>", "<script src=\"/android-port.js\"></script>\n</body>");
+                .replaceAll("<script src=\"/(?:fast-source-v74|play-anyway-v74|local-share-v70|ads-v88|source-votes-v74|vote-gate-v75|votes-sync-v74|privacy-panel-v86)\\.js[^\"]*\"></script>", "")
+                .replace("</body>", "<script src=\"/android-port.js\"></script>\n<script src=\"/android-catalogue.js\"></script>\n</body>");
         return html.getBytes(StandardCharsets.UTF_8);
     }
 

@@ -42,3 +42,14 @@
   .bbx-android .android-tools-row button { min-height:42px; }
   .bbx-android .android-file-chooser .file { min-height:52px; }
 }
+.bbx-android #detailSound, .bbx-android #heroSound, .bbx-android #detailCardMediaBtn,
+.bbx-android .detail-video, .bbx-android #musicLibrarySidebar .music-library-controls-v47,
+.bbx-android #musicLibrarySidebar .music-frequency-panel-v51,
+.bbx-android #musicLibrarySidebar .music-downloaded-list-v47 { display:none !important; }
+.bbx-android .android-source-heading { margin:18px 14px 6px; scroll-margin-top:165px; }
+.bbx-android .android-audio-library { display:flex; flex-direction:column; gap:6px; margin:10px 0; }
+.bbx-android .android-audio-library button { text-align:left; }
+@media (max-width: 370px) {
+  .bbx-android .brand svg { display:none; }
+  .bbx-android .brand > span { font-size:11px; }
+}

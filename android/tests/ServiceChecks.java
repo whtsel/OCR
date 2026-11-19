@@ -4,7 +4,8 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import javax.net.ssl.HttpsURLConnection;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public final class ServiceChecks {
     private static int assertions;
@@ -36,6 +37,8 @@ public final class ServiceChecks {
         check("open catalogue includes immediately available offline samples", Catalogue.open(false).get(0).entry().bundled()
                 && Catalogue.open(true).get(0).entry().kind == MediaEntry.Kind.MUSIC);
 
+        verifyV90Providers();
+
         CommunityRoom alice = CommunityRoom.create(relay), bob = CommunityRoom.parse(alice.code());
         check("invitation derives the same room without sending its key", alice.roomId.equals(bob.roomId) && !alice.code().contains(alice.roomId));
         check("empty room joins successfully", bob.fetch(0).events.isEmpty());
@@ -57,5 +60,46 @@ public final class ServiceChecks {
         rejected("Community does not permit insecure relay URLs", () -> CommunityRoom.create("http://127.0.0.1:1"));
         rejected("Community recommendations do not allow file access", () -> CommunityRoom.Event.make("Alice", "Bad URL", "file:///private"));
         System.out.println(assertions + " BlackBox catalogue and Community checks passed");
+    }
+    private static void verifyV90Providers() throws Exception {
+        String first = "f0ad89e00112233445566778899aabbccddeeff0", second = "82bdafb00112233445566778899aabbccddeeff0";
+        JSONObject best = new JSONObject().put("hash", first.toUpperCase(java.util.Locale.ROOT)).put("title", "Horizon Test.2024.1080p.mp4")
+                .put("bytes", 42000L).put("seeders", 38).put("magnetUrl", "magnet:?xt=urn:btih:" + first + "&x.pe=127.0.0.1:8080&ws=https://example.invalid/file");
+        JSONArray hits = new JSONArray().put(best)
+                .put(new JSONObject(best.toString()).put("seeders", 2))
+                .put(new JSONObject(best.toString()).put("hash", second))
+                .put(new JSONObject(best.toString()).put("title", "Horizon Test.2021.1080p.mp4"))
+                .put(new JSONObject(best.toString()).put("title", "Horizon Test.2024.exe"))
+                .put(new JSONObject(best.toString()).put("category", "Games"));
+        JSONArray found = V90Online.parseSources(new JSONObject().put("hits", hits).toString(), false, "Horizon Test", "2024", "movie", 0, 0);
+        check("v90 Knaben adapter filters other years and executables, binds hashes, and deduplicates", found.length() == 1
+                && found.getJSONObject(0).getInt("seeders") == 38 && found.getJSONObject(0).getLong("sizeBytes") == 42000L);
+        check("index results never inject peer addresses or untrusted web seeds", !found.getJSONObject(0).getString("magnet").contains("127.0.0.1")
+                && !found.getJSONObject(0).getString("magnet").contains("example.invalid"));
+        JSONArray csv = new JSONArray()
+                .put(new JSONObject().put("name", "Horizon.Test.S02E03.720p").put("infohash", second).put("size_bytes", 33554432L))
+                .put(new JSONObject().put("name", "Horizon.Test.S02E030.720p").put("infohash", first).put("size_bytes", 33554432L));
+        found = V90Online.parseSources(new JSONObject().put("torrents", csv).toString(), true, "Horizon Test", "", "tv", 2, 3);
+        check("v90 Torrents-CSV adapter returns only the requested episode and keeps its byte size", found.length() == 1
+                && found.getJSONObject(0).getString("magnet").contains(second) && found.getJSONObject(0).getLong("sizeBytes") == 33554432L);
+        check("anime filename pattern matches the requested episode, not its sequel or resolution",
+                V90Online.releaseMatches("Horizón Test", "", "anime", 1, 3, "[Studio] Horizon Test - 03v2 [1080p].mkv")
+                && !V90Online.releaseMatches("Horizon Test", "", "anime", 1, 3, "[Studio] Horizon Test 1080p.mkv")
+                && !V90Online.releaseMatches("Horizon Test", "", "anime", 1, 3, "[Studio] Horizon Test 2 - 03.mkv"));
+        final int[] calls = {0};
+        V90Online online = new V90Online((endpoint, body) -> {
+            calls[0]++;
+            check("only the selected title and episode go to the film index", V90Online.KNABEN.equals(endpoint)
+                    && "Horizon Test S02E03".equals(body.optString("query")) && body.optBoolean("hide_unsafe") && body.optBoolean("hide_xxx"));
+            return "{\"hits\":[]}";
+        });
+        online.sources(false, "Horizon Test", "2024", "tv", 2, 3);
+        online.sources(false, "Horizon Test", "2024", "tv", 2, 3);
+        check("reopening a title doesn't repeatedly query its index", calls[0] == 1);
+        JSONObject anime = V90Online.parseAnime("{\"data\":[{\"mal_id\":489,\"title\":\"Horizon Test\",\"title_english\":null,\"aired\":{\"from\":\"2010-01-01T00:00:00Z\"},\"score\":8.1,\"episodes\":3,\"type\":\"TV\"}],\"pagination\":{\"last_visible_page\":2,\"has_next_page\":true}}");
+        JSONObject title = anime.getJSONArray("items").getJSONObject(0);
+        check("Jikan catalogue maps an actual title, normalizes year and score, and preserves v90 pagination",
+                title.getInt("year") == 2010 && title.getInt("score") == 81 && "Horizon Test".equals(title.getString("title"))
+                && anime.getJSONObject("pagination").getBoolean("hasNextPage") && anime.getJSONObject("pagination").getInt("lastPage") == 2);
     }
 }

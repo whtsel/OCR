@@ -58,14 +58,19 @@ final class V90Online {
 
     static boolean releaseMatches(String title, String year, String type, int season, int episode, String release) {
         if (release == null || release.length() > 360 || release.matches("(?i).*(?:\\.(?:exe|msi|apk|zip|rar|iso|bat|scr|cmd|js)|\\bpassword\\b).*")) return false;
-        String actual = words(release), target = words(title);
+        boolean anime = "anime".equals(type);
+        String label = anime ? release.replaceFirst("^\\s*\\[[^\\]\\r\\n]{1,64}\\]\\s*", "") : release;
+        String actual = words(label), target = words(title);
         if (target.isEmpty() || !(actual.equals(target) || actual.startsWith(target + " "))) return false;
-        if ("tv".equals(type)) {
+        if ("tv".equals(type) || anime) {
             if (episode <= 0) return true;
             if (season < 0 || season > 999 || episode > 9999) return false;
             String series = "(?:^| )s0*" + season + "[ ]?e0*" + episode + "(?:$|[^0-9])";
             String alt = "(?:^| )0*" + season + "x0*" + episode + "(?:$|[^0-9])";
-            return actual.matches(".*" + series + ".*") || actual.matches(".*" + alt + ".*");
+            if (actual.matches(".*" + series + ".*") || actual.matches(".*" + alt + ".*")) return true;
+            // Anime release groups also label single episodes as "Title - 03" or "Title E03".
+            String rest = actual.substring(target.length()).trim();
+            return anime && season == 1 && rest.matches("(?:e(?:p(?:isode)?)? ?)?0*" + episode + "(?:v[0-9]+)?(?:$| .*)");
         }
         return !year.matches("[0-9]{4}") || (" " + actual.substring(target.length()).trim() + " ").contains(" " + year + " ");
     }
@@ -74,8 +79,8 @@ final class V90Online {
         String clean = searchText(title), y = year.matches("[0-9]{4}") ? year : "";
         if (clean.length() < 2) return new JSONArray();
         String tail = "tv".equals(type) && season >= 0 && episode > 0 ? String.format(Locale.ROOT, " S%02dE%02d", season, episode)
-                : !"tv".equals(type) && !y.isEmpty() ? " " + y : "";
-        String key = deep + ":" + clean.toLowerCase(Locale.ROOT) + tail;
+                : "movie".equals(type) && !y.isEmpty() ? " " + y : "";
+        String key = deep + ":" + type + ":" + season + ":" + episode + ":" + clean.toLowerCase(Locale.ROOT) + tail;
         synchronized (cache) {
             Cached hit = cache.get(key);
             if (hit != null && hit.until - System.nanoTime() > 0) return hit.entries;
@@ -96,7 +101,7 @@ final class V90Online {
         for (int i = 0; i < Math.min(150, rows.length()); i++) {
             JSONObject row = rows.optJSONObject(i);
             if (row == null) continue;
-            String name = row.optString(deep ? "name" : "title"), category = row.optString("category").toLowerCase(Locale.ROOT);
+            String name = text(row, deep ? "name" : "title"), category = text(row, "category").toLowerCase(Locale.ROOT);
             if (!releaseMatches(title, year, type, season, episode, name) || category.matches(".*(?:adult|xxx|software|games|porn).*")) continue;
             String hash = row.optString(deep ? "infohash" : "hash").toLowerCase(Locale.ROOT);
             String candidate = row.optString("magnetUrl");
@@ -135,7 +140,7 @@ final class V90Online {
         if (mode.equals("search") && searchText(q).isEmpty()) return new JSONObject().put("items", new JSONArray());
         String route = mode.equals("search") ? "/anime?sfw=true&q=" + encode(searchText(q))
                 : "/top/anime?sfw=true" + (mode.equals("airing") ? "&filter=airing" : "");
-        return parseAnime(http.get(JIKAN + route + "&limit=24&page=" + Math.max(1, Math.min(100, page)), null));
+        return parseAnime(http.get(JIKAN + route + "&limit=" + (mode.equals("search") ? 12 : 24) + "&page=" + Math.max(1, Math.min(100, page)), null));
     }
 
     static JSONObject parseAnime(String text) throws JSONException {
@@ -149,18 +154,28 @@ final class V90Online {
             if (names != null) for (int n = 0; n < Math.min(20, names.length()); n++) {
                 JSONObject g = names.optJSONObject(n); if (g != null) genres.put(g.optString("name"));
             }
-            String type = row.optString("type", "TV"), status = row.optString("status");
-            items.put(new JSONObject().put("id", row.optLong("mal_id")).put("title", row.optString("title"))
-                    .put("romaji", row.optString("title_english")).put("native", row.optString("title_japanese"))
-                    .put("episodes", row.optInt("episodes")).put("year", row.optInt("year"))
+            JSONObject aired = row.optJSONObject("aired"), youtube = row.optJSONObject("trailer");
+            String type = text(row, "type"), status = text(row, "status"), start = aired == null ? "" : text(aired, "from");
+            int year = row.optInt("year", 0);
+            if (year == 0 && start.matches("[0-9]{4}-.*")) year = Integer.parseInt(start.substring(0, 4));
+            String primary = text(row, "title"), english = text(row, "title_english"), cover = jpg == null ? "" : text(jpg, "large_image_url");
+            if (cover.isEmpty() && jpg != null) cover = text(jpg, "image_url");
+            if (primary.isEmpty() && english.isEmpty()) continue;
+            String trailer = youtube == null ? "" : text(youtube, "youtube_id");
+            items.put(new JSONObject().put("id", row.optLong("mal_id")).put("title", english.isEmpty() ? primary : english)
+                    .put("romaji", primary).put("native", text(row, "title_japanese"))
+                    .put("episodes", row.optInt("episodes")).put("year", year)
                     .put("score", Math.round(10 * row.optDouble("score", 0))).put("popularity", row.optInt("members"))
-                    .put("cover", jpg == null ? "" : jpg.optString("large_image_url", jpg.optString("image_url")))
-                    .put("overview", row.optString("synopsis")).put("genres", genres)
-                    .put("format", type.toUpperCase(Locale.ROOT)).put("status", status.equals("Not yet aired") ? "NOT_YET_RELEASED" : "RELEASED"));
+                    .put("cover", cover).put("overview", text(row, "synopsis")).put("genres", genres)
+                    .put("format", type.toUpperCase(Locale.ROOT)).put("status", status.equals("Not yet aired") ? "NOT_YET_RELEASED" : "RELEASED")
+                    .put("trailer", trailer.matches("[A-Za-z0-9_-]{11}") ? trailer : ""));
         }
-        int pages = paging == null ? 1 : paging.optInt("last_visible_page", 1);
-        return new JSONObject().put("items", items).put("total_pages", pages).put("has_more", paging != null && paging.optBoolean("has_next_page"));
+        int pages = paging == null ? 1 : Math.max(1, paging.optInt("last_visible_page", 1));
+        boolean more = paging != null && paging.optBoolean("has_next_page");
+        return new JSONObject().put("items", items).put("pagination", new JSONObject().put("lastPage", pages).put("hasNextPage", more));
     }
+
+    private static String text(JSONObject row, String name) { return row.isNull(name) ? "" : row.optString(name, ""); }
 
     private static String request(String address, JSONObject post) throws IOException {
         HttpsURLConnection req = (HttpsURLConnection) URI.create(address).toURL().openConnection();

@@ -154,6 +154,12 @@ public final class BlackBoxSmoke extends Instrumentation {
         Cinema.Film film = Cinema.FILMS.get(0);
         MediaEntry entry = film.torrentEntry();
         if (live) Downloads.deleteCopy(app, entry);
+        V90Api local = new V90Api(app);
+        try {
+            V90Api.Reply films = local.call("GET", "/api/mobile/open-films", "");
+            assertPass("The v90 API returns the real open-film cards: " + films.status + (films.status != 200 ? " / " + films.value.optString("error") : ""),
+                    films.status == 200 && films.value.getJSONArray("results").length() == 4);
+        } finally { local.close(); }
         Activity desktop = launch(V90Activity.class, null);
         Activity screen = null;
         WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
@@ -186,7 +192,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             liveVerified = true;
         } catch (AssertionError problem) {
             MediaEntry row = db.get(entry.id);
-            String page = web == null ? "no WebView" : js(web, "JSON.stringify({url:location.href, title:document.title, adapter:typeof window.bbxAndroidOpen, view:window.__BBX_STATE__?.view, row:!!document.querySelector('#rows .card'), engine:document.querySelector('#engineDot')?.className, sources:document.querySelector('#sourcesBox')?.innerText.slice(0,160)})");
+            String page = web == null ? "no WebView" : js(web, "JSON.stringify({url:location.href, title:document.title, adapter:typeof window.bbxAndroidOpen, view:window.__BBX_STATE__?.view, rows:document.querySelector('#rows')?.innerText.slice(0,200), tmdb:window.__BBX_STATE__?.tmdb, hero:document.querySelector('#hero')?.innerText.slice(0,150), engine:document.querySelector('#engineDot')?.className, sources:document.querySelector('#sourcesBox')?.innerText.slice(0,160)})");
             throw new AssertionError(problem.getMessage() + "; page=" + page + "; player=" + ui(() -> engine == null ? "unbound" : engine.failure())
                     + "; transfer=" + (row == null ? "not queued" : row.transferError + " / " + Downloads.received(db, row) + " verified bytes"), problem);
         } finally {
