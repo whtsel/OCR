@@ -22,7 +22,9 @@
     return new Promise((resolve, reject) => {
       const signal = options.signal;
       const abort = () => { clear(); reject(new DOMException('Cancelled', 'AbortError')); };
-      const timer = setTimeout(() => complete(result(504, '{"error":"Android request timed out."}')), 34000);
+      // Anime enrichment must not hold up movie/series search when a metadata provider is slow.
+      const auxiliaryAnime = url.pathname === '/api/anime/search' && window.__BBX_STATE__?.browse?.mode !== 'anime';
+      const timer = setTimeout(() => complete(result(504, '{"error":"Android request timed out."}')), auxiliaryAnime ? 6500 : 34000);
       function clear() { clearTimeout(timer); signal?.removeEventListener('abort', abort); pending.delete(id); }
       function complete(r) { clear(); resolve(r); }
       if (signal?.aborted) return abort();

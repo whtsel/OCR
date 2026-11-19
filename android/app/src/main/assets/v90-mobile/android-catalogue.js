@@ -65,10 +65,10 @@
   const sourceParams = sourceParamsV69;
   sourceParamsV69 = function (item, imdb) {
     const params = sourceParams(item, imdb);
-    if (isAnime(item)) {
-      if (isTv(item)) params.set('type', 'anime');
-      if (item.altTitle && item.altTitle !== titleOf(item)) params.set('alt', item.altTitle);
-    }
+    const anime = isAnime(item);
+    if (anime && isTv(item)) params.set('type', 'anime');
+    const alternate = anime ? (item.altTitle || item._native) : (item.original_title || item.original_name);
+    if (alternate && alternate !== titleOf(item)) params.set('alt', alternate);
     return params;
   };
   // Prioritize exact source selection on phone. The header action never chooses a random release.
