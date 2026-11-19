@@ -381,6 +381,13 @@ public final class BlackBoxSmoke extends Instrumentation {
             player = ui(() -> findWeb(activity.getWindow().getDecorView()));
             assertPass("The separate provider player has no catalogue bridge", jsTrue(player, "typeof BlackBoxAndroid === 'undefined'"));
             WebView embed = player;
+            if (id.startsWith("sc:")) {
+                await(title + " SoundCloud controls finish loading", 24000, () -> officialState(embed).optBoolean("ready"));
+                // Normal player fallback when the WebView/provider doesn't allow autoplay.
+                SystemClock.sleep(2800);
+                JSONObject state = officialState(embed);
+                if (state.optInt("error") == 0 && state.optDouble("seconds", 0) < .2) tapWebAt(embed, "#recording", 36, 36);
+            }
             await(title + " plays the exact full online recording (not a preview)", 65000, () -> {
                 JSONObject state = officialState(embed);
                 if (state.optInt("error") != 0) throw new AssertionError(title + " provider error: " + state);
@@ -458,11 +465,14 @@ public final class BlackBoxSmoke extends Instrumentation {
         waitForIdleSync();
     }
 
-    private void tapWeb(WebView web, String selector) throws Exception {
+    private void tapWeb(WebView web, String selector) throws Exception { tapWebAt(web, selector, -1, -1); }
+
+    private void tapWebAt(WebView web, String selector, int left, int top) throws Exception {
         String node = "document.querySelector(" + JSONObject.quote(selector) + ")";
         js(web, "(()=>{const e=" + node + ";e?.scrollIntoView({block:'center',inline:'center',behavior:'instant'});return !!e})()");
         JSONArray hit = new JSONArray(js(web, "(()=>{const e=" + node + ";if(!e)return [];const r=e.getBoundingClientRect();"
-                + "const x=r.left+r.width/2,y=r.top+r.height/2;return [x,y,innerWidth,!!document.elementFromPoint(x,y)&&e.contains(document.elementFromPoint(x,y))]})()"));
+                + "const x=r.left+" + (left < 0 ? "r.width/2" : left) + ",y=r.top+" + (top < 0 ? "r.height/2" : top)
+                + ";return [x,y,innerWidth,!!document.elementFromPoint(x,y)&&e.contains(document.elementFromPoint(x,y))]})()"));
         assertPass("Touchable WebView control: " + selector, hit.length() == 4 && hit.getBoolean(3));
         int[] window = ui(() -> { int[] where = new int[3]; web.getLocationOnScreen(where); where[2] = web.getWidth(); return where; });
         float scale = (float) (window[2] / hit.getDouble(2));

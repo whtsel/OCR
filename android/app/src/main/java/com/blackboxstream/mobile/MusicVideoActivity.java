@@ -49,7 +49,8 @@ public final class MusicVideoActivity extends Activity {
                 try {
                     JSONArray data = new JSONArray(value);
                     int error = data.optInt(0), state = data.optInt(1, -1);
-                    if (error != 0) status.setText(error == 101 || error == 150 || error == 100
+                    if (error == -2) status.setText("Only a preview is available from SoundCloud. Go back to link the full recording.");
+                    else if (error != 0) status.setText(error == 101 || error == 150 || error == 100
                             ? "This recording isn't available in the embedded player. Go back to link an authorized source."
                             : "The online provider couldn't play this recording. Try reloading or link an authorized file.");
                     else if (state == 1 || state == 2 || state == 0) status.setText(provider() + " · online only · no offline copy");
@@ -171,20 +172,26 @@ public final class MusicVideoActivity extends Activity {
 
     private static String soundCloudPage(String id) {
         return frameHeader("https://w.soundcloud.com")
-                + "<iframe id='recording' title='Official SoundCloud audio player' allow=autoplay "
+                + "<iframe id='recording' title='Official SoundCloud audio player' allow='autoplay' "
                 + "src='https://w.soundcloud.com/player/?url=https%3A%2F%2Fapi.soundcloud.com%2Ftracks%2F" + id
-                + "&amp;auto_play=false&amp;visual=true&amp;show_reposts=false'></iframe>"
+                + "&amp;auto_play=true&amp;visual=true'></iframe>"
                 + "<script src='https://w.soundcloud.com/player/api.js'></script>"
-                + "<script>const recording={ready:false,error:0,state:-1,seconds:0,duration:0,id:''};"
+                + "<script>const recording={ready:false,error:0,state:-1,seconds:0,duration:0,id:'',policy:''};"
                 + "const widget=window.SC?.Widget('recording'),ev=window.SC?.Widget.Events;"
-                + "if(widget){widget.bind(ev.READY,()=>{recording.ready=true;"
-                + "widget.getCurrentSound(sound=>{recording.id=String(sound?.id||sound?.urn?.split(':').pop()||'');});"
-                + "widget.getDuration(ms=>recording.duration=ms/1000);if(!document.hidden)widget.play();});"
-                + "widget.bind(ev.PLAY,()=>recording.state=1);widget.bind(ev.PAUSE,()=>recording.state=2);"
-                + "widget.bind(ev.FINISH,()=>recording.state=0);widget.bind(ev.ERROR,()=>recording.error=1);"
-                + "widget.bind(ev.PLAY_PROGRESS,e=>{recording.seconds=e.currentPosition/1000;});}"
-                + "function bbxPlayerState(){return recording};function bbxStatus(){return [recording.error,recording.state,false]};"
-                + "function bbxSeek(s){widget?.seekTo(s*1000)};function bbxPause(){widget?.pause()};</script></html>";
+                + "let hidden=false;"
+                + "function updateSound(){widget.getCurrentSound(sound=>{if(!sound)return;"
+                + "recording.id=String(sound.id||sound.urn||'').split(':').pop();recording.policy=String(sound.policy||'');"
+                + "if(sound.policy==='SNIP'||(sound.full_duration>0&&sound.duration>0&&sound.full_duration-sound.duration>3000)){"
+                + "recording.error=-2;widget.pause();}});};"
+                + "if(widget){widget.bind(ev.ERROR,()=>recording.error=1);widget.bind(ev.READY,()=>{"
+                + "if(recording.ready)return;recording.ready=true;"
+                + "widget.bind(ev.PLAY,()=>{recording.state=1;updateSound();});widget.bind(ev.PAUSE,()=>recording.state=2);"
+                + "widget.bind(ev.FINISH,()=>recording.state=0);"
+                + "updateSound();widget.getDuration(ms=>{recording.duration=ms/1000;if(!hidden&&!document.hidden&&!recording.error)widget.play();});"
+                + "setInterval(()=>{if(hidden||recording.error)return;widget.isPaused(paused=>{recording.paused=paused;});"
+                + "widget.getPosition(ms=>{if(ms>recording.seconds*1000&&!recording.paused)recording.state=1;recording.seconds=ms/1000;});},700);});}"
+                + "function bbxPlayerState(){return recording};function bbxStatus(){return [recording.error,recording.state,recording.ready]};"
+                + "function bbxSeek(s){widget?.seekTo(s*1000)};function bbxPause(){hidden=true;widget?.pause()};</script></html>";
     }
 
     @Override protected void onResume() {
