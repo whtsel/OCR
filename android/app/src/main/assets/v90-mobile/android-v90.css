@@ -60,11 +60,14 @@
 .bbx-android .android-direct-link { min-width:0; margin:.5rem 0; }
 .bbx-android .android-direct-link summary { cursor:pointer; padding:10px 0; }
 .bbx-android .android-direct-link input { min-width:0; width:100%; padding:10px; font:inherit; color:inherit; background:#111119; border:1px solid #49495a; border-radius:8px; }
-.bbx-android .android-track { display:block; }
-.bbx-android .android-track .music-result-title-v47 { white-space:normal; margin:6px 0 4px; overflow-wrap:anywhere; }
-.bbx-android .android-track .music-result-body-v47 { padding:14px; }
-.bbx-android .android-track .ghost { padding:4px 8px; }
-.bbx-android .android-music-more { justify-self:start; }
-.bbx-android #viewMusic .music-hero-meta-v47 { color:var(--muted, #aaaabb); }
-.bbx-android #viewMusic .music-layout-v47 { align-items:start; }
 .bbx-android .android-media-play, .bbx-android .android-media-download, .bbx-android .android-library-play { min-height:44px; }
+
+.bbx-android #viewMusic .music-ad-info-v49,
+.bbx-android [data-album-download-v63],
+.bbx-android #musicFrequencyPanel,
+.bbx-android #bgAudioBar { display:none !important; }
+.bbx-android .android-music-note { line-height:1.45; margin:0 0 8px; }
+.bbx-android dialog.android-music-source { width:min(94vw,480px); max-height:calc(100dvh - 40px); overflow:auto; padding:18px; border:1px solid #394152; border-radius:14px; background:#151822; color:#eee; }
+.bbx-android .android-music-source::backdrop { background:rgba(0,0,0,.68); }
+.bbx-android .android-music-source input { width:100%; min-width:0; margin:6px 0; padding:12px; background:#0d111b; color:#eee; border:1px solid #465167; border-radius:8px; font:inherit; }
+.bbx-android .android-music-source h2,.bbx-android .android-music-source p { overflow-wrap:anywhere; }

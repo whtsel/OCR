@@ -190,106 +190,16 @@
     }
   };
 
-  // Music uses the licensed track file returned by the catalogue, never a YouTube ID.
-  let musicRequest = 0, featured, selectedGenre = 0, audioRead = 0;
-  const musicGrid = byId('musicTorrGrid');
-  const audioRef = t => t.reference && button('Credits ↗', () => external(t.reference), 'ghost');
-  function trackCard(t) {
-    const card = el('article', 'music-result-v47 android-track');
-    card.dataset.playableKey = t.key;
-    const body = el('div', 'music-result-body-v47');
-    const status = statusText();
-    body.append(el('div', 'music-kicker-v47', `${t.genre} · ${musicDuration(t.seconds)}`),
-      el('h3', 'music-result-title-v47', t.title), el('div', 'music-result-artist-v47', t.artist),
-      playableActions(t.key, status, t.title), status);
-    const credits = el('small', 'sub', t.credits);
-    const reference = audioRef(t);
-    body.append(credits);
-    if (reference) body.append(reference);
-    card.append(body); return card;
-  }
-  async function showMusic(query = '', genre = 0, offset = 0, isFeatured = false) {
-    const request = ++musicRequest, message = byId('musicMsg'), meta = byId('musicSearchMeta');
-    byId('musicRows').hidden = true;
-    byId('musicSearchPane').hidden = false;
-    byId('musicClear').hidden = isFeatured;
-    if (!offset) musicGrid.replaceChildren(el('p', 'sub', 'Finding audio files…'));
-    try {
-      const spec = new URLSearchParams({q:query, genre, offset, featured:isFeatured ? 1 : 0});
-      const data = await (isFeatured ? featured ||= read(`/api/mobile/music?${spec}`) : read(`/api/mobile/music?${spec}`));
-      if (request !== musicRequest) return;
-      const chips = byId('musicGenreChips');
-      const tags = [{id:0, label:'All tracks'}, ...(data.genres || [])];
-      chips.replaceChildren(...tags.map(tag => button(tag.label, () => {
-        selectedGenre = tag.id; showMusic(byId('musicQuery').value.trim(), tag.id);
-      }, `music-genre-chip-v47${!isFeatured && genre === tag.id ? ' on' : ''}`)));
-      if (!offset) musicGrid.replaceChildren();
-      if (offset) musicGrid.querySelector('.android-music-more')?.remove();
-      for (const track of data.results) musicGrid.append(trackCard(track));
-      if (offset === 0 && !data.results.length) musicGrid.append(el('p', 'sub', 'No playable tracks matched. Try another title or import your own audio.'));
-      if (data.more) musicGrid.append(button('Load more tracks', () => showMusic(query, genre, offset + data.results.length), 'secondary android-music-more'));
-      meta.textContent = `${data.total} ${isFeatured ? 'featured' : 'matching'} track${data.total === 1 ? '' : 's'}`;
-      message.textContent = data.featuredOnly ? 'The live music index is unavailable. Showing matches from featured tracks.' : 'Full tracks · Play and download inside BlackBox';
-    } catch (error) {
-      if (isFeatured) featured = null;
-      if (request === musicRequest) musicGrid.replaceChildren(el('p', 'msg err', error.message), button('Retry', () => showMusic(query, genre, 0, isFeatured)));
-    }
-  }
-  loadMusicFeatured = () => { selectedGenre = 0; return showMusic('', 0, 0, true); };
-  searchMusic = query => showMusic(String(query).trim().slice(0, 130), selectedGenre);
-  // Old desktop queue/album controls cannot launch a browser from Music.
-  playMusicList = () => toast('Choose a playable track or your own audio file.');
-  queuePlayCurrent = async () => {};
-  warmMusicTrack = async () => '';
-  proactivelyWarmMusicItems = () => {};
-  wireMusicWarmup = () => {};
-  restoreMusicPlaybackSession = () => {};
-  loadMusicDownloads = async () => {};
-  async function refreshAudioRows() {
-    const host = byId('androidAudioLibrary');
-    if (!host) return;
-    const sequence = ++audioRead;
-    try {
-      const {items} = await read('/api/mobile/library');
-      if (state.view !== 'music' || sequence !== audioRead) return;
-      const entries = items.filter(entry => entry.kindId === 'MUSIC');
-      const copies = entries.filter(entry => entry.offline).length;
-      byId('musicDownloadCount').textContent = String(copies);
-      host.replaceChildren(button('Import audio / playlists', () => bbxAndroidOpen('library')), linkInput('MUSIC'));
-      for (const entry of entries.slice(0, 16)) {
-        const control = button(`${entry.offline ? 'Offline · ' : entry.queued ? 'Queued · ' : ''}${entry.title}`, () => bbxAndroidOpen('play', entry.id));
-        control.dataset.mediaId = entry.id; host.append(control);
-      }
-    } catch { /* Native Library remains accessible. */ }
-  }
   const originalView = showView;
   showView = function (next) {
     const r = originalView.call(this, next);
     const anime = next === 'browse' && state.browse?.mode === 'anime';
     if (anime) showAnimeArchive();
     else if (byId('androidAnimeArchive')) byId('androidAnimeArchive').hidden = true;
-    if (next === 'music') refreshAudioRows();
-    else if (next === 'library') refreshLibrary();
+    if (next === 'library') refreshLibrary();
     return r;
   };
   window.bbxAndroidResume = () => {
-    if (state.view === 'music') refreshAudioRows();
     if (state.view === 'library') refreshLibrary();
   };
-  function musicControls() {
-    const shelf = byId('musicLibrarySidebar'), hero = document.querySelector('.music-hero-content');
-    if (!shelf || !hero) return;
-    hero.querySelector(':scope > p').textContent = 'Stream and download full Creative Commons tracks from Incompetech, or play your own audio inside BlackBox.';
-    hero.querySelector('.music-hero-meta-v47').textContent = 'Full MP3 tracks · Private offline library';
-    byId('musicQuery').placeholder = 'Track, artist, genre or instrument';
-    byId('musicSearchPane').querySelector('h2').textContent = 'Playable tracks';
-    byId('musicSearchPane').querySelector('.music-kicker-v47').textContent = 'INCOMPETECH · FULL TRACKS';
-    shelf.querySelector('h2').textContent = 'Your audio';
-    byId('musicClear').onclick = () => { byId('musicQuery').value = ''; loadMusicFeatured(); };
-    const library = el('section', 'android-audio-library'); library.id = 'androidAudioLibrary';
-    library.append(button('Import audio / playlists', () => bbxAndroidOpen('library')), linkInput('MUSIC'));
-    shelf.append(library);
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', musicControls, {once:true});
-  else musicControls();
 })();

@@ -47,7 +47,7 @@ public final class BlackBoxSmoke extends Instrumentation {
     private int checks;
     private boolean liveVerified;
     private String providerStatus = "";
-    private boolean publicMediaVerified;
+    private boolean publicMediaVerified, originalMusicVerified;
     private Bundle fixtures;
     private final ServiceConnection binding = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder local) { engine = ((PlaybackService.LocalBinder) local).get(); }
@@ -67,7 +67,8 @@ public final class BlackBoxSmoke extends Instrumentation {
             else verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
                     + (liveVerified ? "PASS v90 Android: original search and source picker opened full Sintel, rendered and sought to 2:30 before the transfer finished\n" : "")
-                    + (publicMediaVerified ? "PASS Android in-app playback and complete downloads: Sintel, The Dull Sword, Cloud Dancer and Sauropod Spotting (bytes matched public files; all four played with networking off)\n" : "")
+                    + (publicMediaVerified ? "PASS Android in-app playback and complete downloads: Sintel and The Dull Sword (bytes matched public files; both played with networking off)\n" : "")
+                    + (originalMusicVerified ? "PASS Original v90 Music: Espresso from Short n’ Sweet and Kwaku the Traveller from Ghana Essentials played the exact official recordings in BlackBox\n" : "")
                     + providerStatus);
             finish(Activity.RESULT_OK, result);
         } catch (Throwable bad) {
@@ -276,16 +277,6 @@ public final class BlackBoxSmoke extends Instrumentation {
             saved.add(verifyDirect(web, db, records, "anime:dull-sword", "The Dull Sword", station, station + play, station + download,
                     MediaEntry.Kind.ANIME, 250000L, 60000L));
 
-            tapWeb(web, "#navMusic");
-            String cloud = "#musicTorrGrid [data-playable-key='music:USUAN2300007']";
-            saved.add(verifyDirect(web, db, records, "music:USUAN2300007", "Cloud Dancer", cloud, cloud + play, cloud + download,
-                    MediaEntry.Kind.MUSIC, 210000L, 45000L));
-            js(web, "document.querySelector('#musicQuery').value='Sauropod Spotting'");
-            tapWeb(web, "#musicGo");
-            String matched = "#musicTorrGrid [data-playable-key='music:USUAN2500002']";
-            saved.add(verifyDirect(web, db, records, "music:USUAN2500002", "Sauropod Spotting", matched, matched + play, matched + download,
-                    MediaEntry.Kind.MUSIC, 215000L, 30000L));
-
             tapWeb(web, "[data-nav=library]");
             await("Library shows every complete download in the original interface", 10000, () -> {
                 for (MediaEntry entry : saved) if (!jsTrue(web, "document.querySelector(" + JSONObject.quote(offlineRow(entry)) + ")")) return false;
@@ -313,6 +304,8 @@ public final class BlackBoxSmoke extends Instrumentation {
                 shell("svc wifi enable");
             }
             publicMediaVerified = true;
+            verifyOriginalMusic(web);
+            originalMusicVerified = true;
         } catch (AssertionError problem) {
             String view = js(web, "JSON.stringify({view:window.__BBX_STATE__?.view,title:document.querySelector('#detailBody h1')?.textContent,"
                     + "music:document.getElementById('musicMsg')?.textContent,status:Array.from(document.querySelectorAll('.android-action-status')).map(e=>e.textContent).filter(Boolean).slice(-5)})");
@@ -323,6 +316,71 @@ public final class BlackBoxSmoke extends Instrumentation {
                 Downloads.deleteCopy(app, e); db.getWritableDatabase().delete("media", "id=?", new String[] {e.id});
             }
         }
+    }
+
+    private void verifyOriginalMusic(WebView web) throws Exception {
+        tapWeb(web, "#navMusic");
+        await("Original Music shelves contain 14 genres and the original Trending Now card", 10000,
+                () -> jsTrue(web, "document.querySelectorAll('#musicGenreChips button').length===14 "
+                        + "&& document.querySelector('#music-shelf-trending-now [title=\"Play Espresso\"]')"));
+        js(web, "document.querySelector('#musicQuery').value='Sabrina Carpenter'");
+        tapWeb(web, "#musicGo");
+        String album = "[data-album-open-v63='1752214909']";
+        await("Original artist search shows Short n' Sweet without replacing its artwork or artist", 12000,
+                () -> jsTrue(web, "document.querySelector('.music-artist-card-v63')?.textContent.includes('Sabrina Carpenter') && "
+                        + "document.querySelector(" + JSONObject.quote(album) + ")?.closest('.music-album-card-v63')?.querySelector('img')?.getAttribute('src')?.startsWith('/api/cover?')"));
+        tapWeb(web, album);
+        await("The original album opens in order with Espresso at track 7", 10000,
+                () -> jsTrue(web, "Array.from(document.querySelectorAll('.music-album-tracklist-v63 strong'))[6]?.textContent === 'Espresso'"));
+        tapWeb(web, "[data-album-queue-v63]");
+        await("Queue retains the chosen album and its track order", 7000,
+                () -> jsTrue(web, "!document.querySelector('#bgQueuePanel').hidden && "
+                        + "document.querySelectorAll('#bgQueueList .bg-queue-title-v49')[6]?.textContent === 'Espresso'"));
+        tapWeb(web, "#bgQueueClose");
+        verifyOfficialTrack(web, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", "51zjlMhdSTE", 175);
+        tapWeb(web, "#musicClear");
+        tapWeb(web, "#musicGenreChips [title='Open 30 Ghana Essentials picks']");
+        await("Ghana Essentials shows its original 30 picks", 8000,
+                () -> jsTrue(web, "!document.querySelector('#viewMusicGenre').hidden && document.querySelectorAll('[data-genre-catalog] .music-genre-card-v50').length===30"));
+        verifyOfficialTrack(web, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", "Hb6I7GoTvzI", 185);
+        tapWeb(web, "#musicGenrePage [title='Play Adonai (Remix) [feat. Castro]']");
+        await("An unlinked recording offers its own sources without silently playing a substitute", 8000,
+                () -> jsTrue(web, "document.querySelector('#androidMusicSource')?.open && "
+                        + "document.querySelector('#androidTrackTitle')?.textContent.includes('Adonai')"));
+    }
+
+    private void verifyOfficialTrack(WebView web, String title, String control, String id, int seconds) throws Exception {
+        ActivityMonitor monitor = addMonitor(MusicVideoActivity.class.getName(), null, false);
+        Activity screen = null;
+        WebView player = null;
+        try {
+            tapWeb(web, control);
+            screen = waitForMonitorWithTimeout(monitor, 12000);
+            assertPass(title + " opens the official player inside BlackBox", screen != null && id.equals(screen.getIntent().getStringExtra(MusicVideoActivity.EXTRA_VIDEO)));
+            Activity activity = screen;
+            player = ui(() -> findWeb(activity.getWindow().getDecorView()));
+            assertPass("The separate provider player has no catalogue bridge", jsTrue(player, "typeof BlackBoxAndroid === 'undefined'"));
+            WebView embed = player;
+            await(title + " plays the exact full online recording (not a preview)", 65000, () -> {
+                JSONObject state = officialState(embed);
+                if (state.optInt("error") != 0) throw new AssertionError(title + " provider error: " + state);
+                return state.optInt("state", -2) == 1 && state.optDouble("seconds", 0) >= 1
+                        && Math.abs(state.optDouble("duration", 0) - seconds) <= 6
+                        && state.optString("url").contains("v=" + id);
+            });
+            js(player, "player.seekTo(48, true)");
+            await(title + " advances from a seek beyond the preview window", 22000, () -> {
+                JSONObject state = officialState(embed);
+                return state.optInt("state", -2) == 1 && state.optDouble("seconds", 0) > 49;
+            });
+        } catch (AssertionError failure) {
+            throw new AssertionError(failure.getMessage() + "; official player=" + (player == null ? "not opened" : officialState(player)), failure);
+        } finally { closeScreen(screen); removeMonitor(monitor); }
+    }
+
+    private JSONObject officialState(WebView web) throws Exception {
+        String value = js(web, "JSON.stringify(window.bbxPlayerState?.() || {url:location.href,api:typeof YT})");
+        return new JSONObject((String) new org.json.JSONTokener(value).nextValue());
     }
 
     private MediaEntry verifyDirect(WebView web, LibraryStore db, JSONObject records, String key, String title,

@@ -24,7 +24,6 @@ final class V90Api {
     private final LibraryStore db;
     private final SharedPreferences prefs;
     private final V90Online online;
-    private final PlayableMusic music = new PlayableMusic();
     private final ExecutorService resolver = Executors.newFixedThreadPool(2);
     private final Map<String, Resolve> jobs = new LinkedHashMap<>();
     private volatile String key;
@@ -116,8 +115,14 @@ final class V90Api {
             }
             if (get && path.equals("/api/mobile/library")) return library();
             if (get && path.equals("/api/mobile/music")) {
-                return ok(music.search(param(uri, "q", ""), number(uri, "genre", 0), number(uri, "offset", 0),
-                        "1".equals(param(uri, "featured", ""))));
+                JSONArray tracks = new JSONArray();
+                String query = V90Online.searchText(param(uri, "q", ""));
+                if (!query.isEmpty()) for (Catalogue.Card track : Catalogue.music(Catalogue.Music.TRACKS, query)) {
+                    tracks.put(new JSONObject().put("title", track.title).put("track", track.title)
+                            .put("artist", track.detail.split(" · ", 2)[0]).put("listing", track.listing())
+                            .put("source", "MusicBrainz metadata"));
+                }
+                return ok(new JSONObject().put("results", tracks));
             }
             if (!get && path.equals("/api/mobile/playable")) {
                 JSONObject data = new JSONObject(body);
@@ -160,10 +165,6 @@ final class V90Api {
         if (key.matches("anime:[a-z-]{1,40}")) {
             OpenAnime anime = OpenAnime.named(key.substring(6));
             return anime == null ? null : anime.entry();
-        }
-        if (key.startsWith("music:")) {
-            PlayableMusic.Track track = music.track(key.substring(6));
-            return track == null ? null : track.entry();
         }
         return null;
     }

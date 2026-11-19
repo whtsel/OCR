@@ -176,7 +176,8 @@ public final class PlayerActivity extends Activity implements PlaybackService.Li
             title = Ui.text(this, entry.title, 32, Ui.INK, Ui.DISPLAY);
             content.addView(title);
             OpenAnime archive = OpenAnime.fromSource(entry.source);
-            String credit = archive != null ? archive.credits : entry.source.startsWith(PlayableMusic.AUDIO) ? PlayableMusic.CREDIT : null;
+            String credit = archive != null ? archive.credits : entry.source.startsWith("https://incompetech.com/music/royalty-free/mp3-royaltyfree/")
+                    ? "Kevin MacLeod (incompetech.com) · Creative Commons Attribution 4.0" : null;
             if (credit != null) content.addView(Ui.text(this, credit, 12, Ui.MUTED, null));
             Ui.gap(content, 7);
             meta = Ui.kicker(this, ""); content.addView(meta);

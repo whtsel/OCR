@@ -41,7 +41,7 @@ public final class V90Activity extends Activity {
             + "frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'";
     private static final Set<String> ART_HOSTS = new HashSet<>(Arrays.asList("image.tmdb.org", "cdn.myanimelist.net",
             "s4.anilist.co", "i.ytimg.com", "img.youtube.com", "cdn-images.dzcdn.net", "is1-ssl.mzstatic.com"));
-    private static final Set<String> MOBILE_ASSETS = new HashSet<>(Arrays.asList("android-api.js", "android-port.js", "android-catalogue.js", "android-v90.css"));
+    private static final Set<String> MOBILE_ASSETS = new HashSet<>(Arrays.asList("android-api.js", "android-port.js", "android-catalogue.js", "android-music.js", "android-v90.css"));
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor work = new ThreadPoolExecutor(6, 6, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(80));
     private volatile boolean closed;
@@ -136,6 +136,8 @@ public final class V90Activity extends Activity {
                 else if ("torrent".equals(action)) launch(TorrentActivity.class);
                 else if ("share".equals(action)) launch(LanShareActivity.class);
                 else if ("rooms".equals(action)) launch(CommunityActivity.class);
+                else if ("music-video".equals(action) && MusicVideoActivity.validId(id))
+                    startActivity(new Intent(V90Activity.this, MusicVideoActivity.class).putExtra(MusicVideoActivity.EXTRA_VIDEO, id));
                 else if ("browser".equals(action)) openProviderPage(id);
             });
         }
@@ -224,8 +226,8 @@ public final class V90Activity extends Activity {
         // Keep the desktop sources byte-for-byte on disk. Change only how the mobile shell loads them.
         html = html.replace("</head>", "<link rel=\"stylesheet\" href=\"/android-v90.css\" />\n</head>")
                 .replace("<script src=\"/app.js", "<script src=\"/android-api.js\"></script>\n<script src=\"/app.js")
-                .replaceAll("<script src=\"/(?:fast-source-v74|play-anyway-v74|local-share-v70|ads-v88|source-votes-v74|vote-gate-v75|votes-sync-v74|privacy-panel-v86|music-catalog-v64|music-albums-v64|music-tidy-v74|music-search-v76|music-ui-v76|music-picker-v78|music-library-v79)\\.js[^\"]*\"></script>", "")
-                .replace("</body>", "<script src=\"/android-port.js\"></script>\n<script src=\"/android-catalogue.js\"></script>\n</body>");
+                .replaceAll("<script src=\"/(?:fast-source-v74|play-anyway-v74|local-share-v70|ads-v88|source-votes-v74|vote-gate-v75|votes-sync-v74|privacy-panel-v86)\\.js[^\"]*\"></script>", "")
+                .replace("</body>", "<script src=\"/android-port.js\"></script>\n<script src=\"/android-catalogue.js\"></script>\n<script src=\"/android-music.js\"></script>\n</body>");
         return html.getBytes(StandardCharsets.UTF_8);
     }
 

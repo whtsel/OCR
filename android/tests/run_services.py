@@ -64,7 +64,7 @@ def main():
         root = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix='bbx-services-')))
         classes = root / 'java'
         classes.mkdir()
-        sources = [str(SOURCE / (name + '.java')) for name in ('MediaEntry', 'MediaSources', 'OfflineTransfer', 'Bencode', 'TorrentMeta', 'Catalogue', 'V90Online', 'PlayableMusic', 'OpenAnime', 'CommunityRoom')]
+        sources = [str(SOURCE / (name + '.java')) for name in ('MediaEntry', 'MediaSources', 'OfflineTransfer', 'Bencode', 'TorrentMeta', 'Catalogue', 'V90Online', 'OpenAnime', 'CommunityRoom')]
         sources.append(str(ROOT / 'tests/ServiceChecks.java'))
         if os.environ.get('ECJ_JAR'):
             stubs = os.environ['ANDROID_JAR']

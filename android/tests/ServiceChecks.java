@@ -101,26 +101,6 @@ public final class ServiceChecks {
         check("Jikan catalogue maps an actual title, normalizes year and score, and preserves v90 pagination",
                 title.getInt("year") == 2010 && title.getInt("score") == 81 && "Horizon Test".equals(title.getString("title"))
                 && anime.getJSONObject("pagination").getBoolean("hasNextPage") && anime.getJSONObject("pagination").getInt("lastPage") == 2);
-        PlayableMusic music = new PlayableMusic((url, body) -> {
-            check("music catalogue contacts only the artist's official feed", PlayableMusic.FEED.equals(url) && body == null);
-            return "[{\"title\":\"Quiet Sky\",\"filename\":\"Quiet Sky (Piano).mp3\",\"isrc\":\"USUAN1100001\",\"length\":\"00:04:10\",\"genre\":4,\"instruments\":\"Piano\"},"
-                    + "{\"title\":\"External file\",\"filename\":\"https://untrusted.example/play.mp3\",\"isrc\":\"USUAN1100002\",\"length\":\"01:00:00\"},"
-                    + "{\"title\":\"Path escape\",\"filename\":\"../other.mp3\",\"isrc\":\"USUAN1100003\",\"length\":\"00:04:10\"}]";
-        });
-        JSONObject songs = music.search("quiet piano", 4, 0, false);
-        PlayableMusic.Track track = music.track("USUAN1100001");
-        check("search identifies a licensed recording and resolves the exact audio file", songs.getInt("total") == 1
-                && songs.getJSONArray("results").getJSONObject(0).getString("key").equals("music:USUAN1100001")
-                && track.entry().kind == MediaEntry.Kind.MUSIC
-                && track.entry().source.equals(PlayableMusic.AUDIO + "Quiet%20Sky%20%28Piano%29.mp3"));
-        check("music feed rejects URL and path injection and never exposes fallback tracks under an unrelated query",
-                music.track("USUAN1100002") == null && music.track("USUAN1100003") == null
-                        && music.search("different title", 0, 0, false).getInt("total") == 0);
-        int[] musicFeedCalls = {0};
-        PlayableMusic fallback = new PlayableMusic((url, body) -> { musicFeedCalls[0]++; throw new IOException("Test music feed offline"); });
-        check("featured music does not require the live metadata feed", fallback.search("", 0, 0, true).getInt("total") >= 6 && musicFeedCalls[0] == 0);
-        check("music feed failure gives a labeled exact match, not a replacement song", fallback.search("Cloud Dancer", 0, 0, false).getBoolean("featuredOnly")
-                && fallback.search("Cloud Dancer", 0, 0, false).getInt("total") == 1 && musicFeedCalls[0] == 1);
         check("anime archive matches the exact original title and returns an actual ANIME file", OpenAnime.search("なまくら刀").length() == 1
                 && OpenAnime.named("dull-sword").entry().kind == MediaEntry.Kind.ANIME
                 && OpenAnime.named("dull-sword").entry().source.endsWith("/Namakura_Gatana_with_music.webm"));
