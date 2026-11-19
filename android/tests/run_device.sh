@@ -29,5 +29,5 @@ if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_C
     exit 1
 fi
 if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
-    printf '::notice::%s\n' "$(printf '%s\n' "$out" | grep -m1 'PASS BlackBox Android smoke')"
+    printf '%s\n' "$out" | sed -n 's/^PASS /::notice::PASS /p'
 fi

@@ -12,6 +12,7 @@ import android.os.SystemClock;
 import android.util.Base64;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.EditText;
 import android.widget.TextView;
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -36,6 +37,7 @@ import javax.net.ssl.TrustManagerFactory;
 public final class BlackBoxSmoke extends Instrumentation {
     private PlaybackService engine;
     private int checks;
+    private boolean liveVerified;
     private Bundle fixtures;
     private final ServiceConnection binding = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder local) { engine = ((PlaybackService.LocalBinder) local).get(); }
@@ -52,7 +54,8 @@ public final class BlackBoxSmoke extends Instrumentation {
         Bundle result = new Bundle();
         try {
             verify();
-            result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n");
+            result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
+                    + (liveVerified ? "PASS Live catalogue: full Sintel rendered and sought to 2:30 while still downloading verified torrent pieces\n" : ""));
             finish(Activity.RESULT_OK, result);
         } catch (Throwable bad) {
             result.putString("stream", "\nFAIL BlackBox Android smoke: " + android.util.Log.getStackTraceString(bad) + "\n");
@@ -123,7 +126,7 @@ public final class BlackBoxSmoke extends Instrumentation {
 
             verifyLanOnAndroid(app, db);
             if (fixtures != null && fixtures.containsKey("fixture_magnet")) {
-                verifyTorrentOnAndroid(app, db);
+                verifyTorrentOnAndroid(app, db, visible);
                 verifyServicesOnAndroid();
             }
             Activity audio = launch(PlayerActivity.class, LibraryStore.SAMPLE_AUDIO.id);
@@ -164,7 +167,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             ui(() -> { engine.seek(150000); return null; });
             await("Sintel seeks to a later part of the full film, still before completion", 22000,
                     () -> ui(() -> engine.playing() && !engine.seeking() && engine.position() >= 149000 && !db.isOffline(entry)));
-            android.util.Log.i("BlackBoxSmoke", "PASS Live catalogue proof: full Sintel streamed verified pieces and sought to 2:30 before download finished");
+            liveVerified = true;
         } catch (AssertionError problem) {
             MediaEntry row = db.get(entry.id);
             throw new AssertionError(problem.getMessage() + "; player=" + ui(() -> engine == null ? "unbound" : engine.failure())
@@ -225,13 +228,49 @@ public final class BlackBoxSmoke extends Instrumentation {
         return Base64.decode(fixtures.getString(argument), Base64.DEFAULT);
     }
 
-    private void verifyTorrentOnAndroid(Context app, LibraryStore db) throws Exception {
+    private void verifyImportedMagnet(LibraryStore db, Activity home, String magnet, TorrentMeta.Item item) throws Exception {
+        String label = "Imported torrent smoke title";
+        MediaSources.ImportResult catalogue = MediaSources.parsePlaylist("#EXTM3U\n#EXTINF:-1," + label + "\n" + magnet + "\n", null);
+        MediaEntry imported = catalogue.entries.get(0);
+        assertPass("M3U with a magnet is added to the Android Library", db.importEntries(catalogue.entries) == 1);
+        Activity picker = null;
+        ActivityMonitor monitor = addMonitor(TorrentActivity.class.getName(), null, false);
+        try {
+            assertPass("Library search opens the imported title's magnet, not an HTTP player", ui(() -> {
+                View root = home.getWindow().getDecorView();
+                TextView nav = find(root, "Library");
+                if (nav == null || !nav.performClick()) return false;
+                View search = findDescription(root, "Search library");
+                if (!(search instanceof EditText)) return false;
+                ((EditText) search).setText("torrent smoke");
+                View title = find(root, label);
+                for (int i = 0; title != null && i < 5; i++) {
+                    if (title.isClickable()) return title.performClick();
+                    title = title.getParent() instanceof View ? (View) title.getParent() : null;
+                }
+                return false;
+            }));
+            picker = waitForMonitorWithTimeout(monitor, 10000);
+            assertPass("The resolved title opens the native source picker", picker != null);
+            Activity screen = picker;
+            await("The picker exposes the exact verified movie file", 20000, () -> ui(() ->
+                    find(screen.getWindow().getDecorView(), item.name + "  ·  " + Ui.bytes(item.length)) != null));
+        } finally {
+            Activity screen = picker;
+            ui(() -> { if (screen != null) screen.finish(); return null; });
+            db.getWritableDatabase().delete("media", "id=?", new String[] {imported.id});
+            waitForIdleSync();
+        }
+    }
+
+    private void verifyTorrentOnAndroid(Context app, LibraryStore db, Activity home) throws Exception {
         TorrentMeta descriptor = TorrentMeta.read(fixtureBytes("fixture_torrent"));
         assertPass("Android reads the independently generated .torrent file", descriptor.items.size() == 1
                 && descriptor.items.get(0).playable());
         String magnet = new String(fixtureBytes("fixture_magnet"), StandardCharsets.US_ASCII);
         TorrentMeta resolved = new TorrentNetwork(() -> false).resolve(TorrentMeta.magnet(magnet));
         assertPass("Android retrieves exact BEP 9 metadata through a magnet", Arrays.equals(descriptor.info, resolved.info));
+        verifyImportedMagnet(db, home, magnet, resolved.items.get(0));
 
         MediaEntry entry = TorrentJobs.save(app, resolved, resolved.items.get(0));
         Downloads.deleteCopy(app, entry);
@@ -303,6 +342,18 @@ public final class BlackBoxSmoke extends Instrumentation {
             ViewGroup group = (ViewGroup) view;
             for (int i = 0; i < group.getChildCount(); i++) {
                 TextView found = find(group.getChildAt(i), text);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    private static View findDescription(View view, String description) {
+        if (view.getContentDescription() != null && description.contentEquals(view.getContentDescription())) return view;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View found = findDescription(group.getChildAt(i), description);
                 if (found != null) return found;
             }
         }

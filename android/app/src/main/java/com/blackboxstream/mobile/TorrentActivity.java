@@ -24,6 +24,12 @@ public final class TorrentActivity extends Activity {
     private LinearLayout files;
     private boolean busy;
 
+    static boolean openSource(Activity from, MediaEntry entry) {
+        if (!entry.unresolvedTorrent()) return false;
+        from.startActivity(new Intent(from, TorrentActivity.class).putExtra("torrent_link", entry.source).putExtra("lookup", true));
+        return true;
+    }
+
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
         LinearLayout root = Ui.column(this); root.setBackgroundColor(Ui.BG); Ui.fitWindow(this, root); setContentView(root);
@@ -32,13 +38,13 @@ public final class TorrentActivity extends Activity {
         pane.addView(Ui.action(this, "‹  Home", false, v -> finish()), new LinearLayout.LayoutParams(-2,-2));
         Ui.gap(pane, 19); pane.addView(Ui.kicker(this, "PEER-TO-PEER  /  BITTORRENT")); Ui.gap(pane, 5);
         pane.addView(Ui.text(this, "Open a torrent", 34, Ui.INK, Ui.DISPLAY)); Ui.gap(pane, 7);
-        pane.addView(Ui.text(this, "Paste a magnet or choose a .torrent file, then select the exact audio or video. Only use media you have permission to download.", 15, Ui.MUTED, null));
+        pane.addView(Ui.text(this, "Paste a magnet or HTTPS .torrent link, or pick a .torrent file. Then select the exact audio or video. Only use media you have permission to download.", 15, Ui.MUTED, null));
         Ui.gap(pane, 18);
         magnet = new EditText(this); magnet.setTextColor(Ui.INK); magnet.setHintTextColor(Ui.MUTED);
         magnet.setSingleLine(true); magnet.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        magnet.setHint("magnet:?xt=urn:btih:…"); magnet.setContentDescription("Magnet link");
+        magnet.setHint("Magnet or HTTPS .torrent link"); magnet.setContentDescription("Torrent source link");
         Ui.card(magnet, Ui.CARD, 12, Ui.BORDER); Ui.pad(magnet, 12, 10); pane.addView(magnet);
-        Ui.gap(pane, 9); resolve = Ui.action(this, "Find torrent files", true, v -> openMagnet()); pane.addView(resolve);
+        Ui.gap(pane, 9); resolve = Ui.action(this, "Find torrent files", true, v -> openLink()); pane.addView(resolve);
         Ui.gap(pane, 8); pane.addView(Ui.action(this, "Choose .torrent file", false, v -> {
             Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*"); picker.addCategory(Intent.CATEGORY_OPENABLE);
             try { startActivityForResult(picker, PICK_TORRENT); }
@@ -46,14 +52,23 @@ public final class TorrentActivity extends Activity {
         }));
         Ui.gap(pane, 13); status = Ui.text(this, "Peers and trackers can see your network IP. BlackBox doesn't seed or open inbound ports.", 13, Ui.MUTED, null);
         pane.addView(status); Ui.gap(pane, 11); files = Ui.column(this); pane.addView(files);
-        String link = getIntent().getStringExtra("magnet"); if (link != null) magnet.setText(link);
+        String link = getIntent().getStringExtra("torrent_link");
+        if (link != null) {
+            magnet.setText(link);
+            if (getIntent().getBooleanExtra("lookup", false)) openLink();
+        }
     }
 
     private interface Load { TorrentMeta load(int generation) throws IOException; }
-    private void openMagnet() {
+    private void openLink() {
         String link = magnet.getText().toString().trim();
         if (busy) { request++; busy = false; resolve.setText("Find torrent files"); status.setText("Lookup cancelled."); return; }
-        start("Finding peers and checking the magnet's metadata…", ticket -> {
+        if (link.length() > 12000) { status.setText("This source link is too long."); return; }
+        if (MediaSources.torrentDescriptor(link)) {
+            start("Fetching the HTTPS .torrent descriptor…", ticket -> TorrentMeta.read(TorrentWebSeed.descriptor(link)));
+            return;
+        }
+        start("Finding and checking the magnet's metadata…", ticket -> {
             TorrentMeta.Magnet target = TorrentMeta.magnet(link);
             java.io.File cached = TorrentJobs.descriptor(this, TorrentMeta.hex(target.hash));
             if (cached.isFile()) {

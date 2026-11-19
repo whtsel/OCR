@@ -101,6 +101,22 @@ public final class MainActivity extends Activity implements PlaybackService.List
         }
         setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC);
         createLayout();
+        if (state == null) openExternalMagnet(getIntent());
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        openExternalMagnet(intent);
+    }
+
+    private void openExternalMagnet(Intent intent) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction()) || intent.getData() == null
+                || !"magnet".equalsIgnoreCase(intent.getData().getScheme())) return;
+        String link = intent.getDataString();
+        if (link != null && link.length() <= 12000) {
+            // Fill the form; external intents never start a lookup or download by themselves.
+            startActivity(new Intent(this, TorrentActivity.class).putExtra("torrent_link", link));
+        }
     }
 
     @Override protected void onStart() {
@@ -278,7 +294,7 @@ public final class MainActivity extends Activity implements PlaybackService.List
         quick.addView(quick("▣", "From your phone", "Video or audio file", v -> pick(false)), new LinearLayout.LayoutParams(0, -1, 1));
         body.addView(quick, new LinearLayout.LayoutParams(-1, -2));
         Ui.gap(body, 10);
-        TextView importButton = Ui.action(this, "Import a playlist  ·  M3U", false, v -> importMenu());
+        TextView importButton = Ui.action(this, "Import a source catalogue  ·  M3U", false, v -> importMenu());
         body.addView(importButton);
         Ui.gap(body, 9);
         LinearLayout sources = Ui.row(this);
@@ -555,8 +571,8 @@ public final class MainActivity extends Activity implements PlaybackService.List
     private void linkDialog(boolean playlist) {
         LinearLayout form = Ui.column(this);
         Ui.pad(form, 20, 12);
-        form.addView(Ui.text(this, playlist ? "Add media from your own M3U list. Only HTTPS entries are imported."
-                : "Paste a direct HTTPS link to a video, audio file, or HLS stream. Web pages aren't media links.", 14, Ui.MUTED, null));
+        form.addView(Ui.text(this, playlist ? "Import a catalogue of direct HTTPS files, .torrent links and BitTorrent magnets. Pick a specific title from Library to open its source."
+                : "Paste a direct HTTPS media link, magnet, or HTTPS .torrent link. Web pages aren't media links.", 14, Ui.MUTED, null));
         Ui.gap(form, 12);
         EditText url = field(playlist ? "https://…/playlist.m3u" : "https://…/video.mp4", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         url.setContentDescription(playlist ? "Playlist URL" : "Media URL");
@@ -578,7 +594,7 @@ public final class MainActivity extends Activity implements PlaybackService.List
             try {
                 String value = url.getText().toString().trim();
                 if (!playlist && value.regionMatches(true, 0, "magnet:?", 0, 8)) {
-                    d.dismiss(); startActivity(new Intent(this, TorrentActivity.class).putExtra("magnet", value)); return;
+                    d.dismiss(); startActivity(new Intent(this, TorrentActivity.class).putExtra("torrent_link", value).putExtra("lookup", true)); return;
                 }
                 String link = MediaSources.https(value);
                 d.dismiss();
@@ -724,7 +740,8 @@ public final class MainActivity extends Activity implements PlaybackService.List
     }
 
     private void open(MediaEntry item, boolean fromLink) {
-        if (item != null && item.torrent() && item.transfer < 0 && !store.isOffline(item)) {
+        if (item == null || TorrentActivity.openSource(this, item)) return;
+        if (item.torrent() && item.transfer < 0 && !store.isOffline(item)) {
             Cinema.Film film = Cinema.fromTorrent(item.source);
             if (film != null) { watchFilm(film, null); return; }
         }

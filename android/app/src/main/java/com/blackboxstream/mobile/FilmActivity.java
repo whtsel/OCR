@@ -17,7 +17,7 @@ import java.util.concurrent.Executors;
 /** A film page shows its exact playable sources, not title-only search results. */
 public final class FilmActivity extends Activity {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
-    private boolean busy;
+    private boolean busy, resumed;
     private Cinema.Film film;
     private TextView status;
 
@@ -72,6 +72,7 @@ public final class FilmActivity extends Activity {
                     if (isDestroyed() || isFinishing()) return;
                     busy = false;
                     status.setText(torrent ? "Verified film selected · transfer in Offline" : "Direct HTTPS source selected");
+                    if (!resumed) return;
                     startActivity(new Intent(this, PlayerActivity.class).putExtra(PlaybackService.EXTRA_ID, entry.id));
                 });
             } catch (IOException | RuntimeException failure) {
@@ -82,5 +83,7 @@ public final class FilmActivity extends Activity {
         });
     }
 
+    @Override protected void onResume() { super.onResume(); resumed = true; }
+    @Override protected void onPause() { resumed = false; super.onPause(); }
     @Override protected void onDestroy() { io.shutdownNow(); super.onDestroy(); }
 }

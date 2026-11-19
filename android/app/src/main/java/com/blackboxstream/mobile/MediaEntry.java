@@ -44,10 +44,11 @@ final class MediaEntry {
 
     boolean bundled() { return source.startsWith("demo:"); }
     boolean fromPhone() { return source.startsWith("content:"); }
-    boolean remote() { return source.startsWith("https://"); }
+    boolean unresolvedTorrent() { return source.startsWith("magnet:?") || MediaSources.torrentDescriptor(source); }
+    boolean remote() { return source.startsWith("https://") && !MediaSources.torrentDescriptor(source); }
     boolean torrent() { return source.startsWith("torrent:"); }
     boolean lan() { return source.startsWith("lan:"); }
-    String sourceLabel() { return bundled() ? "BUILT-IN" : fromPhone() ? "PHONE FILE" : torrent() ? "TORRENT" : lan() ? "LOCAL SHARE" : "HTTPS"; }
+    String sourceLabel() { return bundled() ? "BUILT-IN" : fromPhone() ? "PHONE FILE" : torrent() || unresolvedTorrent() ? "TORRENT" : lan() ? "LOCAL SHARE" : "HTTPS"; }
     boolean music() { return kind == Kind.MUSIC; }
 
     static String cleanTitle(String title) {

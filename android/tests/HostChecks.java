@@ -7,6 +7,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Host-side checks for the exact parsers and transport shipped in the APK. */
@@ -51,6 +52,13 @@ public final class HostChecks {
                 && result.entries.get(0).title.equals("A, B") && result.entries.get(0).kind == MediaEntry.Kind.SERIES
                 && result.entries.get(1).kind == MediaEntry.Kind.MUSIC);
         check("skips repeated and disallowed links", result.skipped == 3);
+        MediaSources.ImportResult torrentList = MediaSources.parsePlaylist("#EXTM3U\n#EXTINF:-1 group-title=\"Series\", Episode 1\n"
+                + "magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10\n#EXTINF:-1, Feature\nrelease.torrent?ticket=1\n"
+                + "magnet:?xt=bad\nhttp://example.test/insecure.torrent\n", URI.create("https://example.test/cinema/catalog.m3u"));
+        check("M3U catalogues keep valid magnet and exact .torrent sources searchable by title", torrentList.entries.size() == 2
+                && torrentList.entries.get(0).unresolvedTorrent() && torrentList.entries.get(0).kind == MediaEntry.Kind.SERIES
+                && torrentList.entries.get(1).source.equals("https://example.test/cinema/release.torrent?ticket=1")
+                && torrentList.entries.get(1).unresolvedTorrent() && !torrentList.entries.get(1).remote() && torrentList.skipped == 2);
         StringBuilder large = new StringBuilder("#EXTM3U\n");
         for (int i = 0; i < MediaSources.MAX_ENTRIES + 1; i++) large.append("https://test.example/").append(i).append(".mp4\n");
         result = MediaSources.parsePlaylist(large.toString(), null);
@@ -61,6 +69,33 @@ public final class HostChecks {
                 new ByteArrayInputStream(new byte[MediaSources.MAX_PLAYLIST_BYTES + 1]), null));
     }
 
+    private static void webSeeds(String base, String hash, File path, byte[] video) throws Exception {
+        String magnet = "magnet:?xt=urn:btih:";
+        TorrentNetwork network = new TorrentNetwork(() -> false, Collections.emptyList());
+        TorrentMeta exact = network.resolve(TorrentMeta.magnet(magnet + hash + "&xs=" + base + "/exact.torrent"));
+        check("exact HTTPS descriptor resolves without trackers or DHT", TorrentMeta.hex(exact.hash).equals(hash)
+                && exact.webSeeds.equals(Collections.singletonList(base + "/seed/good/")));
+        expect("mismatched xs descriptor is not accepted as the selected magnet", IOException.class,
+               () -> network.resolve(TorrentMeta.magnet(magnet + hash + "&xs=" + base + "/other.torrent")));
+        String corrupt = base + "/seed/corrupt/";
+        exact = exact.withMagnet(TorrentMeta.magnet(magnet + hash + "&ws=" + corrupt));
+        TorrentMeta meta = TorrentMeta.read(exact.packed());
+        TorrentMeta.Item media = meta.items.get(2);
+        check("cached exact metadata preserves web seed hints, encoding and pad files", meta.webSeeds.size() == 2
+                && meta.webSeeds.get(0).equals(corrupt) && media.length == video.length && meta.items.get(1).padded
+                && TorrentWebSeed.itemUrl(meta, media, meta.webSeeds.get(1)).endsWith("/Open%20cinema/dawn.mp4"));
+        expect("bad web-seed piece bytes fail the torrent hash", IOException.class,
+               () -> TorrentWebSeed.piece(meta, corrupt, 0, () -> false));
+        for (String mode : Arrays.asList("bad-range", "ignore-range", "encoded", "downgrade")) {
+            expect("web seed rejects " + mode, IOException.class,
+                   () -> TorrentWebSeed.piece(meta, base + "/seed/" + mode + "/", 1, () -> false));
+        }
+        TorrentTransfer.Pieces pieces = new TorrentTransfer.Pieces(path, meta, media);
+        TorrentTransfer.download(meta, media, pieces, path, network, () -> false, n -> { });
+        check("web seed fallback assembles the exact selected media, including cross-file edge pieces",
+                pieces.received() == video.length && Arrays.equals(video, Files.readAllBytes(path.toPath())));
+    }
+
     public static void main(String[] args) throws Exception {
         parsers();
         File sourceDir = new File(args[1]);
@@ -69,6 +104,7 @@ public final class HostChecks {
         String base = args[0];
         byte[] video = Files.readAllBytes(new File(sourceDir, "dawn.mp4").toPath());
         byte[] audio = Files.readAllBytes(new File(sourceDir, "orbit.m4a").toPath());
+        webSeeds(base, args[3], new File(args[2], "web-seed.part"), video);
         AtomicLong total = new AtomicLong();
         OfflineTransfer.Monitor monitor = new OfflineTransfer.Monitor() {
             @Override public boolean stopped() { return false; }

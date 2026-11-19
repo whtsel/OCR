@@ -43,6 +43,9 @@ final class MediaSources {
 
     static boolean hls(String url) { return path(url).toLowerCase(Locale.ROOT).endsWith(".m3u8"); }
     static boolean playlist(String url) { return path(url).toLowerCase(Locale.ROOT).endsWith(".m3u"); }
+    static boolean torrentDescriptor(String url) {
+        return url != null && url.regionMatches(true, 0, "https://", 0, 8) && path(url).toLowerCase(Locale.ROOT).endsWith(".torrent");
+    }
 
     static String titleFor(String url) {
         String p = path(url);
@@ -116,19 +119,28 @@ final class MediaSources {
                 group = line.substring(8).trim();
             } else if (!line.startsWith("#")) {
                 try {
-                    String candidate = base == null ? line : base.resolve(line).toString();
-                    String url = https(candidate);
-                    if (playlist(url)) throw invalidLink();
-                    MediaEntry media = new MediaEntry(title == null || title.trim().isEmpty() ? titleFor(url) : title,
+                    String url;
+                    String fallback;
+                    if (line.regionMatches(true, 0, "magnet:?", 0, 8)) {
+                        TorrentMeta.Magnet magnet = TorrentMeta.magnet(line);
+                        url = "magnet:?" + line.substring(8);
+                        fallback = "Torrent " + TorrentMeta.hex(magnet.hash).substring(0, 8);
+                    } else {
+                        String candidate = base == null ? line : base.resolve(line).toString();
+                        url = https(candidate);
+                        if (playlist(url)) throw invalidLink();
+                        fallback = titleFor(url);
+                    }
+                    MediaEntry media = new MediaEntry(title == null || title.trim().isEmpty() ? fallback : title,
                             infer(group, url), url);
                     if (result.size() < MAX_ENTRIES && !result.containsKey(media.id)) result.put(media.id, media);
                     else skipped++;
-                } catch (IllegalArgumentException bad) { skipped++; }
+                } catch (IOException | IllegalArgumentException bad) { skipped++; }
                 title = null;
                 group = null;
             }
         }
-        if (result.isEmpty()) throw new IOException("No playable HTTPS links were found in this playlist.");
+        if (result.isEmpty()) throw new IOException("No HTTPS media or v1 torrent links were found in this playlist.");
         return new ImportResult(new ArrayList<>(result.values()), skipped);
     }
 

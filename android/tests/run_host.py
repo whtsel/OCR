@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Compile the production transport with javac (or ECJ) and test against a loopback HTTPS fixture."""
 from contextlib import ExitStack
+from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote
 import os
+import re
 import ssl
 import subprocess
 import tempfile
@@ -13,6 +16,33 @@ ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / 'app/src/main/java/com/blackboxstream/mobile'
 RAW = ROOT / 'app/src/main/res/raw'
 FILES = {name: (RAW / name).read_bytes() for name in ('dawn.mp4', 'orbit.m4a')}
+WEB_FILES = {'opening note.txt': b'BlackBox licensed torrent fixture', 'dawn.mp4': FILES['dawn.mp4'], 'closing.txt': b'End of fixture'}
+WEB_PAD = 397
+WEB_PIECE = 32768
+
+
+def bencode(value):
+    if isinstance(value, int):
+        return f'i{value}e'.encode()
+    if isinstance(value, str):
+        value = value.encode()
+    if isinstance(value, bytes):
+        return str(len(value)).encode() + b':' + value
+    if isinstance(value, list):
+        return b'l' + b''.join(map(bencode, value)) + b'e'
+    return b'd' + b''.join(bencode(k) + bencode(value[k]) for k in sorted(value)) + b'e'
+
+
+def web_fixture(seed):
+    start, video, end = WEB_FILES.values()
+    content = start + bytes(WEB_PAD) + video + end
+    info = {'name': 'Open cinema', 'piece length': WEB_PIECE,
+            'pieces': b''.join(sha1(content[i:i + WEB_PIECE]).digest() for i in range(0, len(content), WEB_PIECE)),
+            'files': [{'length': len(start), 'path': ['opening note.txt']},
+                      {'length': WEB_PAD, 'path': ['.pad', '397'], 'attr': 'p'},
+                      {'length': len(video), 'path': ['dawn.mp4']},
+                      {'length': len(end), 'path': ['closing.txt']}]}
+    return bencode({'info': info, 'url-list': seed}), sha1(bencode(info)).hexdigest()
 
 
 class Fixture(BaseHTTPRequestHandler):
@@ -43,7 +73,36 @@ class Fixture(BaseHTTPRequestHandler):
         path = self.path
         video, audio = FILES.values()
         etag = '"dawn-v1"'
-        if path == '/redirect':
+        if path == '/exact.torrent':
+            self.respond(200, self.server.web_descriptor, mime='application/x-bittorrent')
+        elif path == '/other.torrent':
+            self.respond(200, (RAW / 'cinema_big_buck_bunny.torrent').read_bytes(), mime='application/x-bittorrent')
+        elif path.startswith('/seed/'):
+            mode, title, filename = map(unquote, path[6:].split('/', 2))
+            data = WEB_FILES.get(filename)
+            selected = re.fullmatch(r'bytes=(\d+)-(\d+)', self.headers.get('Range', ''))
+            if title != 'Open cinema' or data is None or selected is None or self.headers.get('Accept-Encoding') != 'identity':
+                self.respond(400)
+                return
+            start, end = map(int, selected.groups())
+            if not 0 <= start <= end < len(data):
+                self.respond(416)
+                return
+            if mode == 'downgrade':
+                self.respond(302, Location='http://127.0.0.1:9/no')
+                return
+            body = data[start:end + 1]
+            if mode == 'corrupt':
+                body = bytes([body[0] ^ 1]) + body[1:]
+            elif mode == 'ignore-range' and filename == 'dawn.mp4':
+                self.respond(200, data)
+                return
+            header = f'bytes {start}-{end}/{len(data) + (mode == "bad-range")}'
+            headers = {'Content-Range': header}
+            if mode == 'encoded':
+                headers['Content-Encoding'] = 'gzip'
+            self.respond(206, body, **headers)
+        elif path == '/redirect':
             self.respond(302, Location='/catalog/dawn.mp4')
         elif path == '/playlist-redirect':
             self.respond(302, Location='/catalog/list.m3u')
@@ -97,7 +156,8 @@ def main():
         temp = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix='blackbox-checks-')))
         classes = temp / 'classes'
         classes.mkdir()
-        sources = [str(MAIN / nm) for nm in ('MediaEntry.java', 'MediaSources.java', 'OfflineTransfer.java')]
+        sources = [str(MAIN / nm) for nm in ('MediaEntry.java', 'MediaSources.java', 'OfflineTransfer.java', 'Bencode.java', 'TorrentMeta.java',
+                                                      'TorrentNetwork.java', 'TorrentWebSeed.java', 'TorrentTransfer.java', 'MediaBytes.java')]
         sources.append(str(ROOT / 'tests/HostChecks.java'))
         if os.environ.get('ECJ_JAR'):
             boot = os.environ['ANDROID_JAR']
@@ -114,6 +174,8 @@ def main():
         run(keytool, '-importcert', '-noprompt', '-alias', 'fixture', '-file', str(temp / 'cert.pem'), '-keystore', str(trust),
             '-storetype', 'PKCS12', '-storepass', 'fixture-password', stderr=subprocess.DEVNULL)
         server = cleanup.enter_context(ThreadingHTTPServer(('127.0.0.1', 0), Fixture))
+        base = f'https://127.0.0.1:{server.server_port}'
+        server.web_descriptor, info_hash = web_fixture(base + '/seed/good/')
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls.load_cert_chain(temp / 'cert.pem', temp / 'key.pem')
         server.socket = tls.wrap_socket(server.socket, server_side=True)
@@ -121,7 +183,7 @@ def main():
         thread.start()
         cleanup.callback(server.shutdown)
         run(java, '-Djavax.net.ssl.trustStore=' + str(trust), '-Djavax.net.ssl.trustStorePassword=fixture-password',
-            '-cp', str(classes), 'com.blackboxstream.mobile.HostChecks', f'https://127.0.0.1:{server.server_port}', str(RAW), str(temp), timeout=60)
+            '-cp', str(classes), 'com.blackboxstream.mobile.HostChecks', base, str(RAW), str(temp), info_hash, timeout=60)
 
 
 if __name__ == '__main__':

@@ -198,7 +198,7 @@ public final class DiscoverActivity extends Activity {
                     } catch (JSONException failed) { toast("Could not save this title."); }
                 });
         if (entry != null) box.setNegativeButton("Close",null).setPositiveButton("Play", (d, w) -> play(entry));
-        else box.setNegativeButton("My sources", (d, w) -> localMatches(card)).setPositiveButton(card.musicBrainz() ? "MusicBrainz listing" : "TMDB listing", (d, w) -> browser(card.listing()));
+        else box.setNegativeButton("Find my sources", (d, w) -> localMatches(card)).setPositiveButton(card.musicBrainz() ? "MusicBrainz listing" : "TMDB listing", (d, w) -> browser(card.listing()));
         box.show();
     }
 
@@ -219,6 +219,7 @@ public final class DiscoverActivity extends Activity {
     }
 
     private void play(MediaEntry e) {
+        if (TorrentActivity.openSource(this, e)) return;
         LibraryStore store = LibraryStore.get(this);
         if (store.get(e.id) == null) store.save(e, false);
         startActivity(new Intent(this, PlayerActivity.class).putExtra(PlaybackService.EXTRA_ID, e.id));
