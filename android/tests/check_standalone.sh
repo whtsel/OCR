@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Check the same standalone packaging path used for the signed handoff, then let the
-# instrumentation install its debug variant (which has a test-only content provider).
+# Install and start the production package before the debug-only instrumentation.
 set -euo pipefail
 adb=${ADB:-adb}
 pkg=com.blackboxstream.mobile
-"$adb" install "$1"
-trap '"$adb" uninstall "$pkg" >/dev/null' EXIT
-"$adb" shell input keyevent 82
-start=$("$adb" shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p "$pkg")
-printf '%s\n' "$start"
-if [[ "$start" != *'Status: ok'* || "$start" != *'.V90Activity'* ]]; then
-    printf '::error::The standalone APK did not open the v90 launcher activity.\n'
+apk=$1
+fault() {
+    local detail=${*//$'\n'/'%0A'}
+    printf '::error::Standalone Android launch: %s\n' "${detail:0:1900}"
     exit 1
-fi
+}
+[[ -f "$apk" ]] || fault "No APK at $apk"
+trap '"$adb" uninstall "$pkg" >/dev/null 2>&1 || true' EXIT
+if ! install=$("$adb" install --no-streaming "$apk" 2>&1); then fault "$install"; fi
+printf '%s\n' "$install"
+"$adb" shell input keyevent 82
+if ! start=$("$adb" shell am start -W -n "$pkg/.V90Activity" 2>&1); then fault "$start"; fi
+printf '%s\n' "$start"
+if [[ "$start" != *'Status: ok'* || "$start" != *'.V90Activity'* ]]; then fault "$start"; fi
 printf '::notice::Standalone APK installed and opened the v90 launcher on Android.\n'

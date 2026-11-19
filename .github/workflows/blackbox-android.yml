@@ -82,4 +82,5 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
-          script: bash android/tests/check_standalone.sh "$RUNNER_TEMP/BlackBox-Stream-Android.apk" && python3 android/tests/run_device_fixtures.py
+          script: |
+            install_status=0; bash android/tests/check_standalone.sh "${{ runner.temp }}/BlackBox-Stream-Android.apk" || install_status=$?; python3 android/tests/run_device_fixtures.py && exit "$install_status"
