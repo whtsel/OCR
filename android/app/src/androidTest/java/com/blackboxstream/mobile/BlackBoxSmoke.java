@@ -8,9 +8,12 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.util.Base64;
 import android.view.View;
+import android.view.InputDevice;
+import android.view.MotionEvent;
 import android.view.ViewGroup;
 import android.webkit.WebView;
 import android.widget.EditText;
@@ -35,6 +38,7 @@ import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManagerFactory;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Real-device/emulator smoke, separate from the JVM tests and the distributed APK. */
@@ -43,6 +47,7 @@ public final class BlackBoxSmoke extends Instrumentation {
     private int checks;
     private boolean liveVerified;
     private String providerStatus = "";
+    private boolean publicMediaVerified;
     private Bundle fixtures;
     private final ServiceConnection binding = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder local) { engine = ((PlaybackService.LocalBinder) local).get(); }
@@ -61,6 +66,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
                     + (liveVerified ? "PASS v90 Android: original search and source picker opened full Sintel, rendered and sought to 2:30 before the transfer finished\n" : "")
+                    + (publicMediaVerified ? "PASS Android in-app playback and complete downloads: Sintel, The Dull Sword, Cloud Dancer and Sauropod Spotting (bytes matched public files; all four played with networking off)\n" : "")
                     + providerStatus);
             finish(Activity.RESULT_OK, result);
         } catch (Throwable bad) {
@@ -136,6 +142,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 verifyServicesOnAndroid();
             }
             if (liveVerified) verifyLiveProviders(app);
+            if (fixtures != null && fixtures.containsKey("public_media")) verifyPublicMedia(app, db);
             Activity audio = launch(PlayerActivity.class, LibraryStore.SAMPLE_AUDIO.id);
             try {
                 await("audio plays through foreground media session", 16000, () -> ui(() -> engine.ready() && engine.playing()
@@ -225,6 +232,158 @@ public final class BlackBoxSmoke extends Instrumentation {
                 TorrentJobs.descriptor(app, film.hash).delete();
             }
             waitForIdleSync();
+        }
+    }
+
+    private void verifyPublicMedia(Context app, LibraryStore db) throws Exception {
+        JSONObject records = new JSONObject(new String(fixtureBytes("public_media"), StandardCharsets.UTF_8));
+        Activity desktop = launch(V90Activity.class, null);
+        WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
+        java.util.List<MediaEntry> saved = new java.util.ArrayList<>();
+        final String station = "#androidDetailMedia", play = " .android-media-play", download = " .android-media-download";
+        try {
+            await("The v90 touch UI is ready on a phone viewport", 18000,
+                    () -> jsTrue(web, "document.querySelector('#rows .card') && innerWidth <= 400"));
+            // Use the real pointer, including the original navigation and detail actions.
+            js(web, "document.querySelector('#searchInput').value='Sintel'");
+            tapWeb(web, "#searchBtn");
+            await("Search results render a touchable Sintel card", 17000, () -> jsTrue(web,
+                    "Array.from(document.querySelectorAll('#browseGrid .card')).some(c=>c.textContent.includes('Sintel'))"));
+            js(web, "Array.from(document.querySelectorAll('#browseGrid .card')).find(c=>c.textContent.includes('Sintel')).id='smokeSintel'");
+            tapWeb(web, "#smokeSintel");
+            saved.add(verifyDirect(web, db, records, "film:sintel", "Sintel", station, "#detailPlay", station + download,
+                    MediaEntry.Kind.MOVIE, 720000L, 150000L));
+
+            tapWeb(web, "[data-nav=anime]");
+            String archive = "#androidAnimeArchive [data-playable-key='anime:dull-sword']";
+            await("Anime tab shows a real in-app playable archive title", 12000,
+                    () -> jsTrue(web, "document.querySelector(" + JSONObject.quote(archive) + ")"));
+            tapWeb(web, archive);
+            saved.add(verifyDirect(web, db, records, "anime:dull-sword", "The Dull Sword", station, station + play, station + download,
+                    MediaEntry.Kind.ANIME, 250000L, 60000L));
+
+            tapWeb(web, "#navMusic");
+            String cloud = "#musicTorrGrid [data-playable-key='music:USUAN2300007']";
+            saved.add(verifyDirect(web, db, records, "music:USUAN2300007", "Cloud Dancer", cloud, cloud + play, cloud + download,
+                    MediaEntry.Kind.MUSIC, 210000L, 45000L));
+            js(web, "document.querySelector('#musicQuery').value='Sauropod Spotting'");
+            tapWeb(web, "#musicGo");
+            String matched = "#musicTorrGrid [data-playable-key='music:USUAN2500002']";
+            saved.add(verifyDirect(web, db, records, "music:USUAN2500002", "Sauropod Spotting", matched, matched + play, matched + download,
+                    MediaEntry.Kind.MUSIC, 215000L, 30000L));
+
+            tapWeb(web, "[data-nav=library]");
+            await("Library shows every complete download in the original interface", 10000, () -> {
+                for (MediaEntry entry : saved) if (!jsTrue(web, "document.querySelector(" + JSONObject.quote(offlineRow(entry)) + ")")) return false;
+                return true;
+            });
+            try {
+                shell("cmd connectivity airplane-mode enable");
+                shell("svc wifi disable");
+                shell("svc data disable");
+                android.net.ConnectivityManager network = app.getSystemService(android.net.ConnectivityManager.class);
+                await("The emulator has no active network before offline playback", 12000, () -> network.getActiveNetwork() == null);
+                for (MediaEntry entry : saved) {
+                    ActivityMonitor monitor = addMonitor(PlayerActivity.class.getName(), null, false);
+                    Activity screen = null;
+                    try {
+                        tapWeb(web, offlineRow(entry) + " .android-library-play");
+                        screen = waitForMonitorWithTimeout(monitor, 14000);
+                        assertPass(entry.title + " reopens from Library in BlackBox with airplane mode on", screen != null);
+                        awaitMedia(entry.title + " offline", entry, 60000L, true, db);
+                    } finally { closeScreen(screen); removeMonitor(monitor); }
+                }
+            } finally {
+                shell("cmd connectivity airplane-mode disable");
+                shell("svc data enable");
+                shell("svc wifi enable");
+            }
+            publicMediaVerified = true;
+        } catch (AssertionError problem) {
+            String view = js(web, "JSON.stringify({view:window.__BBX_STATE__?.view,title:document.querySelector('#detailBody h1')?.textContent,"
+                    + "music:document.getElementById('musicMsg')?.textContent,status:Array.from(document.querySelectorAll('.android-action-status')).map(e=>e.textContent).filter(Boolean).slice(-5)})");
+            throw new AssertionError(problem.getMessage() + "; page=" + view, problem);
+        } finally {
+            ui(() -> { if (engine != null) engine.close(); desktop.finish(); return null; });
+            for (MediaEntry e : saved) {
+                Downloads.deleteCopy(app, e); db.getWritableDatabase().delete("media", "id=?", new String[] {e.id});
+            }
+        }
+    }
+
+    private MediaEntry verifyDirect(WebView web, LibraryStore db, JSONObject records, String key, String title,
+                                    String card, String play, String download, MediaEntry.Kind kind,
+                                    long duration, long seek) throws Exception {
+        await(title + " has both Play and Download on screen", 22000, () -> jsTrue(web,
+                "document.querySelector(" + JSONObject.quote(card) + ")?.dataset.playableKey === " + JSONObject.quote(key)
+                + " && document.querySelector(" + JSONObject.quote(play) + ") && document.querySelector(" + JSONObject.quote(download) + ")"));
+        ActivityMonitor monitor = addMonitor(PlayerActivity.class.getName(), null, false);
+        Activity screen = null;
+        MediaEntry entry;
+        try {
+            tapWeb(web, play);
+            screen = waitForMonitorWithTimeout(monitor, 17000);
+            assertPass(title + " opens the internal player (not another app)", screen != null);
+            entry = db.get(screen.getIntent().getStringExtra(PlaybackService.EXTRA_ID));
+            assertPass(title + " resolves the right direct source and media type", entry != null && entry.remote() && entry.kind == kind && entry.title.contains(title));
+            awaitMedia(title + " online", entry, duration, false, db);
+            ui(() -> { engine.seek(seek); return null; });
+            await(title + " seeks in the full online file", 16000,
+                    () -> ui(() -> engine.playing() && !engine.seeking() && engine.position() >= seek - 1100));
+        } finally { closeScreen(screen); removeMonitor(monitor); }
+        tapWeb(web, download);
+        await(title + " download finishes and commits in Android", 110000, () -> {
+            MediaEntry active = db.get(entry.id);
+            if (active.transferError != null) throw new AssertionError(title + " download failed: " + active.transferError);
+            return db.isOffline(entry) && active.transfer < 0;
+        });
+        JSONObject ref = records.getJSONObject(key);
+        File path = db.offline(entry);
+        try (InputStream stream = new FileInputStream(path)) {
+            assertPass(title + " offline file matches the independently fetched public bytes", path.length() == ref.getLong("bytes")
+                    && TorrentMeta.hex(sha(stream)).equals(ref.getString("sha256")));
+        }
+        return entry;
+    }
+
+    private void awaitMedia(String label, MediaEntry entry, long minDuration, boolean offline, LibraryStore db) throws Exception {
+        await(label + " decodes and advances in the native Android player", 41000,
+                () -> ui(() -> {
+                    if (engine == null || engine.entry() == null || !entry.id.equals(engine.entry().id)) return false;
+                    if (engine.failure() != null) throw new AssertionError(label + ": " + engine.failure());
+                    return engine.ready() && engine.duration() >= minDuration && engine.playing() && engine.position() > 1000
+                            && offline == db.isOffline(entry) && (entry.music() ? !engine.video() && engine.hasAudio() && engine.inBackgroundSession()
+                            : engine.videoWidth() > 0 && engine.renderedVideo());
+                }));
+    }
+
+    private static String offlineRow(MediaEntry item) { return "#libraryList [data-media-id='" + item.id + "'][data-offline='true']"; }
+
+    private void closeScreen(Activity screen) throws Exception {
+        ui(() -> { if (screen != null) screen.finish(); if (engine != null) engine.close(); return null; });
+        waitForIdleSync();
+    }
+
+    private void tapWeb(WebView web, String selector) throws Exception {
+        String node = "document.querySelector(" + JSONObject.quote(selector) + ")";
+        js(web, "(()=>{const e=" + node + ";e?.scrollIntoView({block:'center',inline:'center',behavior:'instant'});return !!e})()");
+        JSONArray hit = new JSONArray(js(web, "(()=>{const e=" + node + ";if(!e)return [];const r=e.getBoundingClientRect();"
+                + "const x=r.left+r.width/2,y=r.top+r.height/2;return [x,y,innerWidth,!!document.elementFromPoint(x,y)&&e.contains(document.elementFromPoint(x,y))]})()"));
+        assertPass("Touchable WebView control: " + selector, hit.length() == 4 && hit.getBoolean(3));
+        int[] window = ui(() -> { int[] where = new int[3]; web.getLocationOnScreen(where); where[2] = web.getWidth(); return where; });
+        float scale = (float) (window[2] / hit.getDouble(2));
+        long when = SystemClock.uptimeMillis();
+        float x = window[0] + scale * (float) hit.getDouble(0), y = window[1] + scale * (float) hit.getDouble(1);
+        for (int type : new int[] {MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP}) {
+            MotionEvent motion = MotionEvent.obtain(when, SystemClock.uptimeMillis(), type, x, y, 0);
+            motion.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+            try { getUiAutomation().injectInputEvent(motion, true); } finally { motion.recycle(); }
+        }
+    }
+
+    private void shell(String command) throws Exception {
+        try (InputStream stdout = new ParcelFileDescriptor.AutoCloseInputStream(getUiAutomation().executeShellCommand(command))) {
+            byte[] drain = new byte[512]; while (stdout.read(drain) != -1) { }
         }
     }
 
@@ -383,15 +542,15 @@ public final class BlackBoxSmoke extends Instrumentation {
         java.util.concurrent.ExecutorService probes = java.util.concurrent.Executors.newFixedThreadPool(4);
         try {
             java.util.Map<String, java.util.concurrent.Future<String>> responses = new java.util.LinkedHashMap<>();
-            for (String name : Arrays.asList("Knaben", "Torrents-CSV", "Anime catalogue", "MusicBrainz")) {
+            for (String name : Arrays.asList("Knaben", "Torrents-CSV", "Anime catalogue", "Incompetech")) {
                 responses.put(name, probes.submit(() -> {
                     String route = name.equals("Anime catalogue") ? "/api/anime/search?q=Astro%20Boy&page=1"
-                            : name.equals("MusicBrainz") ? "/api/mobile/music?q=Goldberg%20Variations"
+                            : name.equals("Incompetech") ? "/api/mobile/music?q=Sauropod%20Spotting"
                             : "/api/sources/" + (name.equals("Knaben") ? "find" : "deep") + "?type=movie&title=Elephants%20Dream&year=2006";
                     V90Api.Reply reply = api.call("GET", route, "");
                     if (reply.status != 200) return "unavailable (" + reply.status + ": " + reply.value.optString("message") + ")";
                     if ("unavailable".equals(reply.value.optString("indexStatus"))) return reply.value.optString("note");
-                    org.json.JSONArray entries = reply.value.optJSONArray(name.equals("Anime catalogue") ? "items" : name.equals("MusicBrainz") ? "results" : "sources");
+                    org.json.JSONArray entries = reply.value.optJSONArray(name.equals("Anime catalogue") ? "items" : name.equals("Incompetech") ? "results" : "sources");
                     String provider = reply.value.optString("provider");
                     return (provider.isEmpty() ? "" : provider + " ") + "answered with " + (entries == null ? 0 : entries.length()) + " results";
                 }));

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install and start the production package before the debug-only instrumentation.
+# Install and start the production package after media instrumentation passes.
 set -euo pipefail
 adb=${ADB:-adb}
 pkg=com.blackboxstream.mobile

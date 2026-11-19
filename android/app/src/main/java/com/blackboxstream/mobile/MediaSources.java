@@ -15,6 +15,7 @@ import java.util.regex.Pattern;
 import javax.net.ssl.HttpsURLConnection;
 
 final class MediaSources {
+    static final String USER_AGENT = "BlackBoxStream-Android/1.4 (https://github.com/whtsel/OCR)";
     static final int MAX_PLAYLIST_BYTES = 1024 * 1024;
     static final int MAX_ENTRIES = 500;
     private static final Pattern GROUP = Pattern.compile("(?:^|\\s)group-title\\s*=\\s*(?:\"([^\"]*)\"|([^\\s]+))", Pattern.CASE_INSENSITIVE);

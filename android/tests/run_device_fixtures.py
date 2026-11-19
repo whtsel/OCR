@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Forward controlled fixtures to adb; no public trackers, media or relay accounts needed."""
+"""Forward controlled fixtures to adb and, in release validation, require public media."""
 from base64 import b64encode
 from contextlib import ExitStack
 from pathlib import Path
 import os
+import json
 import ssl
 import subprocess
 import tempfile
@@ -43,7 +44,21 @@ def main():
                    BBX_FIXTURE_TORRENT=base64(live.descriptor.read_bytes()),
                    BBX_FIXTURE_RELAY=f'https://127.0.0.1:{relay.server_port}',
                    BBX_FIXTURE_CERT=base64(cert.read_bytes()))
-        subprocess.run([str(ROOT / 'run_device.sh')], env=env, check=True, timeout=315)
+        if os.environ.get('BBX_VERIFY_PUBLIC_MEDIA') == '1':
+            from check_playable_media import verify
+            try:
+                expected = verify()
+            except Exception as error:
+                print(f'::error::Independent live media download failed: {type(error).__name__}: {error}', flush=True)
+                raise
+            print('::notice::Independent full-file hashes collected for ' + ', '.join(expected), flush=True)
+            env['BBX_PUBLIC_MEDIA_HASHES'] = base64(json.dumps(expected, separators=(',', ':')).encode('utf-8'))
+            # Test touch geometry at a phone-sized viewport, not a desktop layout.
+            subprocess.run([adb, 'shell', 'wm', 'size', '720x1560'], check=True)
+            subprocess.run([adb, 'shell', 'wm', 'density', '320'], check=True)
+            cleanup.callback(subprocess.run, [adb, 'shell', 'wm', 'size', 'reset'], check=False)
+            cleanup.callback(subprocess.run, [adb, 'shell', 'wm', 'density', 'reset'], check=False)
+        subprocess.run([str(ROOT / 'run_device.sh')], env=env, check=True, timeout=570)
 
 
 if __name__ == '__main__':

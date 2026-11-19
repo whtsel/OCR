@@ -24,6 +24,7 @@ final class V90Api {
     private final LibraryStore db;
     private final SharedPreferences prefs;
     private final V90Online online;
+    private final PlayableMusic music = new PlayableMusic();
     private final ExecutorService resolver = Executors.newFixedThreadPool(2);
     private final Map<String, Resolve> jobs = new LinkedHashMap<>();
     private volatile String key;
@@ -40,6 +41,8 @@ final class V90Api {
         volatile TorrentMeta meta;
         volatile String error;
         volatile boolean cancelled;
+        final MediaEntry.Kind kind;
+        Resolve(MediaEntry.Kind kind) { this.kind = kind; }
         boolean working() { return !cancelled && meta == null && error == null; }
     }
 
@@ -89,13 +92,22 @@ final class V90Api {
             }
             if (get && path.startsWith("/api/tmdb/")) return catalogue(uri, path.substring(9));
             if (get && path.equals("/api/mobile/open-films")) return ok(new JSONObject().put("results", films("", 1)));
+            if (get && path.equals("/api/mobile/open-anime")) return ok(new JSONObject().put("items", OpenAnime.search("")));
             if (get && path.matches("/api/anime/(top|airing|search)")) {
-                return ok(online.anime(path.substring(11), param(uri, "q", param(uri, "query", "")), number(uri, "page", 1)));
+                String mode = path.substring(11), query = param(uri, "q", param(uri, "query", ""));
+                int page = number(uri, "page", 1);
+                JSONArray direct = mode.equals("search") && page == 1 && !query.trim().isEmpty() ? OpenAnime.search(query) : new JSONArray();
+                if (direct.length() != 0) return ok(new JSONObject().put("items", direct).put("provider", "Wikimedia Commons")
+                        .put("pagination", new JSONObject().put("lastPage", 1)));
+                return ok(online.anime(mode, query, page));
             }
             if (get && path.matches("/api/sources/(find|deep)")) return search(uri, path.endsWith("/deep"));
             if (!get && path.equals("/api/availability")) return availability(body);
             if (!get && path.equals("/api/coverage")) return ok(new JSONObject()); // No per-episode availability is inferred.
-            if (!get && (path.equals("/api/content-resolve") || path.equals("/api/resolve"))) return resolve(new JSONObject(body).optString("uri"));
+            if (!get && (path.equals("/api/content-resolve") || path.equals("/api/resolve"))) {
+                JSONObject data = new JSONObject(body);
+                return resolve(data.optString("uri"), mediaKind(data.optString("kind"), null));
+            }
             if (path.startsWith("/api/content-job/") || path.startsWith("/api/job/")) return status(path, get);
             if (!get && path.matches("/api/torrent/[a-f0-9]{40}/select/[0-9]{1,4}")) {
                 String[] parts = path.split("/");
@@ -104,24 +116,29 @@ final class V90Api {
             }
             if (get && path.equals("/api/mobile/library")) return library();
             if (get && path.equals("/api/mobile/music")) {
-                JSONArray tracks = new JSONArray();
-                String query = V90Online.searchText(param(uri, "q", ""));
-                if (!query.isEmpty()) for (Catalogue.Card track : Catalogue.music(Catalogue.Music.TRACKS, query)) {
-                    tracks.put(new JSONObject().put("title", track.title).put("track", track.title)
-                            .put("artist", track.detail.split(" · ", 2)[0]).put("listing", track.listing()));
-                }
-                return ok(new JSONObject().put("results", tracks));
+                return ok(music.search(param(uri, "q", ""), number(uri, "genre", 0), number(uri, "offset", 0),
+                        "1".equals(param(uri, "featured", ""))));
+            }
+            if (!get && path.equals("/api/mobile/playable")) {
+                JSONObject data = new JSONObject(body);
+                MediaEntry entry = playable(data.optString("key"));
+                if (entry == null) return fail(404, "That playable file is not in the catalogue. Reopen the title or search again.");
+                return prepareMedia(entry, data.optBoolean("download"));
             }
             if (!get && path.equals("/api/mobile/direct")) {
                 JSONObject data = new JSONObject(body); String url = MediaSources.https(data.optString("url"));
-                if (MediaSources.playlist(url) || MediaSources.torrentDescriptor(url)) return fail(400, "Open this through the catalogue or torrent picker.");
-                MediaEntry entry = new MediaEntry(data.optString("title", MediaSources.titleFor(url)), MediaSources.infer(null, url), url);
-                if (db.get(entry.id) == null) db.save(entry, true);
-                return ok(new JSONObject().put("id", entry.id));
+                if (MediaSources.playlist(url) || MediaSources.torrentDescriptor(url)) return fail(400, "Use a direct file link, or import the playlist or torrent in Settings.");
+                String host = URI.create(url).getHost().toLowerCase(Locale.ROOT);
+                if (host.equals("youtu.be") || host.equals("youtube.com") || host.endsWith(".youtube.com"))
+                    return fail(415, "A YouTube page is not an audio or video file link. Use a direct HTTPS file or import from your phone.");
+                MediaEntry.Kind kind = mediaKind(data.optString("kind"), MediaSources.infer(null, url));
+                return prepareMedia(new MediaEntry(data.optString("title", MediaSources.titleFor(url)), kind, url), data.optBoolean("download"));
             }
-            if (!get && path.matches("/api/mobile/transfer/[a-f0-9]{64}/cancel")) {
+            if (!get && path.matches("/api/mobile/transfer/[a-f0-9]{64}/(cancel|download)")) {
                 MediaEntry entry = db.get(path.split("/")[4]);
-                if (entry == null || entry.transfer < 0) return fail(404, "This download isn't queued.");
+                if (entry == null) return fail(404, "This file is no longer in your Library.");
+                if (path.endsWith("/download")) return prepareMedia(entry, true);
+                if (entry.transfer < 0) return fail(409, "This download is no longer queued.");
                 Downloads.cancel(app, entry); return ok(new JSONObject().put("ok", true));
             }
             if (get && path.equals("/api/ytdlp/status")) return ok(new JSONObject().put("installed", false).put("supported", false)
@@ -133,6 +150,40 @@ final class V90Api {
         } catch (IOException failed) {
             return fail(502, safeFailure(failed, "Couldn't complete the request. Check the connection and try again."));
         } catch (RuntimeException | StackOverflowError failure) { return fail(500, "Android couldn't complete this operation."); }
+    }
+
+    private MediaEntry playable(String key) throws IOException {
+        if (key.matches("film:[a-z-]{1,40}")) {
+            Cinema.Film film = Cinema.fromSlug(key.substring(5));
+            return film == null ? null : film.directEntry(app);
+        }
+        if (key.matches("anime:[a-z-]{1,40}")) {
+            OpenAnime anime = OpenAnime.named(key.substring(6));
+            return anime == null ? null : anime.entry();
+        }
+        if (key.startsWith("music:")) {
+            PlayableMusic.Track track = music.track(key.substring(6));
+            return track == null ? null : track.entry();
+        }
+        return null;
+    }
+
+    private Reply prepareMedia(MediaEntry entry, boolean download) throws IOException, JSONException {
+        if (download && !Downloads.canKeep(entry)) return fail(415, "This stream cannot be downloaded. Choose a direct media file.");
+        MediaEntry existing = db.get(entry.id);
+        if (existing == null) db.save(entry, true);
+        if (download) {
+            if (existing != null) Downloads.failIfMissing(app, existing);
+            try { ensureQueued(entry); }
+            catch (IllegalStateException busy) { return fail(409, safeFailure(busy, "The download can't be queued yet.")); }
+        }
+        MediaEntry current = db.get(entry.id);
+        return new Reply(download && current != null && current.transfer >= 0 ? 202 : 200, new JSONObject().put("id", entry.id)
+                .put("offline", db.isOffline(entry)).put("queued", current != null && current.transfer >= 0));
+    }
+
+    private static MediaEntry.Kind mediaKind(String name, MediaEntry.Kind fallback) {
+        try { return MediaEntry.Kind.valueOf(name); } catch (IllegalArgumentException invalid) { return fallback; }
     }
 
     private Reply catalogue(Uri uri, String route) throws JSONException, IOException {
@@ -165,7 +216,22 @@ final class V90Api {
         }
         if (route.startsWith("/search/") || route.startsWith("/discover/")) request.append(request.indexOf("?") < 0 ? '?' : '&').append("include_adult=false");
         String raw = Catalogue.fetch(URI.create(Catalogue.TMDB), request.toString(), credential);
-        return ok(new JSONObject(raw));
+        JSONObject payload = new JSONObject(raw);
+        if (route.startsWith("/movie/") || route.startsWith("/search/") || route.startsWith("/trending/") || route.equals("/discover/movie")) {
+            tagDirectFilm(payload);
+            JSONArray results = payload.optJSONArray("results");
+            if (results != null) for (int i = 0; i < Math.min(50, results.length()); i++) tagDirectFilm(results.optJSONObject(i));
+        }
+        return ok(payload);
+    }
+
+    private static void tagDirectFilm(JSONObject item) throws JSONException {
+        if (item == null || "tv".equals(item.optString("media_type"))) return;
+        Cinema.Film film = Cinema.exactTitle(item.optString("title"));
+        if (film != null && item.optString("release_date").startsWith(film.year + "-")) {
+            item.put("_androidPlayable", "film:" + film.slug).put("_openFilm", true)
+                    .put("_androidReference", "https://studio.blender.org/projects/" + film.project + "/");
+        }
     }
 
     private static JSONObject card(Cinema.Film film) throws JSONException {
@@ -173,7 +239,7 @@ final class V90Api {
         return new JSONObject().put("id", "open_" + slug).put("title", film.title).put("original_title", film.title)
                 .put("media_type", "movie").put("release_date", film.year + "-01-01").put("status", "Released")
                 .put("poster_path", "/" + art).put("backdrop_path", "/" + art).put("overview", film.story).put("_openFilm", true)
-                .put("runtime", Integer.parseInt(film.duration.split(" ")[0])).put("genre_ids", new JSONArray().put(16))
+                .put("_androidPlayable", "film:" + film.slug).put("runtime", Integer.parseInt(film.duration.split(" ")[0])).put("genre_ids", new JSONArray().put(16))
                 .put("genres", new JSONArray().put(new JSONObject().put("name", film.genre)));
     }
 
@@ -199,7 +265,7 @@ final class V90Api {
 
     private Reply search(Uri uri, boolean deep) throws JSONException {
         String title = V90Online.searchText(param(uri, "title", "")), year = param(uri, "year", ""), type = param(uri, "type", "movie");
-        if (title.length() < 2 || !(type.equals("movie") || type.equals("tv") || type.equals("anime"))) return fail(400, "Choose a title to search.");
+        if (title.length() < 2 || !type.matches("movie|tv|anime|anime-film")) return fail(400, "Choose a title to search.");
         int season = number(uri, "season", 1), episode = number(uri, "episode", 0);
         String alternative = V90Online.searchText(param(uri, "alt", ""));
         Map<String, JSONObject> distinct = new LinkedHashMap<>();
@@ -214,9 +280,11 @@ final class V90Api {
             } catch (IOException ignored) { }
         }
         for (MediaEntry local : db.saved()) {
-            if (!local.title.equalsIgnoreCase(title) || !local.source.startsWith("magnet:?")) continue;
-            try { distinct.putIfAbsent(TorrentMeta.hex(TorrentMeta.magnet(local.source).hash), V90Online.source(local.title, local.source, 0, 0, "Your Library")); }
-            catch (IOException ignored) { }
+            if (!local.title.equalsIgnoreCase(title) || !local.unresolvedTorrent()) continue;
+            if (local.source.startsWith("magnet:?")) {
+                try { distinct.putIfAbsent(TorrentMeta.hex(TorrentMeta.magnet(local.source).hash), V90Online.source(local.title, local.source, 0, 0, "Your Library")); }
+                catch (IOException ignored) { }
+            } else distinct.put(local.id, V90Online.source(local.title, local.source, 0, 0, "Your Library"));
         }
         String index = deep ? "Torrents-CSV" : "Knaben", indexStatus = "skipped";
         String note = "Source counts are reported by the index. BlackBox checks the actual manifest and pieces before playing.";
@@ -243,7 +311,7 @@ final class V90Api {
         return ok(new JSONObject().put("sources", sources).put("note", note).put("providers", providers).put("index", index).put("indexStatus", indexStatus));
     }
 
-    private synchronized Reply resolve(String source) throws JSONException {
+    private synchronized Reply resolve(String source, MediaEntry.Kind kind) throws JSONException {
         String link = source.trim();
         if (link.length() > 12000 || !(link.regionMatches(true, 0, "magnet:?", 0, 8) || MediaSources.torrentDescriptor(link)))
             return fail(400, "Use a v1 magnet, an HTTPS .torrent URL, or choose a .torrent document in the Android picker.");
@@ -252,7 +320,7 @@ final class V90Api {
             while (old.hasNext() && jobs.size() >= 12) if (!old.next().working()) old.remove();
             if (jobs.size() >= 12) return fail(429, "Too many torrent lookups. Cancel one and try again.");
         }
-        Resolve job = new Resolve(); jobs.put(job.id, job);
+        Resolve job = new Resolve(kind); jobs.put(job.id, job);
         resolver.execute(() -> {
             try {
                 if (job.cancelled || closed) return;
@@ -314,6 +382,10 @@ final class V90Api {
         Cinema.Film film = Cinema.fromTorrent("torrent:" + hash + ":" + index);
         String name = film != null ? film.title : title.trim().isEmpty() || meta.items.size() > 1 ? file.name : MediaEntry.cleanTitle(title);
         MediaEntry entry = TorrentJobs.save(app, meta, file, name);
+        if (!entry.music() && (job.kind == MediaEntry.Kind.ANIME || job.kind == MediaEntry.Kind.SERIES)) {
+            entry = new MediaEntry(entry.title, job.kind, entry.source);
+            db.save(entry, true);
+        }
         ensureQueued(entry);
         return new Reply(202, new JSONObject().put("id", entry.id).put("manifest_verified", true));
     }
@@ -334,6 +406,7 @@ final class V90Api {
             long progress = e.transfer >= 0 ? Downloads.received(db, e) : 0;
             result.put(new JSONObject().put("id", e.id).put("title", e.title).put("kind", e.kind.label)
                     .put("label", e.sourceLabel()).put("kindId", e.kind.name()).put("offline", offline).put("queued", e.transfer >= 0)
+                    .put("downloadable", Downloads.canKeep(e))
                     .put("error", e.transferError == null ? "" : e.transferError).put("received", progress)
                     .put("total", e.totalBytes).put("position", e.positionMs));
             if (result.length() >= 400) break;

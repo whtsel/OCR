@@ -47,6 +47,7 @@ final class OfflineTransfer {
             request.setConnectTimeout(10000);
             request.setReadTimeout(15000);
             request.setRequestProperty("Accept-Encoding", "identity");
+            request.setRequestProperty("User-Agent", MediaSources.USER_AGENT);
             boolean candidate = partial > 0 && target.equals(previous.url);
             if (candidate) {
                 request.setRequestProperty("Range", "bytes=" + partial + "-");

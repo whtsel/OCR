@@ -53,7 +53,7 @@ final class V90Online {
         return clean.substring(0, Math.min(130, clean.length()));
     }
 
-    private static String words(String s) {
+    static String words(String s) {
         return Normalizer.normalize(s, Normalizer.Form.NFKD).replaceAll("\\p{M}+", "").toLowerCase(Locale.ROOT)
                 .replaceAll("[^\\p{L}\\p{N}]+", " ").trim();
     }
@@ -61,7 +61,7 @@ final class V90Online {
     static boolean releaseMatches(String title, String year, String type, int season, int episode, String release) {
         if (release == null || release.length() > 360 || release.matches("(?i).*(?:\\.(?:exe|msi|apk|zip|rar|iso|bat|scr|cmd|js)|\\bpassword\\b).*")) return false;
         boolean anime = "anime".equals(type);
-        String label = anime ? release.replaceFirst("^\\s*\\[[^\\]\\r\\n]{1,64}\\]\\s*", "") : release;
+        String label = anime || "anime-film".equals(type) ? release.replaceFirst("^\\s*\\[[^\\]\\r\\n]{1,64}\\]\\s*", "") : release;
         String actual = words(label), target = words(title);
         if (target.isEmpty() || !(actual.equals(target) || actual.startsWith(target + " "))) return false;
         if ("tv".equals(type) || anime) {
@@ -81,7 +81,7 @@ final class V90Online {
         String clean = searchText(title), y = year.matches("[0-9]{4}") ? year : "";
         if (clean.length() < 2) return new JSONArray();
         String tail = "tv".equals(type) && season >= 0 && episode > 0 ? String.format(Locale.ROOT, " S%02dE%02d", season, episode)
-                : "movie".equals(type) && !y.isEmpty() ? " " + y : "";
+                : ("movie".equals(type) || "anime-film".equals(type)) && !y.isEmpty() ? " " + y : "";
         String key = deep + ":" + type + ":" + season + ":" + episode + ":" + clean.toLowerCase(Locale.ROOT) + tail;
         synchronized (cache) {
             Cached hit = cache.get(key);
@@ -228,10 +228,10 @@ final class V90Online {
 
     private static String text(JSONObject row, String name) { return row.isNull(name) ? "" : row.optString(name, ""); }
 
-    private static String request(String address, JSONObject post) throws IOException {
+    static String request(String address, JSONObject post) throws IOException {
         HttpsURLConnection req = (HttpsURLConnection) URI.create(address).toURL().openConnection();
         req.setConnectTimeout(5500); req.setReadTimeout(8000); req.setInstanceFollowRedirects(false);
-        req.setRequestProperty("Accept", "application/json"); req.setRequestProperty("User-Agent", "BlackBoxStream-Android/1.3");
+        req.setRequestProperty("Accept", "application/json"); req.setRequestProperty("User-Agent", MediaSources.USER_AGENT);
         try {
             if (post != null) {
                 byte[] bytes = post.toString().getBytes(StandardCharsets.UTF_8);

@@ -71,6 +71,11 @@ public final class PlaybackService extends Service {
     private long queuedPosition, lastPersist;
     private int generation;
 
+    private final Runnable prepareDeadline = () -> {
+        if (preparing) fail(entry.torrent() ? "Torrent playback timed out waiting for verified pieces. Check Library or try another source."
+                : "This source did not open in time. Check the connection, retry, or download the file first.");
+    };
+
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (!playing) return;
@@ -122,6 +127,13 @@ public final class PlaybackService extends Service {
     boolean playing() { return playing; }
     boolean video() { return video; }
     boolean renderedVideo() { return rendered; }
+    boolean hasAudio() {
+        if (!ready || player == null) return false;
+        try {
+            for (MediaPlayer.TrackInfo track : player.getTrackInfo()) if (track.getTrackType() == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO) return true;
+        } catch (IllegalStateException ignored) { }
+        return false;
+    }
     boolean buffering() { return buffering; }
     boolean inBackgroundSession() { return foreground; }
     boolean seeking() { return queuedPosition >= 0 && ready; }
@@ -165,6 +177,7 @@ public final class PlaybackService extends Service {
         queuedPosition = next.positionMs;
         startWhenPrepared = autoplay;
         preparing = true;
+        main.postDelayed(prepareDeadline, next.torrent() ? 65000 : 45000);
         final int ticket = generation;
         // A document provider may be backed by cloud storage. Don't call it from the UI thread.
         if ((next.torrent() || next.lan()) && !store.isOffline(next)) {
@@ -207,7 +220,7 @@ public final class PlaybackService extends Service {
                 } else if (next.bundled()) {
                     int resource = "demo:orbit".equals(next.source) ? R.raw.orbit : R.raw.dawn;
                     try (AssetFileDescriptor fd = getResources().openRawResourceFd(resource)) { p.setDataSource(fd); }
-                } else p.setDataSource(next.source);
+                } else p.setDataSource(this, Uri.parse(next.source), java.util.Collections.singletonMap("User-Agent", MediaSources.USER_AGENT));
             });
         }
         emit();
@@ -272,6 +285,7 @@ public final class PlaybackService extends Service {
     private void prepared(MediaPlayer p) {
         if (p != player) return;
         preparing = false;
+        main.removeCallbacks(prepareDeadline);
         ready = true;
         try {
             video = p.getVideoWidth() > 0;
@@ -484,6 +498,7 @@ public final class PlaybackService extends Service {
 
     private void dropPlayer() {
         generation++;
+        main.removeCallbacks(prepareDeadline);
         if (externalSource != null) { externalSource.close(); externalSource = null; }
         main.removeCallbacks(tick);
         if (player != null) { player.release(); player = null; }

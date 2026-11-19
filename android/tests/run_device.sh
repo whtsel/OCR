@@ -14,6 +14,9 @@ fi
 if [[ "${BBX_VERIFY_LIVE_FILM:-0}" == 1 ]]; then
     args+=(-e live_cinema yes)
 fi
+if [[ -n "${BBX_PUBLIC_MEDIA_HASHES:-}" ]]; then
+    args+=(-e public_media "$BBX_PUBLIC_MEDIA_HASHES")
+fi
 out=$("$adb" shell am instrument -w -r "${args[@]}" com.blackboxstream.mobile.test/com.blackboxstream.mobile.BlackBoxSmoke)
 printf '%s\n' "$out"
 if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_CODE: -1'* ]]; then

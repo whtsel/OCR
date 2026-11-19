@@ -71,7 +71,10 @@ public final class V90Activity extends Activity {
         } catch (RuntimeException missing) { showWebViewError(); }
     }
 
-    @Override protected void onResume() { super.onResume(); resumed = true; if (view != null) view.onResume(); }
+    @Override protected void onResume() {
+        super.onResume(); resumed = true;
+        if (view != null) { view.onResume(); view.evaluateJavascript("window.bbxAndroidResume?.()", null); }
+    }
     @Override protected void onPause() { resumed = false; if (view != null) view.onPause(); super.onPause(); }
 
     @Override public void onBackPressed() {
@@ -154,7 +157,11 @@ public final class V90Activity extends Activity {
             boolean allowed = "www.youtube.com".equals(host) && ("/results".equals(path) || "/watch".equals(path))
                     || "www.themoviedb.org".equals(host) && path.matches("/(?:[a-z]{2}(?:-[A-Z]{2})?/)?(?:movie|tv)/[A-Za-z0-9_-]+(?:/watch)?/?")
                     || "musicbrainz.org".equals(host) && path.matches("/recording/[a-f0-9-]{36}")
-                    || "studio.blender.org".equals(host) && path.matches("/projects/[a-z0-9-]+/?");
+                    || "studio.blender.org".equals(host) && path.matches("/projects/[a-z0-9-]+/?")
+                    || "incompetech.com".equals(host) && "/music/royalty-free/index.html".equals(path)
+                        && V90Api.param(uri, "isrc", "").matches("[A-Z]{2}[A-Z0-9]{3}[0-9]{7}")
+                    || "commons.wikimedia.org".equals(host) && OpenAnime.FILMS.stream()
+                        .anyMatch(film -> film.attribution().equals(uri.toString()));
             if (allowed) startActivity(new Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE));
         } catch (android.content.ActivityNotFoundException unavailable) { toast("No app is available to open this provider page."); }
         catch (IllegalArgumentException invalid) { toast("This provider link is not supported."); }
@@ -187,6 +194,10 @@ public final class V90Activity extends Activity {
                     Cinema.Film f = Cinema.fromSlug(slug);
                     if (f != null) return response(200, "OK", "image/jpeg", TorrentMeta.slurp(getResources().openRawResource(f.art), 512 * 1024));
                 }
+                if (path != null && path.matches("/api/img/(w[0-9]{2,4}|original)/anime/[a-z-]+\\.jpg")) {
+                    OpenAnime film = OpenAnime.named(path.substring(path.lastIndexOf('/') + 1, path.length() - 4));
+                    if (film != null) return artwork(URI.create(film.artwork()), true);
+                }
                 if (path != null && path.matches("/api/img/(w[0-9]{2,4}|original)/[a-zA-Z0-9_-]{1,90}\\.(jpg|jpeg|png|webp)"))
                     return artwork(URI.create("https://image.tmdb.org/t/p/" + path.substring(9)));
                 if ("/api/cover".equals(path)) {
@@ -218,12 +229,15 @@ public final class V90Activity extends Activity {
         return html.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static WebResourceResponse artwork(URI uri) throws IOException {
-        if (!"https".equals(uri.getScheme()) || !ART_HOSTS.contains(uri.getHost()) || uri.getPort() != -1 || uri.getUserInfo() != null)
+    private static WebResourceResponse artwork(URI uri) throws IOException { return artwork(uri, false); }
+
+    private static WebResourceResponse artwork(URI uri, boolean pinned) throws IOException {
+        if (!"https".equals(uri.getScheme()) || !pinned && !ART_HOSTS.contains(uri.getHost()) || uri.getPort() != -1 || uri.getUserInfo() != null)
             return response(403, "Forbidden", "text/plain", new byte[0]);
         HttpsURLConnection req = (HttpsURLConnection) uri.toURL().openConnection();
         req.setConnectTimeout(4500); req.setReadTimeout(6000); req.setInstanceFollowRedirects(false);
         req.setRequestProperty("Accept", "image/webp,image/png,image/jpeg");
+        req.setRequestProperty("User-Agent", MediaSources.USER_AGENT);
         try {
             int status = req.getResponseCode(); String mime = req.getContentType();
             if (status == 200 && ("image/jpeg".equals(mime) || "image/png".equals(mime) || "image/webp".equals(mime)) && req.getContentLengthLong() <= 2 * 1024 * 1024)

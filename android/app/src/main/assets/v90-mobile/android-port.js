@@ -13,6 +13,7 @@
     if (!r.ok) throw new Error(payload.message || payload.error || `Android engine HTTP ${r.status}`);
     return payload;
   }
+  window.bbxAndroidRequest = read;
   const player = () => node('playerWrap');
   const originalNoKey = renderNoKey;
   let keylessRequest;
@@ -52,6 +53,12 @@
     play?.classList.add('android-source-play');
     const title = el('span', 'android-release-title', source.title || 'Selected release');
     card.prepend(title);
+    const kind = state.view === 'detail' ? (isAnime(state.movie) ? 'ANIME' : isTv(state.movie) ? 'SERIES' : 'MOVIE') : undefined;
+    card.onclick = () => openTorrent(source.magnet, source.title, {mode:'play', kind});
+    const download = card.querySelector('.source-dl-chip-v74');
+    if (download) download.onclick = event => {
+      event.stopPropagation(); openTorrent(source.magnet, source.title, {mode:'download', saveCopy:true, kind});
+    };
     return card;
   };
   const originalSearch = doSearch;
@@ -106,12 +113,16 @@
     if (state.resolveId) return toast('Cancel the current source check first.');
     try {
       if (/^https:\/\//i.test(link) && !/\.torrent$/i.test(new URL(link).pathname)) {
-        const {id} = await read('/api/mobile/direct', {url: link, title: title || undefined});
-        node('settingsWrap').hidden = true; bbxAndroidOpen('play', id);
+        const download = options.mode === 'download';
+        const result = await read('/api/mobile/direct', {url: link, title: title || undefined, kind: options.kind, download});
+        node('settingsWrap').hidden = true;
+        if (download) toast(result.offline ? 'Already downloaded.' : 'Download queued in Library.');
+        else bbxAndroidOpen('play', result.id);
         return;
       }
     } catch (error) { toast(error.message); return; }
     let job, cancelled = false;
+    const started = Date.now();
     state.resolveId = 'starting';
     state.findingCancel = async () => {
       cancelled = true;
@@ -119,7 +130,7 @@
     };
     showFinding(`Checking complete manifest for ${name.slice(0, 72)}…`);
     try {
-      ({job} = await read('/api/content-resolve', {uri: link}));
+      ({job} = await read('/api/content-resolve', {uri: link, kind: options.kind}));
       if (cancelled) { await state.findingCancel(); return; }
       state.resolveId = job;
       const until = Date.now() + 130000;
@@ -136,7 +147,7 @@
           showPlayer(manifest, title || manifest.name, options);
           return;
         }
-        findingText(reply.msg || 'Waiting for the selected source…');
+        findingText(`${reply.msg || 'Waiting for the selected source…'} · ${Math.floor((Date.now() - started) / 1000)}s`);
         await new Promise(resolve => setTimeout(resolve, 600));
       }
       if (!cancelled) {
@@ -179,33 +190,55 @@
     node('playerMode').textContent = 'Android player · exact torrent file';
   };
 
-  // The same offline files, jobs and history are shared with the native library/player.
+  // Refresh progress while a job is active, and stop polling when Library is hidden.
+  let libraryTimer, libraryBusy = false, librarySnapshot = '';
   refreshLibrary = async function () {
+    clearTimeout(libraryTimer);
     const target = node('libraryList');
-    if (state.view !== 'library') return;
+    if (state.view !== 'library' || !target || libraryBusy) return;
+    libraryBusy = true;
+    let activeJob = false;
     try {
       const {items} = await read('/api/mobile/library');
       if (state.view !== 'library') return;
-      const toolbar = el('div', 'android-tools-row');
-      toolbar.append(button('Device library & imports', () => bbxAndroidOpen('library')), button('Open a torrent', () => bbxAndroidOpen('torrent')));
+      activeJob = items.some(entry => entry.queued);
+      const snapshot = JSON.stringify(items);
+      if (snapshot === librarySnapshot && target.querySelector('.android-library-tools')) return;
+      librarySnapshot = snapshot;
+      const toolbar = el('div', 'android-tools-row android-library-tools');
+      toolbar.append(button('Device library & imports', () => bbxAndroidOpen('library')), button('Open a torrent', () => bbxAndroidOpen('torrent')),
+        button('Refresh', () => refreshLibrary()));
       target.replaceChildren(toolbar);
-      if (!items.length) target.append(el('p', 'sub', 'Nothing here yet. Open a title or import a source.'));
+      if (!items.length) target.append(el('p', 'sub', 'Nothing here yet. Play or download a title, or import a source.'));
       for (const entry of items) {
         const card = el('article', 'download-card-v70 android-library-row');
+        card.dataset.mediaId = entry.id;
+        card.dataset.offline = String(entry.offline);
         const copy = el('div', 'download-card-copy-v70');
         const status = entry.offline ? 'Offline copy' : entry.queued ? (entry.total > 0
-          ? `${Math.min(99, Math.floor(100 * entry.received / entry.total))}% verified` : 'Queued') : entry.error || entry.label;
-        copy.append(el('h3', '', entry.title), el('p', 'sub', `${entry.kind} · ${status}`));
+          ? `${Math.min(99, Math.floor(100 * entry.received / entry.total))}% saved` : 'Waiting to download') : entry.error || entry.label;
+        copy.append(el('h3', '', entry.title), el('p', entry.error && !entry.queued ? 'msg err' : 'sub', `${entry.kind} · ${status}`));
         const actions = el('div', 'android-tools-row');
-        actions.append(button(entry.position > 0 ? 'Resume' : 'Play', () => bbxAndroidOpen('play', entry.id), 'primary'));
+        actions.append(button(entry.position > 0 ? 'Resume' : 'Play', () => bbxAndroidOpen('play', entry.id), 'primary android-library-play'));
         if (entry.queued) actions.append(button('Cancel download', async () => {
           if (!confirm('Cancel this unfinished download?')) return;
           try { await read(`/api/mobile/transfer/${entry.id}/cancel`, {}); refreshLibrary(); }
           catch (error) { toast(error.message); }
         }));
+        else if (entry.downloadable && !entry.offline) actions.append(button(entry.error ? 'Retry download' : 'Download', async event => {
+          const control = event.currentTarget;
+          control.disabled = true;
+          try { await read(`/api/mobile/transfer/${entry.id}/download`, {}); refreshLibrary(); }
+          catch (error) { toast(error.message); }
+          finally { control.disabled = false; }
+        }));
         card.append(copy, actions); target.append(card);
       }
-    } catch (error) { target.replaceChildren(el('p', 'msg err', error.message)); }
+    } catch (error) { target.replaceChildren(el('p', 'msg err', error.message), button('Retry', () => refreshLibrary())); }
+    finally {
+      libraryBusy = false;
+      if (state.view === 'library' && activeJob) libraryTimer = setTimeout(refreshLibrary, 1300);
+    }
   };
 
   window.bbxAndroidBack = () => {
@@ -245,12 +278,6 @@
     // The original expiry message remains visible regardless of unsupported desktop settings.
     node('adsPanel')?.classList.add('android-ads-disabled');
     node('navShare')?.addEventListener('click', e => { e.stopImmediatePropagation(); bbxAndroidOpen('share'); }, true);
-    const music = document.querySelector('#viewMusic .music-hero-content');
-    if (music) {
-      const audio = el('div', 'android-tools-row android-music-actions');
-      audio.append(button('Open your audio files', () => bbxAndroidOpen('library')), el('p', 'sub', 'v90 music catalogue and playlists are available. The Windows online audio helper is not included.'));
-      music.append(audio);
-    }
     menu.dataset.platform = 'android';
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installMobileControls, {once: true});
