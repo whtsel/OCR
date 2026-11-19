@@ -21,10 +21,14 @@ if [[ "${BBX_VERIFY_PUBLIC_ONLY:-0}" == 1 ]]; then
     : "${BBX_PUBLIC_MEDIA_HASHES:?Provide the independently collected public file hashes}"
     args+=(-e public_only yes)
 fi
+if [[ "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 ]]; then
+    args+=(-e music_only yes)
+fi
 out=$("$adb" shell am instrument -w -r "${args[@]}" com.blackboxstream.mobile.test/com.blackboxstream.mobile.BlackBoxSmoke)
 printf '%s\n' "$out"
 if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_CODE: -1'* ||
-    ( -n "${BBX_PUBLIC_MEDIA_HASHES:-}" && ( "$out" != *'both played with networking off'* || "$out" != *'PASS Original v90 Music:'* ) ) ]]; then
+    ( -n "${BBX_PUBLIC_MEDIA_HASHES:-}" && "$out" != *'both played with networking off'* ) ||
+    ( ( "${BBX_VERIFY_PUBLIC_ONLY:-0}" == 1 || "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 ) && "$out" != *'PASS Original v90 Music:'* ) ]]; then
     device_log=$("$adb" logcat -d -v brief -s AndroidRuntime:E BlackBoxSmoke:I MediaPlayer:E | tail -65 || true)
     printf '%s\n' "$device_log"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then

@@ -82,6 +82,9 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
           script: |
+            adb shell wm size 720x1560
+            adb shell wm density 320
+            BBX_VERIFY_MUSIC_ONLY=1 BBX_VERIFY_LIVE_FILM=0 bash android/tests/run_device.sh
             python3 android/tests/run_device_fixtures.py --record-public-hashes "${{ runner.temp }}/media-hashes.txt"
             adb uninstall com.blackboxstream.mobile.test
             adb uninstall com.blackboxstream.mobile

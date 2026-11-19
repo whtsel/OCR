@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebChromeClient;
@@ -15,20 +18,50 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import java.io.ByteArrayInputStream;
+import org.json.JSONArray;
 
 /** Official provider player in a separate WebView. It has no access to the catalogue's Android bridge. */
 public final class MusicVideoActivity extends Activity {
     static final String EXTRA_VIDEO = "video";
+    private final Handler main = new Handler(Looper.getMainLooper());
     private FrameLayout root;
+    private ScrollView scroll;
     private LinearLayout content;
     private WebView web;
     private TextView status;
     private View fullscreen;
     private WebChromeClient.CustomViewCallback fullscreenCallback;
     private String id;
-    private boolean loaded, requested;
+    private boolean loaded, requested, visible;
+    private long started;
+    private int epoch;
+
+    private final Runnable poll = new Runnable() {
+        @Override public void run() {
+            if (!visible || !loaded || web == null) return;
+            int load = epoch;
+            web.evaluateJavascript("window.bbxStatus?.()", value -> {
+                if (!visible || !loaded || load != epoch || web == null) return;
+                try {
+                    JSONArray data = new JSONArray(value);
+                    int error = data.optInt(0), state = data.optInt(1, -1);
+                    if (error != 0) status.setText(error == 101 || error == 150 || error == 100
+                            ? "This recording isn't available in the embedded player. Go back to link an authorized source."
+                            : "The online provider couldn't play this recording. Try reloading or link an authorized file.");
+                    else if (state == 1 || state == 2 || state == 0) status.setText("YouTube · online only · no offline copy");
+                    else if (data.optBoolean(2)) status.setText("Tap Play in the YouTube player to start this recording.");
+                    else if (SystemClock.uptimeMillis() - started > 22000)
+                        status.setText("The online player is taking too long. Check your connection or link another source for this recording.");
+                } catch (org.json.JSONException pending) {
+                    if (SystemClock.uptimeMillis() - started > 22000) status.setText("The online player couldn't load. Try again.");
+                }
+                main.postDelayed(this, 750);
+            });
+        }
+    };
 
     static boolean validId(String id) { return id != null && id.matches("[A-Za-z0-9_-]{11}"); }
 
@@ -42,7 +75,9 @@ public final class MusicVideoActivity extends Activity {
         setContentView(root);
         content = Ui.column(this);
         Ui.pad(content, 16, 16);
-        root.addView(content, new FrameLayout.LayoutParams(-1, -1));
+        scroll = new ScrollView(this);
+        scroll.addView(content, new ScrollView.LayoutParams(-1, -2));
+        root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
         content.addView(Ui.action(this, "← Music", false, v -> finish()));
         Ui.gap(content, 16);
         content.addView(Ui.text(this, "BlackBox Music", 25, Ui.INK, Ui.DISPLAY));
@@ -52,6 +87,7 @@ public final class MusicVideoActivity extends Activity {
         try {
             web = new WebView(this);
             web.setBackgroundColor(Color.BLACK);
+            web.setKeepScreenOn(true);
             WebSettings s = web.getSettings();
             s.setJavaScriptEnabled(true);
             s.setDomStorageEnabled(true);
@@ -80,7 +116,7 @@ public final class MusicVideoActivity extends Activity {
                 @Override public void onShowCustomView(View view, CustomViewCallback callback) {
                     if (fullscreen != null) { callback.onCustomViewHidden(); return; }
                     fullscreen = view; fullscreenCallback = callback;
-                    content.setVisibility(View.GONE);
+                    scroll.setVisibility(View.GONE);
                     root.addView(view, new FrameLayout.LayoutParams(-1, -1));
                 }
                 @Override public void onHideCustomView() { hideFullscreen(); }
@@ -99,8 +135,10 @@ public final class MusicVideoActivity extends Activity {
         final String origin = "https://" + getPackageName();
         // The package-name origin provides the required Referer. No remote document runs with Android privileges.
         web.loadDataWithBaseURL(origin + "/music/", page(origin, id), "text/html", "UTF-8", null);
-        loaded = true;
-        status.setText("If playback doesn't start automatically, tap Play on the recording.");
+        loaded = true; epoch++; started = SystemClock.uptimeMillis();
+        status.setText("Opening the selected recording…");
+        main.removeCallbacks(poll);
+        main.postDelayed(poll, 750);
     }
 
     private static String page(String origin, String id) {
@@ -111,24 +149,31 @@ public final class MusicVideoActivity extends Activity {
                 + "<style>html,body,iframe{width:100%;height:100%;margin:0;border:0;background:#000;display:block}</style>"
                 + "<iframe id='recording' title='Official music video player' allow='autoplay; encrypted-media; fullscreen' allowfullscreen "
                 + "src='https://www.youtube.com/embed/" + id + "?enablejsapi=1&amp;playsinline=1&amp;rel=0&amp;origin=" + origin + "'></iframe>"
-                + "<script>let player; window.bbxMusicPlayerError=0; window.bbxMusicPlayerReady=false;"
+                + "<script>let player, blocked=false; window.bbxMusicPlayerError=0; window.bbxMusicPlayerReady=false;"
                 + "function onYouTubeIframeAPIReady(){player=new YT.Player('recording',{events:{onReady(e){window.bbxMusicPlayerReady=true;"
-                + "if(!document.hidden)e.target.playVideo()},onError(e){window.bbxMusicPlayerError=e.data}}})};"
+                + "const r=document.getElementById('recording').getBoundingClientRect();"
+                + "if(!document.hidden&&r.width>=200&&r.height>=200)e.target.playVideo()},"
+                + "onError(e){window.bbxMusicPlayerError=e.data},onAutoplayBlocked(){blocked=true}}})};"
                 + "function bbxPlayerState(){return {ready:bbxMusicPlayerReady,error:bbxMusicPlayerError,state:player?.getPlayerState?.(),"
                 + "seconds:player?.getCurrentTime?.(),duration:player?.getDuration?.(),url:player?.getVideoUrl?.()}};"
+                + "function bbxStatus(){return [bbxMusicPlayerError,player?.getPlayerState?.(),blocked]};"
                 + "function bbxPause(){try{player?.pauseVideo?.()}catch(e){}};</script>"
                 + "<script src='https://www.youtube.com/iframe_api'></script></html>";
     }
 
     @Override protected void onResume() {
         super.onResume();
+        if (V90Api.expired()) { finish(); return; }
+        visible = true;
         if (web != null) {
             web.onResume();
             if (!requested) { requested = true; load(); }
+            else if (loaded) { main.removeCallbacks(poll); main.postDelayed(poll, 750); }
         }
     }
 
     @Override protected void onPause() {
+        visible = false; epoch++; main.removeCallbacks(poll);
         if (web != null) { web.evaluateJavascript("window.bbxPause?.()", null); web.onPause(); }
         super.onPause();
     }
@@ -136,7 +181,7 @@ public final class MusicVideoActivity extends Activity {
     @Override protected void onStop() {
         // A provider embed is not a background-audio source. Stop it when this view is left.
         if (web != null && loaded) {
-            loaded = false; web.stopLoading(); web.loadUrl("about:blank");
+            hideFullscreen(); loaded = false; web.stopLoading(); web.loadUrl("about:blank");
             status.setText("Playback paused while you were away. Reload to listen again.");
         }
         super.onStop();
@@ -145,7 +190,7 @@ public final class MusicVideoActivity extends Activity {
     private void hideFullscreen() {
         if (fullscreen == null) return;
         root.removeView(fullscreen); fullscreen = null;
-        content.setVisibility(View.VISIBLE);
+        scroll.setVisibility(View.VISIBLE);
         if (fullscreenCallback != null) fullscreenCallback.onCustomViewHidden();
         fullscreenCallback = null;
     }
@@ -155,6 +200,7 @@ public final class MusicVideoActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        main.removeCallbacks(poll);
         hideFullscreen();
         if (web != null) {
             web.stopLoading();

@@ -42,6 +42,9 @@ public final class V90Activity extends Activity {
     private static final Set<String> ART_HOSTS = new HashSet<>(Arrays.asList("image.tmdb.org", "cdn.myanimelist.net",
             "s4.anilist.co", "i.ytimg.com", "img.youtube.com", "cdn-images.dzcdn.net", "is1-ssl.mzstatic.com"));
     private static final Set<String> MOBILE_ASSETS = new HashSet<>(Arrays.asList("android-api.js", "android-port.js", "android-catalogue.js", "android-music.js", "android-v90.css"));
+    private static final int PICK_MUSIC = 94;
+    private int musicFileRequest;
+    private String musicFileTitle;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor work = new ThreadPoolExecutor(6, 6, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(80));
     private volatile boolean closed;
@@ -111,6 +114,25 @@ public final class V90Activity extends Activity {
             try { work.execute(() -> reply(id, api.call(method, path, body))); }
             catch (RejectedExecutionException busy) { reply(id, V90Api.fail(503, "BlackBox is handling too many requests. Try again in a moment.")); }
         }
+        @JavascriptInterface public void pickMusic(int request, String title) {
+            if (closed || request <= 0 || title == null || title.length() > 512) return;
+            main.post(() -> {
+                if (!active() || musicFileRequest != 0) {
+                    musicFileReply(request, "", "Android's file picker is busy. Try again.");
+                    return;
+                }
+                Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("audio/*")
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                musicFileRequest = request;
+                musicFileTitle = MediaEntry.cleanTitle(title);
+                try { startActivityForResult(picker, PICK_MUSIC); }
+                catch (android.content.ActivityNotFoundException unavailable) {
+                    musicFileRequest = 0;
+                    musicFileTitle = null;
+                    musicFileReply(request, "", "Android's file picker isn't available.");
+                }
+            });
+        }
         @JavascriptInterface public void open(String action, String id) {
             if (closed || V90Api.expired()) return;
             if ("play".equals(action) && id != null && id.matches("[a-f0-9]{64}")) {
@@ -141,6 +163,42 @@ public final class V90Activity extends Activity {
                 else if ("browser".equals(action)) openProviderPage(id);
             });
         }
+    }
+
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != PICK_MUSIC || musicFileRequest == 0) return;
+        int token = musicFileRequest;
+        String title = musicFileTitle;
+        musicFileRequest = 0;
+        musicFileTitle = null;
+        if (closed || V90Api.expired()) return;
+        Uri uri = data == null ? null : data.getData();
+        if (result != RESULT_OK || uri == null) { musicFileReply(token, "", ""); return; }
+        if (!"content".equals(uri.getScheme())) { musicFileReply(token, "", "Choose an audio file from your phone."); return; }
+        try {
+            work.execute(() -> {
+                try {
+                    String type = getContentResolver().getType(uri);
+                    if (type == null || !type.startsWith("audio/")) {
+                        musicFileReply(token, "", "Choose an audio file such as MP3, AAC or FLAC."); return;
+                    }
+                    getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    MediaEntry entry = new MediaEntry(title, MediaEntry.Kind.MUSIC, uri.toString());
+                    LibraryStore.get(this).save(entry, true);
+                    musicFileReply(token, entry.id, "");
+                } catch (RuntimeException unavailable) {
+                    musicFileReply(token, "", "Android couldn't keep access to this file. Save a copy on your phone and try again.");
+                }
+            });
+        } catch (RejectedExecutionException busy) { musicFileReply(token, "", "BlackBox is busy. Try again."); }
+    }
+
+    private void musicFileReply(int request, String id, String error) {
+        main.post(() -> {
+            if (!closed && view != null) view.evaluateJavascript("window.bbxAndroidMusicFile?.(" + request + "," +
+                    JSONObject.quote(id) + "," + JSONObject.quote(error) + ")", null);
+        });
     }
 
     private boolean active() { return resumed && !isFinishing() && !isDestroyed() && !closed && !V90Api.expired(); }

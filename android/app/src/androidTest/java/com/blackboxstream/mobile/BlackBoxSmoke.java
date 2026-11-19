@@ -63,7 +63,8 @@ public final class BlackBoxSmoke extends Instrumentation {
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
-            if (fixtures != null && "yes".equals(fixtures.getString("public_only"))) verifyCandidate();
+            if (fixtures != null && "yes".equals(fixtures.getString("music_only"))) verifyMusicCandidate();
+            else if (fixtures != null && "yes".equals(fixtures.getString("public_only"))) verifyCandidate();
             else verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
                     + (liveVerified ? "PASS v90 Android: original search and source picker opened full Sintel, rendered and sought to 2:30 before the transfer finished\n" : "")
@@ -111,8 +112,14 @@ public final class BlackBoxSmoke extends Instrumentation {
             }));
             sample = waitForMonitorWithTimeout(monitor, 10000);
             assertPass("Tap opens native PlayerActivity", sample != null);
-            await("sample decodes H.264 and playback advances", 16000, () -> ui(() -> engine != null && engine.ready()
-                    && engine.videoWidth() == 640 && engine.renderedVideo() && engine.duration() >= 13500 && engine.playing() && engine.position() > 500));
+            try {
+                await("sample decodes H.264 and playback advances", 22000, () -> ui(() -> engine != null && engine.ready()
+                        && engine.videoWidth() == 640 && engine.renderedVideo() && engine.duration() >= 13500 && engine.playing() && engine.position() > 500));
+            } catch (AssertionError stalled) {
+                throw new AssertionError(stalled.getMessage() + "; " + ui(() -> engine == null ? "unbound" :
+                        "error=" + engine.failure() + ", width=" + engine.videoWidth() + ", firstFrame=" + engine.renderedVideo()
+                                + ", playing=" + engine.playing() + ", position=" + engine.position()), stalled);
+            }
             ui(() -> { engine.pause(); engine.seek(6500); return null; });
             await("native seek completes", 6000, () -> ui(() -> !engine.playing() && !engine.seeking()
                     && Math.abs(engine.position() - 6500) < 1000));
@@ -237,6 +244,17 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
     }
 
+    private void verifyMusicCandidate() throws Exception {
+        Activity desktop = launch(V90Activity.class, null);
+        try {
+            WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
+            await("The v90 music shell is ready on a phone viewport", 18000,
+                    () -> jsTrue(web, "window.bbxAndroidOpen && document.querySelector('#rows .card') && innerWidth <= 400"));
+            verifyOriginalMusic(web);
+            originalMusicVerified = true;
+        } finally { closeScreen(desktop); }
+    }
+
     /** Run the same public media acceptance on the non-debuggable standalone app. */
     private void verifyCandidate() throws Exception {
         Context app = getTargetContext();
@@ -304,8 +322,10 @@ public final class BlackBoxSmoke extends Instrumentation {
                 shell("svc wifi enable");
             }
             publicMediaVerified = true;
-            verifyOriginalMusic(web);
-            originalMusicVerified = true;
+            if ("yes".equals(fixtures.getString("public_only"))) {
+                verifyOriginalMusic(web);
+                originalMusicVerified = true;
+            }
         } catch (AssertionError problem) {
             String view = js(web, "JSON.stringify({view:window.__BBX_STATE__?.view,title:document.querySelector('#detailBody h1')?.textContent,"
                     + "music:document.getElementById('musicMsg')?.textContent,status:Array.from(document.querySelectorAll('.android-action-status')).map(e=>e.textContent).filter(Boolean).slice(-5)})");

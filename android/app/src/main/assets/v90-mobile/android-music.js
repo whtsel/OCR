@@ -11,7 +11,8 @@
     .replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
   const title = item => item.track || item.title || '';
   const artist = item => item.artist || item.channel || '';
-  const identity = item => [artist(item), title(item), item.album, item.discNumber || '', item.trackNumber || ''].map(norm).join('|');
+  const identity = item => item.catalogTrackId ? `album:${item.catalogTrackId}` : item.id && item.album ? `pick:${item.id}`
+    : JSON.stringify([artist(item), title(item), item.album || '', item.duration || 0, item.explicit === true]);
   const display = item => [title(item), artist(item)].filter(Boolean).join(' — ');
   const videoId = id => /^[A-Za-z0-9_-]{11}$/.test(id || '');
 
@@ -56,12 +57,18 @@
     for (const key of keys.slice(0, Math.max(0, keys.length - 300))) delete links[key];
     try { localStorage.setItem(storageKey, JSON.stringify(links)); } catch {}
   }
-  let currentTrack = null, openDialog;
+  let openDialog, fileRequest, sequence = 0;
+  window.bbxAndroidMusicFile = (id, mediaId, error) => {
+    if (fileRequest?.id !== id) return;
+    const finish = fileRequest.finish;
+    fileRequest = null;
+    finish(mediaId, error);
+  };
   function showTrackSource(item) {
     openDialog?.close();
     const dialog = el('dialog', 'android-music-source');
     dialog.id = 'androidMusicSource';
-    const source = official(item);
+    const source = official(item), linked = savedSource(item);
     const heading = el('h2', '', title(item));
     heading.id = 'androidTrackTitle';
     dialog.setAttribute('aria-labelledby', heading.id);
@@ -74,6 +81,7 @@
     const controls = el('div', 'android-tools-row');
     async function useLink(event, download) {
       const control = event.currentTarget, url = input.value.trim();
+      if (fileRequest) return;
       if (!url) { status.textContent = 'Enter the HTTPS link to this exact recording.'; input.focus(); return; }
       const id = youtubeLink(url);
       if (id) {
@@ -85,17 +93,51 @@
       try {
         const result = await read('/api/mobile/direct', {url, kind:'MUSIC', title:display(item), download});
         if (!/^[a-f0-9]{64}$/.test(result.id || '')) throw new Error('The selected audio file was not opened.');
-        remember(item, 'play', result.id);
         if (!dialog.open) return;
+        remember(item, 'play', result.id);
         if (download) status.replaceChildren(document.createTextNode(result.offline ? 'Already saved offline. ' : 'Queued in Library. '),
           button('View Library', () => { dialog.close(); showView('library'); }, 'ghost'));
         else { dialog.close(); bbxAndroidOpen('play', result.id); }
       } catch (error) { status.classList.add('err'); status.textContent = error.message; }
       finally { control.disabled = false; }
     }
-    controls.append(button('Play linked source', event => useLink(event, false), 'primary'),
+    function pickFile(event) {
+      if (fileRequest) return;
+      const control = event.currentTarget;
+      control.disabled = true;
+      const id = ++sequence;
+      fileRequest = {id, finish: (mediaId, error) => {
+        control.disabled = false;
+        if (!dialog.open) return;
+        if (error) { status.textContent = error; status.classList.add('err'); return; }
+        if (mediaId) { remember(item, 'play', mediaId); dialog.close(); bbxAndroidOpen('play', mediaId); }
+      }};
+      try { window.BlackBoxAndroid.pickMusic(id, display(item).slice(0,140)); }
+      catch { fileRequest.finish('', 'Android’s file picker is unavailable.'); fileRequest = null; }
+    }
+    if (linked) {
+      dialog.append(heading, el('p', 'sub', [artist(item), item.album].filter(Boolean).join(' · ')));
+      const saved = el('div', 'android-tools-row');
+      saved.append(button('Play saved source', () => { dialog.close(); bbxAndroidOpen(linked.type, linked.id); }));
+      if (linked.type === 'play') saved.append(button('Save linked file offline', async event => {
+        const control = event.currentTarget;
+        control.disabled = true;
+        try {
+          const result = await read(`/api/mobile/transfer/${linked.id}/download`, {});
+          status.classList.remove('err');
+          status.textContent = result.offline ? 'Already saved offline in Library.' : 'Queued in Library.';
+        } catch (error) { status.classList.add('err'); status.textContent = error.message; }
+        finally { control.disabled = false; }
+      }));
+      saved.append(button('Unlink source', () => {
+        delete links[identity(item)];
+        try { localStorage.setItem(storageKey, JSON.stringify(links)); } catch {}
+        showTrackSource(item);
+      }, 'ghost'));
+      dialog.append(saved);
+    } else dialog.append(heading, el('p', 'sub', [artist(item), item.album].filter(Boolean).join(' · ')), info);
+    controls.append(button('Choose audio on this phone', pickFile), button('Play linked source', event => useLink(event, false), 'primary'),
       button('Download audio file', event => useLink(event, true)), button('Close', () => dialog.close(), 'ghost'));
-    dialog.append(heading, el('p', 'sub', [artist(item), item.album].filter(Boolean).join(' · ')), info);
     if (source) dialog.append(button('Play official source in BlackBox', () => {
       dialog.close(); bbxAndroidOpen('music-video', source.id);
     }));
@@ -122,7 +164,6 @@
   queuePlayCurrent = async () => {
     const item = musicQueue.list[musicQueue.idx];
     if (!item || !title(item)) return;
-    currentTrack = item;
     const source = savedSource(item);
     if (source) { setMusicPlaybackStatus(display(item)); return bbxAndroidOpen(source.type, source.id); }
     const match = official(item);
@@ -152,11 +193,19 @@
       }
     } catch { /* The native import action is still available. */ }
   }
+  function chooseSelectedSource() {
+    const item = musicQueue.list[musicQueue.idx];
+    if (item) showTrackSource(item);
+    else toast('Choose a track first.');
+  }
   const genre = openMusicGenre;
   openMusicGenre = function (name) {
     const result = genre.call(this, name);
     const status = document.querySelector('#musicGenrePage [data-genre-status]');
-    if (status) status.textContent = '30 catalogue picks · select a recording to play or link its source';
+    if (status) {
+      status.textContent = '30 catalogue picks · select a recording to play or link its source';
+      status.after(button('Source for selected track', chooseSelectedSource, 'ghost'));
+    }
     return result;
   };
   const show = showView;
@@ -166,6 +215,12 @@
   const back = window.bbxAndroidBack;
   window.bbxAndroidBack = () => {
     if (openDialog?.open) { openDialog.close(); return true; }
+    if (!byId('settingsWrap')?.hidden) return back?.() || false;
+    if (byId('bgQueuePanel')?.hidden === false) { byId('bgQueueClose')?.click(); return true; }
+    if (state.view === 'musicGenre') { byId('musicGenreBack')?.click(); return true; }
+    if (state.view === 'musicDetail') { byId('musicDetailBack')?.click(); return true; }
+    const albumBack = state.view === 'music' && document.querySelector('.music-album-back-v63');
+    if (albumBack) { albumBack.click(); return true; }
     return back?.() || false;
   };
 
@@ -183,7 +238,7 @@
     own.append(el('p','sub android-music-note','Your files and offline copies'),
       button('Import audio / playlists', () => bbxAndroidOpen('library')),
       button('Playback queue', () => openMusicQueuePanel()),
-      button('Source for selected track', () => currentTrack ? showTrackSource(currentTrack) : toast('Choose a track first.')), rows);
+      button('Source for selected track', chooseSelectedSource), rows);
     shelf.append(own);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', controls, {once:true});

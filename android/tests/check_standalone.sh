@@ -33,4 +33,4 @@ if [[ "$start" != *'Status: ok'* || "$start" != *'.V90Activity'* ]]; then
 fi
 BBX_APP_APK="$apk" BBX_TEST_APK="$work/app-test.apk" BBX_VERIFY_PUBLIC_ONLY=1 \
     BBX_PUBLIC_MEDIA_HASHES="$(cat "$hashes")" bash "$root/tests/run_device.sh"
-printf '::notice::Standalone APK passed the public playback, seek, full download and offline replay checks.\n'
+printf '::notice::Standalone APK passed original Music playback and the public film/anime download and offline replay checks.\n'
