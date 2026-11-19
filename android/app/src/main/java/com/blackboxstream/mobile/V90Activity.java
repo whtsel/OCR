@@ -193,7 +193,8 @@ public final class V90Activity extends Activity {
                     String source = V90Api.param(req.getUrl(), "url", "");
                     if (source.length() <= 2048) return artwork(URI.create(MediaSources.https(source)));
                 }
-                if (path != null && path.matches("/[a-zA-Z0-9_-]+\\.(js|css|json|txt)")) {
+                // v90 loads purify.min.js and hls.min.js before its own scripts.
+                if (path != null && path.matches("/[a-zA-Z0-9_-]+(?:\\.min)?\\.(js|css|json|txt)")) {
                     String name = path.substring(1);
                     return new WebResourceResponse(mime(name), "UTF-8", 200, "OK", headers(),
                             getAssets().open((MOBILE_ASSETS.contains(name) ? "v90-mobile/" : "v90/") + name));

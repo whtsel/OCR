@@ -35,12 +35,14 @@ import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManagerFactory;
+import org.json.JSONObject;
 
 /** Real-device/emulator smoke, separate from the JVM tests and the distributed APK. */
 public final class BlackBoxSmoke extends Instrumentation {
     private PlaybackService engine;
     private int checks;
     private boolean liveVerified;
+    private String providerStatus = "";
     private Bundle fixtures;
     private final ServiceConnection binding = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder local) { engine = ((PlaybackService.LocalBinder) local).get(); }
@@ -58,7 +60,8 @@ public final class BlackBoxSmoke extends Instrumentation {
         try {
             verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
-                    + (liveVerified ? "PASS v90 Android: original search and source picker opened full Sintel, rendered and sought to 2:30 before the transfer finished\n" : ""));
+                    + (liveVerified ? "PASS v90 Android: original search and source picker opened full Sintel, rendered and sought to 2:30 before the transfer finished\n" : "")
+                    + providerStatus);
             finish(Activity.RESULT_OK, result);
         } catch (Throwable bad) {
             result.putString("stream", "\nFAIL BlackBox Android smoke: " + android.util.Log.getStackTraceString(bad) + "\n");
@@ -132,6 +135,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 verifyTorrentOnAndroid(app, db, visible);
                 verifyServicesOnAndroid();
             }
+            if (liveVerified) verifyLiveProviders(app);
             Activity audio = launch(PlayerActivity.class, LibraryStore.SAMPLE_AUDIO.id);
             try {
                 await("audio plays through foreground media session", 16000, () -> ui(() -> engine.ready() && engine.playing()
@@ -159,12 +163,29 @@ public final class BlackBoxSmoke extends Instrumentation {
             V90Api.Reply films = local.call("GET", "/api/mobile/open-films", "");
             assertPass("The v90 API returns the real open-film cards: " + films.status + (films.status != 200 ? " / " + films.value.optString("error") : ""),
                     films.status == 200 && films.value.getJSONArray("results").length() == 4);
+            V90Api.Reply title = local.call("GET", "/api/tmdb/movie/open_sintel", "");
+            assertPass("v90 keyless detail correctly maps to the selected full film", title.status == 200 && "Sintel".equals(title.value.optString("title")));
+            String lookup = local.call("POST", "/api/content-resolve", new JSONObject().put("uri", film.magnet()).toString()).value.getString("job");
+            String status = "/api/content-job/" + lookup;
+            await("v90 manifest lookup binds the original info hash to the requested job", 7000, () -> {
+                JSONObject value = local.call("GET", status, "").value;
+                JSONObject data = value.optJSONObject("result");
+                return data != null && lookup.equals(data.optString("job")) && film.hash.equals(data.optString("id"));
+            });
+            String selection = new JSONObject().put("job", lookup).toString();
+            assertPass("Picking a different info hash cannot start another torrent", local.call("POST",
+                    "/api/torrent/" + Cinema.FILMS.get(1).hash + "/select/1", selection).status == 409);
+            local.call("POST", status + "/cancel", "{}");
+            assertPass("Cancelling a v90 source cannot select or queue its file", local.call("POST",
+                    "/api/torrent/" + film.hash + "/select/5", selection).status == 409);
         } finally { local.close(); }
         Activity desktop = launch(V90Activity.class, null);
         Activity screen = null;
         WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
         try {
             assertPass("The Android v90 launcher hosts the bundled Windows interface", web != null);
+            await("Android loads the shipped DOMPurify sanitizer as a local asset", 12000,
+                    () -> jsTrue(web, "window.DOMPurify?.isSupported === true"));
             await("Original v90 boot and Open films row complete on Android WebView", 18000, () -> jsTrue(web,
                     "document.title.includes('BlackBox Stream v90') && document.querySelector('#rows .card') && document.querySelector('#engineDot.ok') && !!window.bbxExpiryV90"));
             assertPass("Original v90 search accepts a full title", jsTrue(web,
@@ -318,13 +339,22 @@ public final class BlackBoxSmoke extends Instrumentation {
         assertPass("Android retrieves exact BEP 9 metadata through a magnet", Arrays.equals(descriptor.info, resolved.info));
         verifyImportedMagnet(db, home, magnet, resolved.items.get(0));
 
-        MediaEntry entry = TorrentJobs.save(app, resolved, resolved.items.get(0));
+        TorrentMeta.Item selected = resolved.items.get(0);
+        String hex = TorrentMeta.hex(resolved.hash);
+        MediaEntry entry = new MediaEntry(selected.name, selected.kind(), "torrent:" + hex + ":" + selected.index);
         Downloads.deleteCopy(app, entry);
+        Activity desktop = launch(V90Activity.class, null);
         Activity screen = null;
         try {
-            ui(() -> { Downloads.enqueue(app, entry); return null; });
-            screen = launch(PlayerActivity.class, entry.id);
-            await("Android plays verified TCP peer pieces before the offline copy is complete", 55000, () -> ui(() -> engine.entry() != null
+            WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
+            await("v90 settings is ready for a magnet", 14000, () -> jsTrue(web, "!!window.bbxAndroidOpen && document.querySelector('#engineDot.ok')"));
+            ActivityMonitor monitor = addMonitor(PlayerActivity.class.getName(), null, false);
+            assertPass("Settings submits the exact independently seeded magnet", jsTrue(web,
+                    "(document.querySelector('#settingsBtn').click(),document.querySelector('#uri').value=" + JSONObject.quote(magnet)
+                            + ",document.querySelector('#addBtn').click(),true)"));
+            screen = waitForMonitorWithTimeout(monitor, 27000);
+            assertPass("The v90 magnet lookup starts the native player with its selected file", screen != null);
+            await("v90 plays verified TCP peer pieces before the offline copy is complete", 55000, () -> ui(() -> engine.entry() != null
                     && entry.id.equals(engine.entry().id) && engine.ready() && engine.videoWidth() == 640
                     && engine.renderedVideo() && engine.playing() && engine.position() > 500 && !db.isOffline(entry)));
             await("Verified torrent file is committed to Offline", 45000,
@@ -333,13 +363,47 @@ public final class BlackBoxSmoke extends Instrumentation {
                  InputStream copy = new FileInputStream(db.offline(entry))) {
                 assertPass("Torrent's offline copy matches the independent seeder", Arrays.equals(sha(original), sha(copy)));
             }
+            Activity playable = screen;
+            ui(() -> { playable.finish(); engine.close(); return null; });
+            assertPass("The original v90 Library can inspect the transferred file", jsTrue(web,
+                    "(document.querySelector('[data-nav=library]').click(),true)"));
+            await("v90 Library shows the exact finished offline copy", 10000, () -> jsTrue(web,
+                    "!document.querySelector('#viewLibrary').hidden && document.querySelector('#libraryList').textContent.includes('Offline copy')"));
         } finally {
             Activity player = screen;
-            ui(() -> { if (player != null) player.finish(); engine.close(); return null; });
+            ui(() -> { if (player != null) player.finish(); engine.close(); desktop.finish(); return null; });
             Downloads.deleteCopy(app, entry);
             db.getWritableDatabase().delete("media", "id=?", new String[] {entry.id});
             TorrentJobs.descriptor(app, TorrentMeta.hex(resolved.hash)).delete();
         }
+    }
+
+    private void verifyLiveProviders(Context app) throws Exception {
+        V90Api api = new V90Api(app);
+        java.util.concurrent.ExecutorService probes = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            java.util.Map<String, java.util.concurrent.Future<String>> responses = new java.util.LinkedHashMap<>();
+            for (String name : Arrays.asList("Knaben", "Torrents-CSV", "Jikan", "MusicBrainz")) {
+                responses.put(name, probes.submit(() -> {
+                    String route = name.equals("Jikan") ? "/api/anime/search?q=Astro%20Boy&page=1"
+                            : name.equals("MusicBrainz") ? "/api/mobile/music?q=Goldberg%20Variations"
+                            : "/api/sources/" + (name.equals("Knaben") ? "find" : "deep") + "?type=movie&title=Elephants%20Dream&year=2006";
+                    V90Api.Reply reply = api.call("GET", route, "");
+                    if (reply.status != 200) return "unavailable (" + reply.status + ": " + reply.value.optString("message") + ")";
+                    if ("unavailable".equals(reply.value.optString("indexStatus"))) return reply.value.optString("note");
+                    org.json.JSONArray entries = reply.value.optJSONArray(name.equals("Jikan") ? "items" : name.equals("MusicBrainz") ? "results" : "sources");
+                    return "answered with " + (entries == null ? 0 : entries.length()) + " results";
+                }));
+            }
+            StringBuilder report = new StringBuilder();
+            for (java.util.Map.Entry<String, java.util.concurrent.Future<String>> result : responses.entrySet()) {
+                String status;
+                try { status = result.getValue().get(18, TimeUnit.SECONDS); }
+                catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException unavailable) { status = "did not complete"; }
+                report.append("v90 provider ").append(result.getKey()).append(": ").append(status).append('\n');
+            }
+            providerStatus = report.toString();
+        } finally { api.close(); probes.shutdownNow(); }
     }
 
     private void verifyServicesOnAndroid() throws Exception {

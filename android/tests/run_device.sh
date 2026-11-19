@@ -29,5 +29,5 @@ if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_C
     exit 1
 fi
 if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
-    printf '%s\n' "$out" | sed -n 's/^PASS /::notice::PASS /p'
+    printf '%s\n' "$out" | sed -n -e 's/^PASS /::notice::PASS /p' -e 's/^v90 provider /::notice::v90 provider /p'
 fi
