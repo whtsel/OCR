@@ -92,9 +92,11 @@ final class TorrentTransfer {
 
     static void download(TorrentMeta meta, TorrentMeta.Item item, Pieces pieces, File target,
                          TorrentNetwork network, TorrentNetwork.Stop stop, Progress progress) throws IOException {
-        List<InetSocketAddress> peers = network.discover(meta);
         try (RandomAccessFile out = new RandomAccessFile(target, "rw")) {
             out.setLength(item.length);
+            // Seeded catalogues do not have to wait for discovery on dead trackers.
+            if (consumeWeb(meta, pieces, out, stop, progress)) return;
+            List<InetSocketAddress> peers = network.discover(meta);
             if (consume(meta, pieces, out, network, stop, progress, peers)) return;
             List<InetSocketAddress> others = new ArrayList<>(network.fallback(meta));
             // One reconnect is useful if the tracker initially returned temporarily choked peers.
@@ -105,6 +107,22 @@ final class TorrentTransfer {
             pieces.abandon();
             throw err;
         }
+    }
+
+    private static boolean consumeWeb(TorrentMeta meta, Pieces pieces, RandomAccessFile out,
+                                      TorrentNetwork.Stop stop, Progress progress) throws IOException {
+        for (String seed : meta.webSeeds) {
+            for (int wanted; (wanted = pieces.wanted()) != -1; ) {
+                if (stop.stopped()) throw new IOException("Torrent cancelled.");
+                byte[] bytes;
+                try { bytes = TorrentWebSeed.piece(meta, seed, wanted, stop); }
+                catch (IOException unavailable) { break; }
+                pieces.accept(out, wanted, bytes);
+                progress.update(pieces.received());
+            }
+            if (pieces.wanted() == -1) { out.getFD().sync(); return true; }
+        }
+        return false;
     }
 
     private static boolean consume(TorrentMeta meta, Pieces pieces, RandomAccessFile out, TorrentNetwork network,

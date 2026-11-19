@@ -23,7 +23,7 @@ def main():
     adb = os.environ.get('ADB', 'adb')
     with ExitStack() as cleanup:
         root = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix='bbx-device-')))
-        live = cleanup.enter_context(seed('127.0.0.1', root))
+        live = cleanup.enter_context(seed('127.0.0.1', root, rate=36 * 1024))
         cert, key = root / 'cert.pem', root / 'key.pem'
         subprocess.run(['openssl', 'req', '-x509', '-nodes', '-days', '1', '-newkey', 'rsa:2048',
                         '-subj', '/CN=localhost', '-addext', 'subjectAltName=IP:127.0.0.1',
@@ -43,7 +43,7 @@ def main():
                    BBX_FIXTURE_TORRENT=base64(live.descriptor.read_bytes()),
                    BBX_FIXTURE_RELAY=f'https://127.0.0.1:{relay.server_port}',
                    BBX_FIXTURE_CERT=base64(cert.read_bytes()))
-        subprocess.run([str(ROOT / 'run_device.sh')], env=env, check=True, timeout=240)
+        subprocess.run([str(ROOT / 'run_device.sh')], env=env, check=True, timeout=315)
 
 
 if __name__ == '__main__':

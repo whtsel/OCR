@@ -36,9 +36,9 @@ import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** A phone-first library. Every control either works locally or opens an explicit user-supplied source. */
+/** Browse-first cinema, with the user's library and source tools one screen away. */
 public final class MainActivity extends Activity implements PlaybackService.Listener {
-    private static final String[] TABS = {"Home", "Library", "Offline"};
+    private static final String[] TABS = {"Watch", "Library", "Offline"};
     private static final int PICK_MEDIA = 12;
     private static final int PICK_PLAYLIST = 13;
     private static final int PAGE_SIZE = 30;
@@ -53,7 +53,7 @@ public final class MainActivity extends Activity implements PlaybackService.List
     private int tab, limit = PAGE_SIZE;
     private String query = "";
     private MediaEntry.Kind filter;
-    private boolean bound, busy;
+    private boolean bound, busy, startingFilm, resumed;
     private long previousOffline;
 
     private final Runnable update = new Runnable() {
@@ -109,7 +109,8 @@ public final class MainActivity extends Activity implements PlaybackService.List
         handler.post(update);
     }
 
-    @Override protected void onResume() { super.onResume(); showTab(tab, true); }
+    @Override protected void onResume() { super.onResume(); resumed = true; showTab(tab, true); }
+    @Override protected void onPause() { resumed = false; super.onPause(); }
 
     @Override protected void onStop() {
         handler.removeCallbacks(update);
@@ -230,26 +231,46 @@ public final class MainActivity extends Activity implements PlaybackService.List
 
     private void home() {
         Ui.gap(body, 4);
-        FrameLayout hero = new FrameLayout(this);
-        Ui.card(hero, Ui.CARD, 20, Ui.BORDER);
-        hero.setClipToOutline(true);
-        hero.addView(new Ui.OrbitArt(this, false), new FrameLayout.LayoutParams(-1, -1));
-        LinearLayout overlay = Ui.column(this);
-        overlay.setGravity(Gravity.CENTER_VERTICAL);
-        Ui.pad(overlay, 22, 20);
-        overlay.addView(Ui.kicker(this, "THE NATIVE PLAYER"));
-        Ui.gap(overlay, 9);
-        TextView heading = Ui.text(this, "Your media.\nYour move.", 38, Ui.INK, Ui.DISPLAY);
-        heading.setMaxLines(2);
-        overlay.addView(heading);
-        Ui.gap(overlay, 12);
-        TextView demo = Ui.action(this, "▶  Play sample", true, v -> open(LibraryStore.SAMPLE_VIDEO, false));
-        overlay.addView(demo, new LinearLayout.LayoutParams(-2, -2));
-        overlay.setMinimumHeight(Ui.dp(this, 214));
-        hero.addView(overlay, new FrameLayout.LayoutParams(-1, -2));
+        HorizontalScrollView filters = new HorizontalScrollView(this);
+        filters.setHorizontalScrollBarEnabled(false);
+        LinearLayout categories = Ui.row(this);
+        categories.addView(Ui.action(this, "Find a title", false, v -> findTitle()));
+        for (Catalogue.Filter filter : new Catalogue.Filter[] {Catalogue.Filter.MOVIE, Catalogue.Filter.TV, Catalogue.Filter.ANIME, Catalogue.Filter.AUDIO}) {
+            Ui.space(categories, 6);
+            categories.addView(Ui.action(this, filter.label, false, v -> CinemaViews.browse(this, filter, "")));
+        }
+        filters.addView(categories); body.addView(filters);
+        Ui.gap(body, 15);
+        Cinema.Film featured = Cinema.FILMS.get(0);
+        LinearLayout hero = Ui.column(this);
+        Ui.card(hero, Ui.CARD, 19, Ui.BORDER);
+        Ui.pad(hero, 13, 13);
+        CinemaViews.title(this, hero, featured, true);
+        Ui.gap(hero, 14);
+        LinearLayout actions = Ui.row(this);
+        TextView watch = Ui.action(this, "▶  Watch now", true, v -> watchFilm(featured, (TextView) v));
+        actions.addView(watch, new LinearLayout.LayoutParams(0, -2, 1.45f));
+        Ui.space(actions, 8);
+        actions.addView(Ui.action(this, "Sources", false, v -> FilmActivity.show(this, featured)), new LinearLayout.LayoutParams(0, -2, 1));
+        hero.addView(actions);
+        TextView foot = Ui.text(this, "Full film · Verified torrent stream", 11, Ui.MUTED, null);
+        Ui.gap(hero, 8); hero.addView(foot);
         body.addView(hero);
+
         Ui.gap(body, 22);
-        section(body, "Start playing", "OPEN MEDIA");
+        section(body, "Open cinema", "WATCH FROM TORRENTS");
+        Ui.gap(body, 8);
+        CinemaViews.shelf(this, body, Cinema.FILMS);
+
+        List<MediaEntry> recents = store.recentlyPlayed();
+        if (!recents.isEmpty()) {
+            Ui.gap(body, 22);
+            section(body, "Continue watching", "YOUR HISTORY");
+            Ui.gap(body, 9);
+            for (MediaEntry e : recents.subList(0, Math.min(3, recents.size()))) addRow(body, e, false);
+        }
+        Ui.gap(body, 24);
+        section(body, "Your sources", "LINKS, FILES & SHARING");
         Ui.gap(body, 9);
         LinearLayout quick = Ui.row(this);
         quick.addView(quick("↗", "Open a link", "HTTPS media", v -> linkDialog(false)), new LinearLayout.LayoutParams(0, -1, 1));
@@ -270,19 +291,70 @@ public final class MainActivity extends Activity implements PlaybackService.List
         Ui.gap(body, 8);
         body.addView(Ui.action(this, "Community rooms  ›", false, v -> startActivity(new Intent(this, CommunityActivity.class))));
 
-        List<MediaEntry> recents = store.recentlyPlayed();
-        if (!recents.isEmpty()) {
-            Ui.gap(body, 22);
-            section(body, "Recently played", "RESUME");
-            Ui.gap(body, 10);
-            for (MediaEntry e : recents.subList(0, Math.min(3, recents.size()))) addRow(body, e, false);
-        }
         Ui.gap(body, 22);
-        section(body, "Try it offline", "BUILT-IN SAMPLES");
+        section(body, "On-device samples", "NO CONNECTION NEEDED");
         Ui.gap(body, 9);
-        addRow(body, store.get(LibraryStore.SAMPLE_VIDEO.id), false);
+        body.addView(Ui.action(this, "▶  Play sample", false, v -> open(LibraryStore.SAMPLE_VIDEO, false)));
+        Ui.gap(body, 7);
         addRow(body, store.get(LibraryStore.SAMPLE_AUDIO.id), false);
         Ui.gap(body, 8);
+    }
+
+    private void watchFilm(Cinema.Film film, TextView control) {
+        if (startingFilm) return;
+        startingFilm = true;
+        if (control != null) { control.setText("Opening…"); control.setEnabled(false); }
+        io.execute(() -> {
+            MediaEntry entry = null;
+            String problem = null;
+            try { entry = Cinema.queue(getApplicationContext(), film); }
+            catch (IOException | RuntimeException failed) { problem = failed.getMessage() == null ? "Could not open this torrent." : failed.getMessage(); }
+            MediaEntry selected = entry;
+            String error = problem;
+            handler.post(() -> {
+                startingFilm = false;
+                if (control != null) { control.setText("▶  Watch now"); control.setEnabled(true); }
+                if (!resumed || isFinishing() || isDestroyed()) return;
+                if (selected == null) {
+                    new AlertDialog.Builder(this).setTitle("Couldn't start " + film.title).setMessage(error)
+                            .setPositiveButton("View sources", (d, w) -> FilmActivity.show(this, film)).setNegativeButton("Close", null).show();
+                } else startActivity(new Intent(this, PlayerActivity.class).putExtra(PlaybackService.EXTRA_ID, selected.id));
+            });
+        });
+    }
+
+    private void findTitle() {
+        LinearLayout pane = Ui.column(this); Ui.pad(pane, 16, 10);
+        EditText title = field("Search movies or a saved title", InputType.TYPE_CLASS_TEXT);
+        pane.addView(title); Ui.gap(pane, 10);
+        ScrollView scrollResults = new ScrollView(this);
+        LinearLayout matches = Ui.column(this); scrollResults.addView(matches);
+        pane.addView(scrollResults, new LinearLayout.LayoutParams(-1, Ui.dp(this, 240)));
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Find a title").setView(pane)
+                .setNegativeButton("Close", null).setPositiveButton("Search TMDB", (d, w) -> CinemaViews.browse(this, Catalogue.Filter.MOVIE, title.getText().toString())).create();
+        List<MediaEntry> saved = store.saved();
+        Runnable render = () -> {
+            String needle = title.getText().toString().trim().toLowerCase(Locale.ROOT);
+            matches.removeAllViews();
+            for (Cinema.Film film : Cinema.FILMS) if (film.title.toLowerCase(Locale.ROOT).contains(needle)) {
+                matches.addView(Ui.action(this, film.title + "  /  Watch", false, v -> { dialog.dismiss(); FilmActivity.show(this, film); }));
+                Ui.gap(matches, 6);
+            }
+            int count = 0;
+            if (!needle.isEmpty()) for (MediaEntry entry : saved) {
+                if (!entry.title.toLowerCase(Locale.ROOT).contains(needle) || Cinema.fromTorrent(entry.source) != null) continue;
+                matches.addView(Ui.action(this, entry.title + "  /  " + entry.sourceLabel(), false, v -> { dialog.dismiss(); open(entry, false); }));
+                Ui.gap(matches, 6);
+                if (++count == 20) break;
+            }
+            if (matches.getChildCount() == 0) matches.addView(Ui.text(this, "No match in Open cinema or your Library. Search TMDB for title details.", 14, Ui.MUTED, null));
+        };
+        title.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { render.run(); }
+            @Override public void afterTextChanged(Editable text) { }
+        });
+        render.run(); dialog.show();
     }
 
     private LinearLayout quick(String symbol, String text, String subtitle, View.OnClickListener action) {
@@ -652,6 +724,10 @@ public final class MainActivity extends Activity implements PlaybackService.List
     }
 
     private void open(MediaEntry item, boolean fromLink) {
+        if (item != null && item.torrent() && item.transfer < 0 && !store.isOffline(item)) {
+            Cinema.Film film = Cinema.fromTorrent(item.source);
+            if (film != null) { watchFilm(film, null); return; }
+        }
         if (store.get(item.id) == null || fromLink) store.save(item, true);
         startActivity(new Intent(this, PlayerActivity.class).putExtra(PlaybackService.EXTRA_ID, item.id));
     }

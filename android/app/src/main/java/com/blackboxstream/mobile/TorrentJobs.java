@@ -19,7 +19,11 @@ final class TorrentJobs {
         return new File(dir, hash + ".torrent");
     }
 
-    static synchronized MediaEntry save(Context context, TorrentMeta meta, TorrentMeta.Item file) throws IOException {
+    static MediaEntry save(Context context, TorrentMeta meta, TorrentMeta.Item file) throws IOException {
+        return save(context, meta, file, file.name);
+    }
+
+    static synchronized MediaEntry save(Context context, TorrentMeta meta, TorrentMeta.Item file, String title) throws IOException {
         String hex = TorrentMeta.hex(meta.hash);
         File path = descriptor(context, hex);
         File temp = new File(path.getParentFile(), hex + ".part");
@@ -27,7 +31,7 @@ final class TorrentJobs {
             try (FileOutputStream out = new FileOutputStream(temp)) { out.write(meta.packed()); out.getFD().sync(); }
             if (!temp.renameTo(path)) throw new IOException("Could not keep the verified torrent metadata.");
         } finally { temp.delete(); }
-        return new MediaEntry(file.name, file.kind(), PREFIX + hex + ":" + file.index);
+        return new MediaEntry(title, file.kind(), PREFIX + hex + ":" + file.index);
     }
 
     static void run(Context context, MediaEntry e, File part, OfflineTransfer.Monitor monitor) throws IOException {

@@ -21,22 +21,23 @@ import java.util.Set;
 final class TorrentMeta {
     static final int MAX_META = 2 * 1024 * 1024;
     static final int MAX_TRACKERS = 12;
+    private static final int MAX_WEB_SEEDS = 4, MAX_EXACT = 2;
     static final long MAX_SWARM_BYTES = 256L << 30;
     final byte[] info, hash, hashes;
     final int pieceLength;
     final long length;
     final String name;
     final List<Item> items;
-    final List<String> trackers, peers;
-    final boolean privateSwarm;
+    final List<String> trackers, peers, webSeeds;
+    final boolean privateSwarm, multiFile;
 
     static final class Item {
         final int index;
-        final String name;
+        final String name, seedPath;
         final long offset, length;
         final boolean padded;
-        Item(int index, String name, long offset, long length, boolean padded) {
-            this.index = index; this.name = name; this.offset = offset; this.length = length; this.padded = padded;
+        Item(int index, String name, long offset, long length, boolean padded, String seedPath) {
+            this.index = index; this.name = name; this.offset = offset; this.length = length; this.padded = padded; this.seedPath = seedPath;
         }
         boolean playable() {
             return !padded && length > 0 && length <= OfflineTransfer.LIMIT_BYTES
@@ -48,17 +49,18 @@ final class TorrentMeta {
 
     static final class Magnet {
         final byte[] hash;
-        final List<String> trackers, peers;
-        Magnet(byte[] hash, List<String> trackers, List<String> peers) {
-            this.hash = hash; this.trackers = trackers; this.peers = peers;
+        final List<String> trackers, peers, webSeeds, exact;
+        Magnet(byte[] hash, List<String> trackers, List<String> peers, List<String> webSeeds, List<String> exact) {
+            this.hash = hash; this.trackers = trackers; this.peers = peers; this.webSeeds = webSeeds; this.exact = exact;
         }
     }
 
-    private TorrentMeta(byte[] info, Bencode.Node data, List<String> trackers, List<String> peers) throws IOException {
+    private TorrentMeta(byte[] info, Bencode.Node data, List<String> trackers, List<String> peers, List<String> webSeeds) throws IOException {
         this.info = info;
         hash = sha1(info);
         this.trackers = Collections.unmodifiableList(new ArrayList<>(trackers));
         this.peers = Collections.unmodifiableList(new ArrayList<>(peers));
+        this.webSeeds = Collections.unmodifiableList(new ArrayList<>(webSeeds));
         hashes = bytes(data, "pieces");
         if (hashes == null || hashes.length == 0 || hashes.length % 20 != 0) {
             throw new IOException("This file has no v1 pieces. Choose a BitTorrent v1 or hybrid torrent.");
@@ -66,14 +68,17 @@ final class TorrentMeta {
         long piece = num(data, "piece length", 0);
         if (piece <= 0 || piece > 16 * 1024 * 1024) throw new IOException("Unsupported torrent piece size.");
         pieceLength = (int) piece;
-        name = MediaEntry.cleanTitle(prefer(data, "name.utf-8", "name"));
+        String rawName = prefer(data, "name.utf-8", "name");
+        name = MediaEntry.cleanTitle(rawName);
+        String rootPath = encodedSegment(rawName);
         privateSwarm = num(data, "private", 0) == 1;
         List<Item> parsed = new ArrayList<>();
         long end = 0;
         Bencode.Node files = data.get("files");
-        if (files == null) {
+        multiFile = files != null;
+        if (!multiFile) {
             end = validLength(num(data, "length", -1));
-            parsed.add(new Item(0, name, 0, end, false));
+            parsed.add(new Item(0, name, 0, end, false, rootPath));
         } else {
             if (files.list == null || files.list.isEmpty() || files.list.size() > 4096) throw invalid();
             for (Bencode.Node f : files.list) {
@@ -83,7 +88,13 @@ final class TorrentMeta {
                 String file = path.list.get(path.list.size() - 1).text();
                 long size = validLength(num(f, "length", -1));
                 boolean pad = text(f, "attr").contains("p") || path.list.get(0).text().equals(".pad");
-                parsed.add(new Item(parsed.size(), MediaEntry.cleanTitle(file), end, size, pad));
+                String fullPath = rootPath;
+                for (Bencode.Node component : path.list) {
+                    String part = encodedSegment(component.text());
+                    if (fullPath == null || part == null || fullPath.length() + part.length() > 3000) { fullPath = null; break; }
+                    fullPath += "/" + part;
+                }
+                parsed.add(new Item(parsed.size(), MediaEntry.cleanTitle(file), end, size, pad, fullPath));
                 end = validLength(end + size);
             }
         }
@@ -107,14 +118,48 @@ final class TorrentMeta {
         if (hints != null && hints.list != null) for (Bencode.Node item : hints.list) {
             if (peers.size() < MAX_TRACKERS && validPeer(item.text())) peers.add(item.text());
         }
-        return new TorrentMeta(Arrays.copyOfRange(raw, node.start, node.end), node, new ArrayList<>(urls), peers);
+        Set<String> sources = new LinkedHashSet<>();
+        Bencode.Node ws = root.get("url-list");
+        if (ws != null) {
+            if (ws.list == null) addHttps(sources, ws.text(), MAX_WEB_SEEDS);
+            else for (Bencode.Node candidate : ws.list) addHttps(sources, candidate.text(), MAX_WEB_SEEDS);
+        }
+        return new TorrentMeta(Arrays.copyOfRange(raw, node.start, node.end), node, new ArrayList<>(urls), peers, new ArrayList<>(sources));
     }
 
     static TorrentMeta fromMagnet(Magnet magnet, byte[] exactInfo) throws IOException {
         if (exactInfo.length > MAX_META || !MessageDigest.isEqual(magnet.hash, sha1(exactInfo))) {
             throw new IOException("Metadata did not match the magnet's info hash.");
         }
-        return new TorrentMeta(exactInfo, Bencode.parse(exactInfo), magnet.trackers, magnet.peers);
+        return new TorrentMeta(exactInfo, Bencode.parse(exactInfo), magnet.trackers, magnet.peers, magnet.webSeeds);
+    }
+
+    TorrentMeta withMagnet(Magnet magnet) throws IOException {
+        if (!MessageDigest.isEqual(hash, magnet.hash)) throw new IOException("The descriptor did not match the magnet's info hash.");
+        return new TorrentMeta(info, Bencode.parse(info), merge(magnet.trackers, trackers, MAX_TRACKERS),
+                merge(magnet.peers, peers, MAX_TRACKERS), merge(magnet.webSeeds, webSeeds, MAX_WEB_SEEDS));
+    }
+
+    private static List<String> merge(List<String> first, List<String> rest, int max) {
+        Set<String> all = new LinkedHashSet<>(first);
+        all.addAll(rest);
+        List<String> list = new ArrayList<>(all);
+        return list.subList(0, Math.min(max, list.size()));
+    }
+
+    int fileAt(long position) {
+        int lo = 0, hi = items.size();
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            Item f = items.get(mid);
+            if (f.offset + f.length <= position) lo = mid + 1; else hi = mid;
+        }
+        return lo;
+    }
+
+    boolean checksPiece(int piece, byte[] data) {
+        int at = piece * 20;
+        return MessageDigest.isEqual(sha1(data), Arrays.copyOfRange(hashes, at, at + 20));
     }
 
     byte[] packed() {
@@ -127,6 +172,7 @@ final class TorrentMeta {
             root.put("announce-list", groups);
         }
         if (!peers.isEmpty()) root.put("bbx-peers", peers);
+        if (!webSeeds.isEmpty()) root.put("url-list", webSeeds);
         return Bencode.encode(root);
     }
 
@@ -135,6 +181,7 @@ final class TorrentMeta {
             throw new IOException("Paste a BitTorrent magnet link.");
         }
         Set<String> trackers = new LinkedHashSet<>(), peers = new LinkedHashSet<>();
+        Set<String> webSeeds = new LinkedHashSet<>(), exact = new LinkedHashSet<>();
         byte[] hash = null;
         for (String field : input.substring(8).split("&")) {
             int split = field.indexOf('=');
@@ -148,10 +195,12 @@ final class TorrentMeta {
                 if (hash != null && !Arrays.equals(hash, candidate)) throw invalid();
                 hash = candidate;
             } else if (key.equals("tr")) addTracker(trackers, value);
+            else if (key.equals("ws")) addHttps(webSeeds, value, MAX_WEB_SEEDS);
+            else if (key.equals("xs")) addHttps(exact, value, MAX_EXACT);
             else if (key.equals("x.pe") && peers.size() < MAX_TRACKERS && validPeer(value)) peers.add(value);
         }
         if (hash == null) throw new IOException("Use a v1 or hybrid magnet with a btih info hash.");
-        return new Magnet(hash, new ArrayList<>(trackers), new ArrayList<>(peers));
+        return new Magnet(hash, new ArrayList<>(trackers), new ArrayList<>(peers), new ArrayList<>(webSeeds), new ArrayList<>(exact));
     }
 
     private static byte[] hash(String text) throws IOException {
@@ -167,6 +216,25 @@ final class TorrentMeta {
             }
         } else throw invalid();
         return result;
+    }
+
+    private static void addHttps(Set<String> urls, String text, int limit) {
+        if (urls.size() >= limit || text.isEmpty() || text.length() > 2048) return;
+        try { urls.add(MediaSources.https(text)); } catch (IllegalArgumentException ignored) { }
+    }
+
+    private static String encodedSegment(String value) {
+        if (value.isEmpty() || value.equals(".") || value.equals("..") || value.length() > 255
+                || value.indexOf('/') >= 0 || value.indexOf('\\') >= 0) return null;
+        StringBuilder segment = new StringBuilder();
+        String hex = "0123456789ABCDEF";
+        for (byte b : value.getBytes(StandardCharsets.UTF_8)) {
+            int c = b & 255;
+            if (c < 32 || c == 127) return null;
+            if (c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || "-_.~".indexOf(c) >= 0) segment.append((char) c);
+            else segment.append('%').append(hex.charAt(c >>> 4)).append(hex.charAt(c & 15));
+        }
+        return segment.toString();
     }
 
     private static void addTracker(Set<String> urls, String text) {

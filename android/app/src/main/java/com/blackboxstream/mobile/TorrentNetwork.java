@@ -60,9 +60,14 @@ final class TorrentNetwork {
 
     TorrentMeta resolve(TorrentMeta.Magnet request) throws IOException {
         long until = deadline(55);
+        IOException last = null;
+        for (String exact : request.exact) {
+            check(until);
+            try { return TorrentMeta.read(TorrentWebSeed.descriptor(exact)).withMagnet(request); }
+            catch (IOException unavailable) { last = unavailable; }
+        }
         List<InetSocketAddress> peers = announce(request.hash, request.trackers, request.peers, 1, until);
         Set<InetSocketAddress> tried = new HashSet<>();
-        IOException last = null;
         for (int attempt = 0; attempt < 2; attempt++) {
             for (InetSocketAddress address : peers) {
                 if (!tried.add(address)) continue;
@@ -377,7 +382,7 @@ final class TorrentNetwork {
                         || msg.length - 9 != Math.min(BLOCK, size - start)) throw new IOException("Unexpected torrent block");
                 if (!got.get(block)) { got.set(block); received++; System.arraycopy(msg, 9, data, start, msg.length - 9); }
             }
-            if (!MessageDigest.isEqual(TorrentMeta.sha1(data), Arrays.copyOfRange(meta.hashes, index * 20, index * 20 + 20))) {
+            if (!meta.checksPiece(index, data)) {
                 throw new IOException("A torrent piece failed its integrity check");
             }
             return data;

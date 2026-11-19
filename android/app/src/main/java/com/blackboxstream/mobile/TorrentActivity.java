@@ -59,8 +59,7 @@ public final class TorrentActivity extends Activity {
             if (cached.isFile()) {
                 try {
                     TorrentMeta local = TorrentMeta.read(TorrentMeta.slurp(new java.io.FileInputStream(cached), 4 * 1024 * 1024));
-                    if (target.trackers.isEmpty() && target.peers.isEmpty()) return local;
-                    return TorrentMeta.fromMagnet(target, local.info);
+                    return local.withMagnet(target);
                 } catch (IOException notUsable) { }
             }
             return new TorrentNetwork(() -> ticket != request).resolve(target);

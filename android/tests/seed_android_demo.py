@@ -45,7 +45,7 @@ class Seed(NamedTuple):
 
 
 @contextmanager
-def seed(bind, directory):
+def seed(bind, directory, rate=0):
     if not any(ip_address(bind) in network for network in LOCAL):
         raise ValueError('Use an explicitly chosen private IPv4 interface, not a public / wildcard address.')
     directory.mkdir(parents=True, exist_ok=True)
@@ -64,7 +64,9 @@ def seed(bind, directory):
         info = lt.torrent_info(str(descriptor))
         session = lt.session({'listen_interfaces': f'{bind}:0', 'outgoing_interfaces': bind,
                               'enable_dht': False, 'enable_lsd': False, 'enable_natpmp': False, 'enable_upnp': False,
-                              'allow_multiple_connections_per_ip': True})
+                              'allow_multiple_connections_per_ip': True,
+                              'ignore_limits_on_local_network': False, 'upload_rate_limit': rate,
+                              'local_upload_rate_limit': rate})
         params = lt.add_torrent_params(); params.ti = info; params.save_path = str(directory.resolve())
         params.flags |= lt.torrent_flags.seed_mode
         params.flags &= ~(lt.torrent_flags.paused | lt.torrent_flags.auto_managed)

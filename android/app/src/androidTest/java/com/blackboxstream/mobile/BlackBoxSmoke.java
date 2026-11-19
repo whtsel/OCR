@@ -72,6 +72,17 @@ public final class BlackBoxSmoke extends Instrumentation {
         try {
             launcher = launch(MainActivity.class, null);
             Activity visible = launcher;
+            bound = ui(() -> app.bindService(new Intent(app, PlaybackService.class), binding, Context.BIND_AUTO_CREATE));
+            assertPass("Cold launch opens a populated film shelf", ui(() -> find(visible.getWindow().getDecorView(), "Open cinema") != null
+                    && find(visible.getWindow().getDecorView(), "▶  Watch now") != null
+                    && find(visible.getWindow().getDecorView(), "Tears of Steel") != null));
+            for (Cinema.Film film : Cinema.FILMS) {
+                TorrentMeta meta = film.metadata(app);
+                assertPass(film.title + " has an exact playable torrent and HTTP source", meta.items.get(film.index).playable()
+                        && film.directEntry(app).remote() && Arrays.equals(meta.hash, TorrentMeta.magnet(film.magnet()).hash));
+            }
+            screenFromHome(visible, "Sources", FilmActivity.class, "▶  Watch torrent");
+            if (fixtures != null && "yes".equals(fixtures.getString("live_cinema"))) verifyLiveFilm(app, db, visible);
             screenFromHome(visible, "Torrents", TorrentActivity.class, "Open a torrent");
             screenFromHome(visible, "Discover", DiscoverActivity.class, "Play on-device sample  ›");
             screenFromHome(visible, "Local Share", LanShareActivity.class, "Connect securely");
@@ -83,7 +94,6 @@ public final class BlackBoxSmoke extends Instrumentation {
             }));
             sample = waitForMonitorWithTimeout(monitor, 10000);
             assertPass("Tap opens native PlayerActivity", sample != null);
-            bound = ui(() -> app.bindService(new Intent(app, PlaybackService.class), binding, Context.BIND_AUTO_CREATE));
             await("sample decodes H.264 and playback advances", 16000, () -> ui(() -> engine != null && engine.ready()
                     && engine.videoWidth() == 640 && engine.renderedVideo() && engine.duration() >= 13500 && engine.playing() && engine.position() > 500));
             ui(() -> { engine.pause(); engine.seek(6500); return null; });
@@ -131,6 +141,41 @@ public final class BlackBoxSmoke extends Instrumentation {
             SmokeMediaProvider.available = true;
             Downloads.deleteCopy(app, fixture);
             if (db.get(fixture.id) != null) db.getWritableDatabase().delete("media", "id=?", new String[] {fixture.id});
+        }
+    }
+
+    private void verifyLiveFilm(Context app, LibraryStore db, Activity home) throws Exception {
+        Cinema.Film film = Cinema.FILMS.get(0);
+        MediaEntry entry = film.torrentEntry();
+        Downloads.deleteCopy(app, entry);
+        Activity screen = null;
+        ActivityMonitor monitor = addMonitor(PlayerActivity.class.getName(), null, false);
+        try {
+            assertPass("One tap chooses the actual featured film torrent", ui(() -> {
+                TextView watch = find(home.getWindow().getDecorView(), "▶  Watch now");
+                return watch != null && watch.performClick();
+            }));
+            screen = waitForMonitorWithTimeout(monitor, 10000);
+            assertPass("The featured source opens the Android player", screen != null);
+            await("Sintel renders from the public torrent web seed before download completes", 65000,
+                    () -> ui(() -> engine != null && engine.entry() != null && entry.id.equals(engine.entry().id)
+                            && engine.ready() && engine.duration() > 720000 && engine.videoWidth() > 640
+                            && engine.renderedVideo() && engine.playing() && engine.position() > 750 && !db.isOffline(entry)));
+            ui(() -> { engine.seek(150000); return null; });
+            await("Sintel seeks to a later part of the full film, still before completion", 22000,
+                    () -> ui(() -> engine.playing() && !engine.seeking() && engine.position() >= 149000 && !db.isOffline(entry)));
+            android.util.Log.i("BlackBoxSmoke", "PASS Live catalogue proof: full Sintel streamed verified pieces and sought to 2:30 before download finished");
+        } catch (AssertionError problem) {
+            MediaEntry row = db.get(entry.id);
+            throw new AssertionError(problem.getMessage() + "; player=" + ui(() -> engine == null ? "unbound" : engine.failure())
+                    + "; transfer=" + (row == null ? "not queued" : row.transferError + " / " + Downloads.received(db, row) + " verified bytes"), problem);
+        } finally {
+            Activity player = screen;
+            ui(() -> { if (player != null) player.finish(); if (engine != null) engine.close(); return null; });
+            Downloads.deleteCopy(app, entry);
+            db.getWritableDatabase().delete("media", "id=?", new String[] {entry.id});
+            TorrentJobs.descriptor(app, film.hash).delete();
+            waitForIdleSync();
         }
     }
 
@@ -194,9 +239,9 @@ public final class BlackBoxSmoke extends Instrumentation {
         try {
             ui(() -> { Downloads.enqueue(app, entry); return null; });
             screen = launch(PlayerActivity.class, entry.id);
-            await("Android plays the selected torrent video", 55000, () -> ui(() -> engine.entry() != null
+            await("Android plays verified TCP peer pieces before the offline copy is complete", 55000, () -> ui(() -> engine.entry() != null
                     && entry.id.equals(engine.entry().id) && engine.ready() && engine.videoWidth() == 640
-                    && engine.renderedVideo() && engine.playing() && engine.position() > 500));
+                    && engine.renderedVideo() && engine.playing() && engine.position() > 500 && !db.isOffline(entry)));
             await("Verified torrent file is committed to Offline", 45000,
                     () -> db.isOffline(entry) && db.get(entry.id).transfer == -1);
             try (InputStream original = app.getResources().openRawResource(R.raw.dawn);

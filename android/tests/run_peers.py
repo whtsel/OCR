@@ -85,7 +85,7 @@ def main():
         classes = root / 'classes'
         classes.mkdir()
         java = deps(classes, ['MediaEntry', 'MediaSources', 'OfflineTransfer', 'MediaBytes', 'Bencode', 'TorrentMeta',
-                              'TorrentNetwork', 'TorrentTransfer', 'LanIdentity', 'LanShare'], 'PeerChecks')
+                              'TorrentNetwork', 'TorrentWebSeed', 'TorrentTransfer', 'LanIdentity', 'LanShare'], 'PeerChecks')
         http = cleanup.enter_context(ThreadingHTTPServer(('127.0.0.1', 0), HttpTracker))
         udp = cleanup.enter_context(socketserver.UDPServer(('127.0.0.1', 0), UdpTracker))
         dht = cleanup.enter_context(socketserver.UDPServer(('127.0.0.1', 0), DhtSeed))

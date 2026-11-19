@@ -79,6 +79,12 @@ public final class DiscoverActivity extends Activity {
             try { filter = Catalogue.Filter.valueOf(state.getString("filter", "OPEN")); } catch (IllegalArgumentException ignored) { }
             query.setText(state.getString("query", "")); shelf.setSelection(state.getInt("shelf", 0));
         }
+        if (state == null) {
+            String requested = getIntent().getStringExtra("catalogue_filter");
+            if (requested != null) try { filter = Catalogue.Filter.valueOf(requested); } catch (IllegalArgumentException ignored) { }
+            String search = getIntent().getStringExtra("catalogue_query");
+            if (search != null) query.setText(search.substring(0, Math.min(search.length(), 130)));
+        }
         switchTo(filter);
     }
 
@@ -162,6 +168,11 @@ public final class DiscoverActivity extends Activity {
     private boolean valid(int run) { return run == ticket && !isFinishing() && !isDestroyed(); }
     private void paint(String text, boolean more) {
         status.setText(text); next.setVisibility(more ? View.VISIBLE : View.GONE); results.removeAllViews();
+        if (filter == Catalogue.Filter.OPEN) {
+            results.addView(Ui.text(this, "Full open films", 23, Ui.INK, Ui.DISPLAY)); Ui.gap(results, 8);
+            CinemaViews.shelf(this, results, Cinema.FILMS);
+            Ui.gap(results, 17);
+        }
         for (Catalogue.Card item : current) {
             LinearLayout card = Ui.column(this); Ui.pad(card, 13, 13); Ui.click(card, Ui.CARD, 14, Ui.BORDER, v -> detail(item));
             card.addView(Ui.kicker(this, item.kind.badge + (item.year.isEmpty() ? "" : "  /  " + item.year)));
@@ -196,6 +207,8 @@ public final class DiscoverActivity extends Activity {
         for (MediaEntry e : LibraryStore.get(this).saved()) {
             if (e.title.trim().equalsIgnoreCase(card.title) && (e.kind == card.kind || e.kind == MediaEntry.Kind.SERIES && card.kind == MediaEntry.Kind.ANIME)) exact.add(e);
         }
+        Cinema.Film openFilm = card.kind == MediaEntry.Kind.MOVIE ? Cinema.exactTitle(card.title) : null;
+        if (openFilm != null && openFilm.year.equals(card.year)) { FilmActivity.show(this, openFilm); return; }
         if (exact.isEmpty()) {
             new AlertDialog.Builder(this).setTitle("No matching saved sources").setMessage("Discovery shows title information only. Add an authorized file, direct link, or torrent for this title in BlackBox.")
                     .setNegativeButton("Close", null).setPositiveButton("Go to Home", (d,w) -> finish()).show(); return;

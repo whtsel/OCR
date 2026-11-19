@@ -21,6 +21,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".FilmActivity" android:exported="false" />
         <activity android:name=".TorrentActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".DiscoverActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".LanShareActivity" android:exported="false" android:launchMode="singleTop" android:windowSoftInputMode="adjustResize" />

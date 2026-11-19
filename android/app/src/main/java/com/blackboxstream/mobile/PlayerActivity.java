@@ -36,7 +36,7 @@ public final class PlayerActivity extends Activity implements PlaybackService.Li
     private FrameLayout stage;
     private SurfaceView video;
     private SurfaceHolder surface;
-    private Ui.OrbitArt art;
+    private View art;
     private TextView title, meta, stageLabel, hint, left, right, play, back, next, save, offline;
     private SeekBar seek;
 
@@ -143,7 +143,8 @@ public final class PlayerActivity extends Activity implements PlaybackService.Li
         stage.setClipToOutline(true);
         content.addView(stage, landscape ? new LinearLayout.LayoutParams(-1, 0, 1)
                 : new LinearLayout.LayoutParams(-1, Ui.dp(this, 228)));
-        art = new Ui.OrbitArt(this, entry.music());
+        Cinema.Film film = Cinema.fromTorrent(entry.source);
+        art = film == null ? new Ui.OrbitArt(this, entry.music()) : CinemaViews.art(this, film);
         stage.addView(art, new FrameLayout.LayoutParams(-1, -1));
         video = new SurfaceView(this);
         video.setVisibility(View.INVISIBLE);
@@ -211,7 +212,9 @@ public final class PlayerActivity extends Activity implements PlaybackService.Li
         next.setContentDescription("Forward ten seconds");
         play = Ui.action(this, "Play", true, v -> {
             if (engine == null) return;
-            if (engine.failure() != null || engine.entry() == null) engine.open(entry, true, true);
+            if (entry.torrent() && !store.isOffline(entry) && entry.transfer < 0 && !engine.ready()) {
+                download(entry); tryOpen();
+            } else if (engine.failure() != null || engine.entry() == null) engine.open(entry, true, true);
             else engine.toggle();
         });
         controls.addView(back, new LinearLayout.LayoutParams(0, -2, 1));
@@ -237,6 +240,10 @@ public final class PlayerActivity extends Activity implements PlaybackService.Li
             actions.addView(save, new LinearLayout.LayoutParams(0, -2, 1));
             Ui.space(actions, 8); actions.addView(offline, new LinearLayout.LayoutParams(0, -2, 1));
             content.addView(actions);
+            if (film != null) {
+                Ui.gap(content, 9);
+                content.addView(Ui.action(this, "Other sources for " + film.title, false, v -> FilmActivity.show(this, film)));
+            }
             Ui.gap(content, 8);
         }
     }
@@ -248,7 +255,7 @@ public final class PlayerActivity extends Activity implements PlaybackService.Li
             return;
         }
         waitingTorrent = false;
-        engine.open(entry, false, resumeOnShow);
+        engine.open(entry, engine.failure() != null, resumeOnShow);
         playerChanged();
     }
 
@@ -271,6 +278,7 @@ public final class PlayerActivity extends Activity implements PlaybackService.Li
         boolean picture = ready && engine.video();
         boolean busy = waitingTorrent || !loaded && engine == null || (loaded && engine.preparing());
         String error = loaded ? engine.failure() : null;
+        if (error != null && entry != null && entry.torrent() && entry.transferError != null) error = entry.transferError;
         long duration = ready ? engine.duration() : 0;
         long position = ready ? engine.position() : 0;
         video.setVisibility(picture ? View.VISIBLE : View.INVISIBLE);
@@ -290,7 +298,7 @@ public final class PlayerActivity extends Activity implements PlaybackService.Li
         stageLabel.setVisibility(picture && !engine.buffering() ? View.GONE : View.VISIBLE);
         stageLabel.setText(error != null ? "CAN'T PLAY" : busy ? "OPENING MEDIA" : ready && engine.buffering() ? "BUFFERING"
                 : ready && !picture ? "AUDIO" : "PLAYER");
-        String text = error != null ? error : waitingTorrent ? "Looking for torrent seeders…" : busy ? "Opening in the Android player…" : ready && engine.buffering() ? "Buffering…"
+        String text = error != null ? error : waitingTorrent ? "Waiting for verified torrent pieces…" : busy ? "Opening in the Android player…" : ready && engine.buffering() ? "Buffering…"
                 : ready && duration <= 0 ? "This stream has no seekable timeline." : ready && !picture
                 ? engine.inBackgroundSession() ? "Audio can continue while you use other apps."
                 : "Audio will pause when you leave the player." : "";

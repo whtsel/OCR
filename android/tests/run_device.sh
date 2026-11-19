@@ -11,6 +11,9 @@ if [[ -n "${BBX_FIXTURE_MAGNET:-}" ]]; then
     args=(-e fixture_magnet "$BBX_FIXTURE_MAGNET" -e fixture_torrent "$BBX_FIXTURE_TORRENT"
           -e fixture_relay "$BBX_FIXTURE_RELAY" -e fixture_cert "$BBX_FIXTURE_CERT")
 fi
+if [[ "${BBX_VERIFY_LIVE_FILM:-0}" == 1 ]]; then
+    args+=(-e live_cinema yes)
+fi
 out=$("$adb" shell am instrument -w -r "${args[@]}" com.blackboxstream.mobile.test/com.blackboxstream.mobile.BlackBoxSmoke)
 printf '%s\n' "$out"
 if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_CODE: -1'* ]]; then
