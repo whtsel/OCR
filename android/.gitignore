@@ -1,0 +1,13 @@
+.gradle/
+.idea/
+**/build/
+local.properties
+*.iml
+*.jks
+*.keystore
+*.apk
+*.idsig
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+__pycache__/
