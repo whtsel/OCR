@@ -44,10 +44,21 @@ jobs:
             exit 1
           fi
           tail -12 "$log"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
       - name: Prepare independent torrent fixture
         run: |
-          python3 -m venv "$RUNNER_TEMP/blackbox-fixtures"
-          "$RUNNER_TEMP/blackbox-fixtures/bin/pip" install --only-binary=:all: 'libtorrent==2.1.1'
+          log=$(mktemp)
+          if ! python3 -m pip install --only-binary=:all: 'libtorrent==2.1.1' > "$log" 2>&1; then
+            cat "$log"
+            detail=$(grep '^ERROR:' "$log" | tail -3 | head -c 900)
+            detail=${detail//'%'/'%25'}
+            detail=${detail//$'\n'/'%0A'}
+            printf '::error::libtorrent fixture install failed on %s. %s\n' "$(python3 --version)" "$detail"
+            exit 1
+          fi
+          python3 -c 'import libtorrent; print(libtorrent.version)'
       - name: Enable Android emulator virtualization
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -61,5 +72,4 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
-          script: >-
-            "$RUNNER_TEMP/blackbox-fixtures/bin/python" android/tests/run_device_fixtures.py
+          script: python3 android/tests/run_device_fixtures.py
