@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>BlackBox Stream - starting</title>
+<style>
+  /* The animation from blackbox-heist.html, used as the startup screen.
+     The control bar and timing caption are left out: this is not something to
+     operate, it is something to watch for a few seconds. */
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:#05080f}
+  body{display:flex;align-items:center;justify-content:center}
+  .stage{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+  .scene-wrap{width:min(100%,1400px);aspect-ratio:16/9;max-height:100%}
+  svg#scene{display:block;width:100%;height:100%}
+  .status{position:fixed;left:0;right:0;bottom:0;padding:18px 24px 22px;
+    display:flex;align-items:center;gap:12px;
+    background:linear-gradient(to top,rgba(5,8,15,.96),rgba(5,8,15,0));
+    color:#c6d6e6;font:14px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,Arial,sans-serif}
+  .dot{width:9px;height:9px;border-radius:50%;background:#2dd4bf;flex:0 0 auto;
+       animation:pulse 1.1s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
+  .status b{color:#e9f0f6;font-weight:600}
+  .status small{margin-left:auto;color:#5b7891;font-size:12px}
+
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    background:#05080f; color:#c6d6e6;
+    font:14px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:20px;
+  }
+  .player{width:min(1180px,100%);border-radius:18px;overflow:hidden;border:1px solid #16283d;
+    background:#04070c;box-shadow:0 40px 120px rgba(0,0,0,.8)}
+  svg#scene{display:block;width:100%;height:auto}
+  .bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:11px 14px;
+       border-top:1px solid #12202f;background:#060b12}
+  button{appearance:none;cursor:pointer;padding:7px 13px;border-radius:8px;border:1px solid #22405c;
+    background:#0d1826;color:#cfe4f5;font:inherit;font-weight:700;transition:.15s}
+  button:hover{background:#132538;border-color:#2f5d84}
+  button.primary{background:#0f4f6e;border-color:#2c9ecb;color:#bdf1ff}
+  .bar .spacer{flex:1}
+  .cap{color:#5b7891;font-size:12px;text-align:center;max-width:1180px}
+  .cap b{color:#a9c8dd}
+
+  /* ══════════════ OUTLINE / CEL STYLE ══════════════ */
+  .o{stroke:#0a1018;stroke-width:5;paint-order:stroke;stroke-linejoin:round;stroke-linecap:round}
+  .p{stroke:#080e16;stroke-width:6;paint-order:stroke;stroke-linejoin:round}
+
+  /* ══════════════ CAMERA ══════════════ */
+  #cam{
+    transform-origin:50% 50%;
+    animation:cam 14s cubic-bezier(.4,.05,.3,1) infinite;
+  }
+  @keyframes cam{
+    0%   {transform:translate(0,0) scale(1.09); animation-timing-function:cubic-bezier(.3,0,.2,1)}
+    9%   {transform:translate(0,0) scale(1.00)}
+    40%  {transform:translate(-10px,-4px) scale(1.02)}
+    55%  {transform:translate(16px,-8px) scale(1.045)}
+    70%  {transform:translate(28px,-6px) scale(1.06)}
+    74.5%{transform:translate(30px,-4px) scale(1.065)}
+    76%  {transform:translate(6px,6px) scale(1.085); animation-timing-function:ease-out}   /* slam shake */
+    77.5%{transform:translate(26px,-8px) scale(1.055)}
+    79%  {transform:translate(20px,-2px) scale(1.07); animation-timing-function:cubic-bezier(.55,0,.35,1)}
+    91%  {transform:translate(-451px,-33px) scale(1.10); animation-timing-function:ease-out}
+    95%,100%{transform:translate(-451px,-33px) scale(1.10)}
+  }
+
+  /* ══════════════ DEPTH: parallax layers ══════════════ */
+  #bgFar{animation:driftFar 14s ease-in-out infinite}
+  @keyframes driftFar{ 0%{transform:translate(0,0)} 50%{transform:translate(-14px,2px)} 100%{transform:translate(0,0)} }
+  #fgNear{animation:driftNear 14s ease-in-out infinite}
+  @keyframes driftNear{ 0%{transform:translate(0,0)} 50%{transform:translate(22px,-4px)} 100%{transform:translate(0,0)} }
+
+  /* ══════════════ SQUIRREL — travel ══════════════ */
+  #sqPos{animation:travel 14s linear infinite}
+  @keyframes travel{
+    0%,10%   {transform:translate(70px,700px);   animation-timing-function:ease-in-out}
+    13%      {transform:translate(120px,700px)}
+    16%      {transform:translate(178px,700px)}
+    19%      {transform:translate(226px,700px)}
+    22%      {transform:translate(268px,700px);  animation-timing-function:cubic-bezier(.3,0,.4,1)}
+    25%      {transform:translate(288px,700px);  animation-timing-function:cubic-bezier(.4,0,.6,1)} /* plant feet */
+    27.5%    {transform:translate(292px,702px);  animation-timing-function:cubic-bezier(.2,.9,.3,1)} /* deep crouch */
+    29.5%    {transform:translate(298px,660px);  animation-timing-function:ease-out}
+    32.5%    {transform:translate(306px,566px);  animation-timing-function:cubic-bezier(.6,0,.9,.6)} /* apex */
+    35%      {transform:translate(312px,538px);  animation-timing-function:ease-out}                 /* land */
+    38%      {transform:translate(318px,536px)}
+    41%      {transform:translate(322px,536px)}
+    44%      {transform:translate(324px,534px)}
+    47%      {transform:translate(322px,532px);  animation-timing-function:cubic-bezier(.4,0,.5,1)} /* hoist */
+    50.5%    {transform:translate(300px,650px);  animation-timing-function:ease-in}
+    53.5%    {transform:translate(352px,700px);  animation-timing-function:ease-out}                 /* land on floor */
+    56%      {transform:translate(368px,700px)}
+    60%      {transform:translate(500px,700px)}
+    65%      {transform:translate(700px,700px)}
+    70%      {transform:translate(900px,700px)}
+    73%      {transform:translate(1052px,700px)}
+    75.5%    {transform:translate(1082px,700px); animation-timing-function:cubic-bezier(.3,0,.4,1)}
+    77%      {transform:translate(1090px,704px); animation-timing-function:cubic-bezier(.2,.9,.3,1)} /* toss */
+    79%      {transform:translate(1096px,700px); animation-timing-function:ease-out}
+    84%      {transform:translate(1100px,700px); animation-timing-function:cubic-bezier(.3,0,.2,1)}
+    86.5%    {transform:translate(1102px,678px)}                                                     /* happy hop */
+    89%      {transform:translate(1104px,700px)}
+    90%,100% {transform:translate(1104px,700px)}
+  }
+
+  /* squash & stretch — origin at the feet */
+  #sqSquash{
+    transform-box:fill-box; transform-origin:50% 100%;
+    animation:squash 14s linear infinite;
+  }
+  @keyframes squash{
+    0%,26%   {transform:scale(1,1)}
+    27.5%    {transform:scale(1.13,.85)}   /* anticipation */
+    29.5%    {transform:scale(.88,1.16)}   /* launch stretch */
+    32%      {transform:scale(.96,1.05)}
+    34%      {transform:scale(1.02,.98)}
+    35.5%    {transform:scale(1.20,.79)}   /* impact */
+    37.5%    {transform:scale(.95,1.06)}   /* rebound */
+    40%      {transform:scale(1,1)}
+    47%      {transform:scale(.94,1.08)}   /* strain */
+    51%      {transform:scale(.9,1.12)}    /* fall */
+    54%      {transform:scale(1.18,.81)}   /* impact */
+    57%      {transform:scale(.97,1.03)}
+    59%      {transform:scale(1,1)}
+    62%      {transform:scale(1.04,.97)}   /* weighty waddle */
+    65%      {transform:scale(.98,1.02)}
+    68%      {transform:scale(1.04,.97)}
+    71%      {transform:scale(.98,1.02)}
+    74%      {transform:scale(1.02,.99)}
+    77%      {transform:scale(.92,1.10)}   /* toss stretch */
+    79.5%    {transform:scale(1.12,.9)}
+    82%      {transform:scale(1,1)}
+    86%      {transform:scale(1.06,.94)}   /* happy hop */
+    87.5%    {transform:scale(.94,1.07)}
+    89.5%,100%{transform:scale(1,1)}
+  }
+  .sq-bob{animation:bob .58s ease-in-out infinite alternate}
+  @keyframes bob{from{transform:translateY(0)}to{transform:translateY(-5px)}}
+
+  /* tail — lags behind everything */
+  #tail{
+    transform-box:fill-box; transform-origin:14% 96%;
+    animation:tail 14s cubic-bezier(.4,0,.5,1) infinite;
+  }
+  @keyframes tail{
+    0%   {transform:rotate(-6deg)}  6%{transform:rotate(8deg)}
+    12%  {transform:rotate(-8deg)} 18%{transform:rotate(9deg)}
+    24%  {transform:rotate(-4deg)}
+    27.5%{transform:rotate(16deg)}    /* coils before the leap */
+    31%  {transform:rotate(-22deg)}   /* whips out */
+    35%  {transform:rotate(12deg)}    /* slaps down on impact */
+    38%  {transform:rotate(-6deg)}
+    44%  {transform:rotate(-14deg)}   /* braces while tugging */
+    48%  {transform:rotate(10deg)}
+    52%  {transform:rotate(-18deg)}
+    57%  {transform:rotate(8deg)}
+    63%  {transform:rotate(-10deg)}   /* carrying sway */
+    69%  {transform:rotate(9deg)}
+    75%  {transform:rotate(-7deg)}
+    79%  {transform:rotate(14deg)}    /* toss follow-through */
+    83%  {transform:rotate(-6deg)}
+    87%  {transform:rotate(10deg)}    /* happy wag */
+    90%  {transform:rotate(-8deg)}
+    93%  {transform:rotate(7deg)}
+    96%,100%{transform:rotate(-2deg)}
+  }
+  /* head — small overlap, looks where it goes */
+  #head{
+    transform-box:fill-box; transform-origin:50% 100%;
+    animation:head 14s cubic-bezier(.4,0,.5,1) infinite;
+  }
+  @keyframes head{
+    0%,12%{transform:rotate(6deg)}
+    16%   {transform:rotate(-9deg)}   /* glances right, over the shoulder */
+    20%   {transform:rotate(4deg)}
+    26%   {transform:rotate(10deg)}   /* tucks before the leap */
+    31%   {transform:rotate(-12deg)}
+    36%   {transform:rotate(8deg)}    /* recoil on landing */
+    41%   {transform:rotate(-14deg)}  /* looks up at the B */
+    47%   {transform:rotate(6deg)}
+    53%   {transform:rotate(-4deg)}
+    60%   {transform:rotate(-8deg)}
+    72%   {transform:rotate(-12deg)}  /* looks up at the crate */
+    78%   {transform:rotate(4deg)}
+    84%   {transform:rotate(-2deg)}
+    88%   {transform:rotate(-8deg)}   /* cocky little tilt */
+    92%,100%{transform:rotate(-6deg)}
+  }
+
+  /* pose swaps — the actual 2D-animation trick */
+  #armIdle {animation:armIdle  14s steps(1,end) infinite}
+  #armGrab {animation:armGrab  14s steps(1,end) infinite}
+  #armCarry{animation:armCarry 14s steps(1,end) infinite}
+  #armSmug {animation:armSmug  14s steps(1,end) infinite}
+  @keyframes armIdle {0%,40%{opacity:1} 40.1%,84%{opacity:0} 84.1%,100%{opacity:1}}
+  @keyframes armGrab {0%,40%{opacity:0} 40.1%,47%{opacity:1} 47.1%,100%{opacity:0}}
+  @keyframes armCarry{0%,47%{opacity:0} 47.1%,84%{opacity:1} 84.1%,100%{opacity:0}}
+  @keyframes armSmug {0%,84%{opacity:0} 84.1%,100%{opacity:1}}
+
+  #faceNormal{animation:faceNormal 14s steps(1,end) infinite}
+  #faceWide  {animation:faceWide   14s steps(1,end) infinite}
+  #faceSmug  {animation:faceSmug   14s steps(1,end) infinite}
+  @keyframes faceNormal{0%,26%{opacity:1} 26.1%,37%{opacity:0} 37.1%,84%{opacity:1} 84.1%,100%{opacity:0}}
+  @keyframes faceWide  {0%,26%{opacity:0} 26.1%,37%{opacity:1} 37.1%,100%{opacity:0}}
+  @keyframes faceSmug  {0%,84%{opacity:0} 84.1%,100%{opacity:1}}
+
+  /* ══════════════ THE LOOT ══════════════ */
+  #bToken{animation:loot 14s cubic-bezier(.4,0,.5,1) infinite}
+  @keyframes loot{
+    0%,41%   {transform:translate(430px,415px) scale(.62) rotate(0deg)}
+    44%      {transform:translate(432px,408px) scale(.62) rotate(-4deg)}
+    47%      {transform:translate(436px,352px) scale(.60) rotate(-9deg)}
+    50%      {transform:translate(432px,330px) scale(.58) rotate(-3deg)}
+    53%      {transform:translate(392px,470px) scale(.53) rotate(6deg)}
+    57%      {transform:translate(410px,486px) scale(.53) rotate(-4deg)}
+    62%      {transform:translate(552px,488px) scale(.53) rotate(5deg)}
+    67%      {transform:translate(752px,486px) scale(.53) rotate(-3deg)}
+    72%      {transform:translate(952px,486px) scale(.53) rotate(4deg)}
+    76%      {transform:translate(1074px,436px) scale(.51) rotate(-14deg)}
+    79%      {transform:translate(1180px,470px) scale(.46) rotate(16deg)}
+    81%      {transform:translate(1212px,540px) scale(.38) rotate(6deg); opacity:1}
+    82%,100% {transform:translate(1218px,596px) scale(.34) rotate(0deg); opacity:0}
+  }
+  #lootGlow{animation:lootGlow 14s ease-in-out infinite}
+  @keyframes lootGlow{0%,40%{opacity:.55} 44%{opacity:.95} 47%{opacity:.8} 76%,100%{opacity:0}}
+
+  /* ══════════════ CRATE ══════════════ */
+  #lid{
+    transform-box:fill-box; transform-origin:0 50%;
+    animation:lid 14s cubic-bezier(.55,0,.35,1) infinite;
+  }
+  @keyframes lid{
+    0%,78.5%{transform:rotate(-102deg)}
+    82%     {transform:rotate(3deg)}
+    84%     {transform:rotate(0deg)}
+    100%    {transform:rotate(0deg)}
+  }
+  #crateGlow{animation:crateGlow 14s ease-in-out infinite}
+  @keyframes crateGlow{
+    0%,40%  {opacity:.10}
+    45%     {opacity:.28}
+    76%     {opacity:.35}
+    82%     {opacity:1}
+    88%,100%{opacity:.5}
+  }
+  #lidShine{animation:lidShine 14s ease-out infinite}
+  @keyframes lidShine{0%,82%{opacity:0} 83%{opacity:.9} 89%,100%{opacity:.15}}
+
+  /* ══════════════ STARS / LOCKUP ══════════════ */
+  .tw{animation:tw 3.2s ease-in-out infinite alternate}
+  .tw.d1{animation-delay:-.8s}.tw.d2{animation-delay:-1.6s}.tw.d3{animation-delay:-2.3s}
+  @keyframes tw{from{opacity:.25}to{opacity:.9}}
+  #burst{animation:burst 14s linear infinite}
+  @keyframes burst{0%,80%{opacity:0} 81%{opacity:1} 90%,100%{opacity:0}}
+  #burst .sp{animation:sp 14s cubic-bezier(.15,.7,.3,1) infinite}
+  @keyframes sp{
+    0%,80% {transform:translate(0,0) scale(.1);opacity:0}
+    81%    {transform:translate(0,0) scale(.35);opacity:1}
+    90%    {transform:translate(var(--dx),var(--dy)) scale(1.1);opacity:0}
+    100%   {transform:translate(var(--dx),var(--dy)) scale(1.1);opacity:0}
+  }
+  #logoStars{animation:logoStars 14s ease-out infinite}
+  @keyframes logoStars{0%,84%{opacity:0} 92%,100%{opacity:1}}
+  #lockup{animation:lockup 14s cubic-bezier(.2,.8,.3,1) infinite}
+  @keyframes lockup{0%,85%{opacity:0;transform:translateY(18px)} 93%,100%{opacity:1;transform:translateY(0)}}
+
+  /* ══════════════ ENVIRONMENT MOTION ══════════════ */
+  .mote{animation:float 11s linear infinite}
+  @keyframes float{
+    0%{transform:translate(0,0);opacity:0}
+    12%{opacity:.55} 80%{opacity:.28}
+    100%{transform:translate(18px,-90px);opacity:0}
+  }
+  #sqShadow{animation:shadow 14s linear infinite}
+  @keyframes shadow{
+    0%,25%   {transform:translate(288px,700px) scale(1,1);opacity:.45;animation-timing-function:ease-out}
+    29.5%    {transform:translate(298px,700px) scale(.72,.72);opacity:.24}
+    32.5%    {transform:translate(306px,700px) scale(.5,.5);opacity:.14}
+    35%      {transform:translate(312px,536px) scale(.9,.9);opacity:.34}
+    47%      {transform:translate(322px,536px) scale(.9,.9);opacity:.34;animation-timing-function:ease-in}
+    50.5%    {transform:translate(300px,690px) scale(.7,.7);opacity:.2}
+    53.5%    {transform:translate(352px,700px) scale(1,1);opacity:.45}
+    56%      {transform:translate(368px,700px) scale(1,1);opacity:.45}
+    73%      {transform:translate(1052px,700px) scale(1,1);opacity:.45}
+    79%      {transform:translate(1096px,700px) scale(1,1);opacity:.45}
+    86.5%    {transform:translate(1102px,700px) scale(.72,.72);opacity:.22}
+    89%,100% {transform:translate(1104px,700px) scale(1,1);opacity:.45}
+  }
+  #sqShadow{transform-box:fill-box}
+  #shadow{transform-box:fill-box}
+
+  .puff path{transform-box:fill-box}
+  #puffA{animation:puffA 14s linear infinite;transform-box:fill-box;transform-origin:50% 100%}
+  @keyframes puffA{0%,34%{opacity:0;transform:scale(.35)} 35.5%{opacity:.85;transform:scale(.8)} 40%,100%{opacity:0;transform:scale(1.35)}}
+  #puffB{animation:puffB 14s linear infinite;transform-box:fill-box;transform-origin:50% 100%}
+  @keyframes puffB{0%,53%{opacity:0;transform:scale(.35)} 54.5%{opacity:.8;transform:scale(.75)} 59%,100%{opacity:0;transform:scale(1.3)}}
+  #puffC{animation:puffC 14s linear infinite;transform-box:fill-box;transform-origin:50% 100%}
+  @keyframes puffC{0%,81%{opacity:0;transform:scale(.4)} 82%{opacity:.9;transform:scale(.85)} 87%,100%{opacity:0;transform:scale(1.5)}}
+  #curtain{animation:curtain 14s linear infinite}
+  @keyframes curtain{0%{opacity:1} 3.5%{opacity:0} 96.5%{opacity:0} 99%,100%{opacity:1}}
+
+  @media (prefers-reduced-motion: reduce){
+    svg#scene *{animation-play-state:paused !important}
+  }
+
+</style>
+</head>
+<body>
+<div class="stage"><div class="scene-wrap">
+<svg id="scene" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Cartoon: a masked squirrel tiptoes into a dark gallery, leaps onto a pedestal, steals the BlackBox letter B, staggers across the room with it and drops it into a crate. The lid slams shut, stars burst, and the BlackBox Stream logo appears.">
+<defs>
+  <path id="spark" d="M0 -100 C7 -28 28 -7 100 0 C28 7 7 28 0 100 C-7 28 -28 7 -100 0 C-28 -7 -7 -28 0 -100 Z"/>
+
+  <linearGradient id="wallGrad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#0b1725"/><stop offset=".62" stop-color="#070d17"/><stop offset="1" stop-color="#04080e"/>
+  </linearGradient>
+  <radialGradient id="spotGrad" cx=".5" cy=".1" r=".8">
+    <stop offset="0" stop-color="#2b7fb3" stop-opacity=".45"/>
+    <stop offset=".55" stop-color="#11324c" stop-opacity=".16"/>
+    <stop offset="1" stop-color="#05080f" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="floorGrad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#0d1a2a"/><stop offset=".35" stop-color="#071019"/><stop offset="1" stop-color="#03060a"/>
+  </linearGradient>
+  <linearGradient id="coneGrad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#bfe9ff" stop-opacity=".20"/>
+    <stop offset="1" stop-color="#bfe9ff" stop-opacity="0"/>
+  </linearGradient>
+  <linearGradient id="crateFace" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#2a4a68"/><stop offset="1" stop-color="#101f2e"/>
+  </linearGradient>
+  <linearGradient id="crateSide" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#1a3247"/><stop offset="1" stop-color="#0b1622"/>
+  </linearGradient>
+  <linearGradient id="rimGrad" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#5fd4ff"/><stop offset=".55" stop-color="#1aa4f0"/><stop offset="1" stop-color="#0b6fc0"/>
+  </linearGradient>
+  <linearGradient id="plinthTop" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#33566f"/><stop offset="1" stop-color="#1b3145"/>
+  </linearGradient>
+  <linearGradient id="plinthFace" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#1d3346"/><stop offset="1" stop-color="#0a1119"/>
+  </linearGradient>
+  <linearGradient id="bBody" x1=".1" y1="1" x2=".9" y2="0">
+    <stop offset="0" stop-color="#0b0e2b"/><stop offset=".55" stop-color="#151a45"/><stop offset="1" stop-color="#232a5e"/>
+  </linearGradient>
+  <linearGradient id="bFacet" x1=".2" y1="0" x2="1" y2=".9">
+    <stop offset="0" stop-color="#5b8fbe" stop-opacity=".95"/>
+    <stop offset=".6" stop-color="#33628f" stop-opacity=".7"/>
+    <stop offset="1" stop-color="#1b3660" stop-opacity=".2"/>
+  </linearGradient>
+  <radialGradient id="warmGlow">
+    <stop offset="0" stop-color="#ffd9a0" stop-opacity=".55"/>
+    <stop offset="1" stop-color="#0a1622" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="crateHalo">
+    <stop offset="0" stop-color="#57d9ff" stop-opacity=".55"/>
+    <stop offset=".55" stop-color="#2a86b8" stop-opacity=".14"/>
+    <stop offset="1" stop-color="#0a1622" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="vig" cx=".5" cy=".5" r=".72">
+    <stop offset=".55" stop-color="#000" stop-opacity="0"/>
+    <stop offset="1" stop-color="#000" stop-opacity=".72"/>
+  </radialGradient>
+
+  <path id="Bpath" fill-rule="evenodd" d="
+    M430 420 H628 C718 420 774 468 774 514 C774 556 746 588 700 600
+    C762 612 800 652 800 702 C800 764 742 810 650 810 H430 Z
+    M560 506 H636 C666 506 690 518 690 548 C690 578 666 590 636 590 H560 Z
+    M560 662 H648 C680 662 700 674 700 702 C700 732 680 744 648 744 H560 Z"/>
+  <clipPath id="bClip"><use href="#Bpath"/></clipPath>
+  <g id="Bbadge">
+    <use href="#Bpath" fill="url(#bBody)"/>
+    <g clip-path="url(#bClip)">
+      <path d="M596 400 L806 400 L806 624 L704 596 L632 512 Z" fill="url(#bFacet)"/>
+      <path d="M600 400 L806 400 L806 470 L628 470 Z" fill="#8ec2e4" opacity=".22"/>
+    </g>
+    <use href="#Bpath" fill="none" stroke="#070c22" stroke-width="7"/>
+  </g>
+  <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur stdDeviation="7"/>
+  </filter>
+  <filter id="soft2" x="-40%" y="-40%" width="180%" height="180%">
+    <feGaussianBlur stdDeviation="16"/>
+  </filter>
+</defs>
+
+<!-- ══════════════════════ CAMERA ══════════════════════ -->
+<g id="cam">
+<g id="world">
+
+  <!-- ───────── far background (blurred, parallax) ───────── -->
+  <g id="bgFar" filter="url(#soft2)">
+    <rect x="-60" y="-60" width="1720" height="1020" fill="url(#wallGrad)"/>
+    <rect x="-60" y="-60" width="1720" height="1020" fill="url(#spotGrad)"/>
+    <!-- gallery arches -->
+    <g fill="none" stroke="#17324a" stroke-width="10" opacity=".75">
+      <path d="M120 720 V330 a110 110 0 0 1 220 0 V720"/>
+      <path d="M560 720 V330 a110 110 0 0 1 220 0 V720"/>
+      <path d="M1000 720 V330 a110 110 0 0 1 220 0 V720"/>
+      <path d="M1440 720 V330 a110 110 0 0 1 220 0 V720"/>
+    </g>
+  </g>
+
+  <!-- ───────── mid background ───────── -->
+  <g id="bgMid">
+    <!-- light cone over the pedestal -->
+    <polygon points="352,-40 508,-40 700,720 160,720" fill="url(#coneGrad)" filter="url(#soft)"/>
+    <!-- light cone over the crate -->
+    <polygon points="1150,-40 1290,-40 1420,720 980,720" fill="url(#coneGrad)" opacity=".55" filter="url(#soft)"/>
+    <!-- floor -->
+    <rect x="-60" y="700" width="1720" height="240" fill="url(#floorGrad)"/>
+    <g stroke="#1f5170" stroke-width="2" opacity=".3">
+      <line x1="-60" y1="700" x2="1660" y2="700"/>
+      <line x1="-60" y1="792" x2="1660" y2="792" opacity=".5"/>
+      <line x1="-60" y1="860" x2="1660" y2="860" opacity=".3"/>
+    </g>
+    <!-- floor sheen under the light -->
+    <ellipse cx="400" cy="716" rx="300" ry="26" fill="#5fb8e8" opacity=".10" filter="url(#soft)"/>
+    <ellipse cx="1210" cy="716" rx="280" ry="24" fill="#5fb8e8" opacity=".08" filter="url(#soft)"/>
+  </g>
+
+  <!-- ───────── mid: pedestal ───────── -->
+  <g id="plinth">
+    <ellipse cx="430" cy="706" rx="200" ry="18" fill="#000" opacity=".5" filter="url(#soft)"/>
+    <!-- plinth -->
+    <polygon class="p" points="300,536 560,536 530,570 330,570" fill="url(#plinthTop)"/>
+    <rect class="p" x="330" y="570" width="200" height="132" rx="5" fill="url(#plinthFace)"/>
+    <rect x="330" y="570" width="200" height="7" fill="#4fd0ff" opacity=".75"/>
+    <rect x="352" y="612" width="156" height="56" rx="4" fill="#08121c" opacity=".85"/>
+    <text x="430" y="650" text-anchor="middle" font-family="ui-monospace,monospace"
+          font-size="20" letter-spacing="6" fill="#3f6d92">B / 01</text>
+    <ellipse id="lootGlow" cx="430" cy="440" rx="185" ry="180" fill="url(#warmGlow)"/>
+  </g>
+
+  <!-- ───────── the loot ───────── -->
+  <g id="bToken"><g transform="translate(-615,-615)"><use href="#Bbadge"/></g></g>
+
+  <!-- ───────── squirrel shadow ───────── -->
+  <ellipse id="sqShadow" cx="0" cy="0" rx="80" ry="15" fill="#000" opacity=".45"/>
+
+  <!-- ───────── the crate: back half ───────── -->
+  <g id="crateBack">
+    <ellipse id="crateGlow" cx="1210" cy="620" rx="330" ry="230" fill="url(#crateHalo)"/>
+    <ellipse cx="1210" cy="704" rx="230" ry="18" fill="#000" opacity=".55" filter="url(#soft)"/>
+    <!-- interior -->
+    <rect class="p" x="1030" y="470" width="360" height="220" rx="10" fill="#060d16"/>
+    <rect x="1050" y="490" width="320" height="180" rx="6" fill="#02060c"/>
+    <!-- interior sparkles -->
+    <g fill="#8fe3ff">
+      <use class="tw"    href="#spark" transform="translate(1108 546) scale(.26)"/>
+      <use class="tw d1" href="#spark" transform="translate(1206 530) scale(.34)"/>
+      <use class="tw d2" href="#spark" transform="translate(1300 552) scale(.22)"/>
+      <use class="tw d3" href="#spark" transform="translate(1160 574) scale(.16)"/>
+    </g>
+    <!-- side walls (perspective) -->
+    <polygon class="p" points="1030,470 1000,492 1000,700 1030,700" fill="url(#crateSide)"/>
+    <polygon class="p" points="1390,470 1420,492 1420,700 1390,700" fill="url(#crateSide)"/>
+  </g>
+
+  <!-- ───────── the crate: front half + lid ───────── -->
+  <g id="crateFront">
+    <path class="p" d="M1000 600 H1420 V676 A24 24 0 0 1 1396 700 H1024 A24 24 0 0 1 1000 676 Z" fill="url(#crateFace)"/>
+    <line x1="1002" y1="601" x2="1418" y2="601" stroke="url(#rimGrad)" stroke-width="8" stroke-linecap="round"/>
+    <rect x="1120" y="628" width="180" height="52" rx="7" fill="#08111c" stroke="#17384f" stroke-width="3"/>
+    <text x="1210" y="666" text-anchor="middle" font-family="ui-monospace,monospace"
+          font-size="22" letter-spacing="9" fill="#2f6d94">BBX</text>
+    <!-- vertical ribs -->
+    <g stroke="#0a1622" stroke-width="4" opacity=".8">
+      <line x1="1060" y1="612" x2="1060" y2="692"/><line x1="1360" y1="612" x2="1360" y2="692"/>
+    </g>
+    <!-- rim -->
+    <rect x="992" y="462" width="436" height="252" rx="16" fill="none" stroke="url(#rimGrad)" stroke-width="9"/>
+    <!-- lid, hinged at the back-left rim -->
+    <g transform="translate(1030,470)">
+      <g id="lid">
+        <rect class="p" x="0" y="-10" width="360" height="26" rx="13" fill="#20415e"/>
+        <rect id="lidShine" x="18" y="-6" width="326" height="7" rx="4" fill="#7fe1ff" opacity="0"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- ───────── the squirrel ───────── -->
+  <g id="sqPos">
+    <g id="sqSquash">
+      <g class="sq-bob">
+        <g transform="scale(-1,1)">
+          <g transform="scale(.55)">
+
+            <!-- TAIL (outline pass + colour pass) -->
+            <g id="tail">
+              <path d="M-16 -74 C86 -46 190 -122 168 -206 C152 -268 84 -286 54 -246"
+                    fill="none" stroke="#0a1018" stroke-width="58" stroke-linecap="round"/>
+              <path d="M-16 -74 C86 -46 190 -122 168 -206 C152 -268 84 -286 54 -246"
+                    fill="none" stroke="#c07a33" stroke-width="46" stroke-linecap="round"/>
+              <path d="M-16 -74 C86 -46 190 -122 168 -206 C152 -268 84 -286 54 -246"
+                    fill="none" stroke="#e6a35b" stroke-width="20" stroke-linecap="round"
+                    transform="translate(2,-10)" opacity=".75"/>
+            </g>
+
+            <!-- back foot -->
+            <ellipse class="o" cx="16" cy="-11" rx="31" ry="14" fill="#b9722f"/>
+            <!-- body -->
+            <ellipse class="o" cx="-10" cy="-96" rx="63" ry="74" fill="#d98a47"/>
+            <!-- shadow side -->
+            <path class="o" d="M-62 -128 C-84 -78 -74 -38 -32 -26 C-58 -50 -56 -98 -40 -130 Z" fill="#b9722f"/>
+            <!-- belly -->
+            <ellipse cx="-34" cy="-88" rx="40" ry="56" fill="#f6d7ae" opacity=".95"/>
+            <!-- rim light -->
+            <path d="M36 -152 C56 -120 56 -66 30 -32" fill="none" stroke="#ffd9a8" stroke-width="6"
+                  stroke-linecap="round" opacity=".55"/>
+            <!-- front foot -->
+            <ellipse class="o" cx="-42" cy="-9" rx="27" ry="13" fill="#e0964f"/>
+
+            <!-- arms: one pose at a time -->
+            <g id="armIdle">
+              <path d="M-30 -152 C-52 -128 -66 -108 -74 -92" fill="none" stroke="#0a1018" stroke-width="24" stroke-linecap="round"/>
+              <path d="M-30 -152 C-52 -128 -66 -108 -74 -92" fill="none" stroke="#d98a47" stroke-width="16" stroke-linecap="round"/>
+              <circle class="o" cx="-76" cy="-88" r="12" fill="#f6d7ae"/>
+            </g>
+            <g id="armGrab">
+              <path d="M-28 -156 C-56 -182 -74 -202 -86 -214" fill="none" stroke="#0a1018" stroke-width="24" stroke-linecap="round"/>
+              <path d="M-28 -156 C-56 -182 -74 -202 -86 -214" fill="none" stroke="#d98a47" stroke-width="16" stroke-linecap="round"/>
+              <circle class="o" cx="-88" cy="-218" r="12" fill="#f6d7ae"/>
+              <path d="M-6 -150 C-30 -186 -44 -206 -52 -222" fill="none" stroke="#0a1018" stroke-width="22" stroke-linecap="round"/>
+              <path d="M-6 -150 C-30 -186 -44 -206 -52 -222" fill="none" stroke="#c07a33" stroke-width="14" stroke-linecap="round"/>
+              <circle class="o" cx="-52" cy="-226" r="11" fill="#e8b98c"/>
+            </g>
+            <g id="armCarry">
+              <path d="M-30 -156 C-58 -196 -62 -232 -40 -252" fill="none" stroke="#0a1018" stroke-width="24" stroke-linecap="round"/>
+              <path d="M-30 -156 C-58 -196 -62 -232 -40 -252" fill="none" stroke="#d98a47" stroke-width="16" stroke-linecap="round"/>
+              <circle class="o" cx="-38" cy="-256" r="12" fill="#f6d7ae"/>
+              <path d="M0 -150 C8 -196 -4 -238 -30 -256" fill="none" stroke="#0a1018" stroke-width="22" stroke-linecap="round"/>
+              <path d="M0 -150 C8 -196 -4 -238 -30 -256" fill="none" stroke="#c07a33" stroke-width="14" stroke-linecap="round"/>
+              <circle class="o" cx="-32" cy="-260" r="11" fill="#e8b98c"/>
+            </g>
+            <g id="armSmug">
+              <path d="M-26 -150 C-4 -152 16 -160 30 -172" fill="none" stroke="#0a1018" stroke-width="24" stroke-linecap="round"/>
+              <path d="M-26 -150 C-4 -152 16 -160 30 -172" fill="none" stroke="#d98a47" stroke-width="16" stroke-linecap="round"/>
+              <circle class="o" cx="32" cy="-174" r="12" fill="#f6d7ae"/>
+            </g>
+
+            <!-- HEAD -->
+            <g id="head">
+              <!-- ears -->
+              <circle class="o" cx="-52" cy="-244" r="19" fill="#c07a33"/>
+              <circle cx="-52" cy="-244" r="9.5" fill="#f2c79a"/>
+              <circle class="o" cx="-8" cy="-250" r="16" fill="#c07a33"/>
+              <circle cx="-8" cy="-250" r="8" fill="#f2c79a"/>
+              <!-- skull -->
+              <circle class="o" cx="-28" cy="-198" r="53" fill="#e0964f"/>
+              <!-- cheek -->
+              <ellipse class="o" cx="-66" cy="-176" rx="27" ry="22" fill="#f6d7ae"/>
+              <!-- snout + nose -->
+              <ellipse class="o" cx="-84" cy="-186" rx="14" ry="11.5" fill="#2b1a12"/>
+              <circle class="o" cx="-93" cy="-190" r="7" fill="#120a06"/>
+              <!-- mouth -->
+              <path d="M-80 -166 q10 9 21 2" fill="none" stroke="#8a5230" stroke-width="3.6" stroke-linecap="round"/>
+              <!-- bandit mask -->
+              <path class="o" d="M-84 -220 C-56 -232 -22 -230 -2 -216 C4 -204 0 -194 -10 -190
+                                C-40 -180 -72 -184 -84 -194 C-92 -202 -92 -212 -84 -220 Z" fill="#0e1a2e"/>
+              <path d="M-84 -219 C-56 -231 -22 -229 -2 -215" fill="none" stroke="#35c2ff" stroke-width="3.4" opacity=".9"/>
+              <path d="M-2 -214 C12 -222 26 -218 30 -208" fill="none" stroke="#0e1a2e" stroke-width="8" stroke-linecap="round"/>
+
+              <!-- expression: normal -->
+              <g id="faceNormal">
+                <ellipse class="o" cx="-58" cy="-204" rx="15" ry="13" fill="#fbfdff"/>
+                <ellipse class="o" cx="-26" cy="-208" rx="15" ry="13" fill="#fbfdff"/>
+                <circle cx="-64" cy="-204" r="6.6" fill="#0a0f1a"/>
+                <circle cx="-32" cy="-208" r="6.6" fill="#0a0f1a"/>
+                <circle cx="-66" cy="-207" r="2.3" fill="#fff"/>
+                <circle cx="-34" cy="-211" r="2.3" fill="#fff"/>
+              </g>
+              <!-- expression: wide-eyed -->
+              <g id="faceWide" opacity="0">
+                <ellipse class="o" cx="-58" cy="-204" rx="19" ry="18" fill="#fbfdff"/>
+                <ellipse class="o" cx="-24" cy="-208" rx="19" ry="18" fill="#fbfdff"/>
+                <circle cx="-64" cy="-204" r="4.4" fill="#0a0f1a"/>
+                <circle cx="-30" cy="-208" r="4.4" fill="#0a0f1a"/>
+              </g>
+              <!-- expression: smug (half-lidded) -->
+              <g id="faceSmug" opacity="0">
+                <ellipse class="o" cx="-58" cy="-204" rx="15" ry="13" fill="#fbfdff"/>
+                <ellipse class="o" cx="-26" cy="-208" rx="15" ry="13" fill="#fbfdff"/>
+                <circle cx="-58" cy="-200" r="6.4" fill="#0a0f1a"/>
+                <circle cx="-26" cy="-204" r="6.4" fill="#0a0f1a"/>
+                <path class="o" d="M-74 -210 H-42" stroke="#0a1018" stroke-width="5" stroke-linecap="round"/>
+                <path class="o" d="M-42 -214 H-10" stroke="#0a1018" stroke-width="5" stroke-linecap="round"/>
+                <path d="M-74 -166 q14 12 28 0" fill="none" stroke="#8a5230" stroke-width="4" stroke-linecap="round"/>
+              </g>
+            </g>
+
+          </g>
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <!-- ───────── dust ───────── -->
+  <g id="puffA" opacity="0">
+    <circle class="o" cx="316" cy="534" r="18" fill="#c8dfec"/>
+    <circle class="o" cx="356" cy="520" r="12" fill="#c8dfec"/>
+    <circle class="o" cx="278" cy="522" r="10" fill="#c8dfec"/>
+  </g>
+  <g id="puffB" opacity="0">
+    <circle class="o" cx="356" cy="698" r="20" fill="#c8dfec"/>
+    <circle class="o" cx="404" cy="686" r="13" fill="#c8dfec"/>
+    <circle class="o" cx="310" cy="688" r="11" fill="#c8dfec"/>
+  </g>
+  <g id="puffC" opacity="0">
+    <circle class="o" cx="1180" cy="596" r="22" fill="#bfe6f7"/>
+    <circle class="o" cx="1250" cy="586" r="14" fill="#bfe6f7"/>
+    <circle class="o" cx="1110" cy="588" r="12" fill="#bfe6f7"/>
+  </g>
+
+  <!-- ───────── burst ───────── -->
+  <g id="burst">
+    <g class="sp" style="--dx:-150px;--dy:-160px"><use href="#spark" transform="translate(1210 500) scale(.5)" fill="#ffffff"/></g>
+    <g class="sp" style="--dx:-50px; --dy:-220px"><use href="#spark" transform="translate(1210 500) scale(.36)" fill="#57d9ff"/></g>
+    <g class="sp" style="--dx:66px;  --dy:-200px"><use href="#spark" transform="translate(1210 500) scale(.44)" fill="#ffffff"/></g>
+    <g class="sp" style="--dx:170px; --dy:-120px"><use href="#spark" transform="translate(1210 500) scale(.3)" fill="#57d9ff"/></g>
+    <g class="sp" style="--dx:130px; --dy:-30px"><use  href="#spark" transform="translate(1210 500) scale(.24)" fill="#ffffff"/></g>
+    <g class="sp" style="--dx:-130px;--dy:-40px"><use  href="#spark" transform="translate(1210 500) scale(.2)" fill="#57d9ff"/></g>
+  </g>
+
+  <!-- ───────── final stars + lockup (world-anchored over the crate) ───────── -->
+  <g id="logoStars">
+    <circle cx="1210" cy="404" r="150" fill="url(#crateHalo)" opacity=".5"/>
+    <use class="tw"    href="#spark" transform="translate(1210 404) scale(1.0)" fill="#ffffff"/>
+    <use class="tw d1" href="#spark" transform="translate(1024 512) scale(.66)" fill="#57d9ff"/>
+    <use class="tw d2" href="#spark" transform="translate(1002 636) scale(.42)" fill="#ffffff"/>
+    <use class="tw d3" href="#spark" transform="translate(1418 512) scale(.62)" fill="#57d9ff"/>
+    <use class="tw d1" href="#spark" transform="translate(1406 646) scale(.38)" fill="#ffffff"/>
+  </g>
+
+  <g id="lockup">
+    <text x="1210" y="250" text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,'Segoe UI',Roboto,Arial,sans-serif"
+          font-size="82" font-weight="800" letter-spacing="13" fill="#eaf6ff">BLACKBOX</text>
+    <text x="1210" y="300" text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,'Segoe UI',Roboto,Arial,sans-serif"
+          font-size="25" font-weight="700" letter-spacing="18" fill="#35c2ff">STREAM</text>
+    <text x="1210" y="344" text-anchor="middle"
+          font-family="ui-monospace,monospace" font-size="17" letter-spacing="5" fill="#4c6f8c">
+      NOBODY KNOWS WHAT&rsquo;S IN THE BOX
+    </text>
+  </g>
+
+  <!-- ───────── near foreground: pillar + blur (depth) ───────── -->
+  <g id="fgNear" filter="url(#soft)">
+    <rect x="-20" y="-40" width="210" height="1000" fill="#040810"/>
+    <rect x="186" y="-40" width="10" height="1000" fill="#12283a" opacity=".7"/>
+    <rect x="1610" y="-40" width="120" height="1000" fill="#040810"/>
+  </g>
+  <rect width="1600" height="900" fill="url(#vig)" pointer-events="none"/>
+
+</g>
+</g>
+
+<rect id="curtain" width="1600" height="900" fill="#03060a" opacity="0"/>
+</svg>
+</div></div>
+<div class="status"><span class="dot"></span><b id="bbxSplashText">Starting BlackBox Stream</b>
+<small>your library opens in a moment</small></div>
+</body>
+</html>

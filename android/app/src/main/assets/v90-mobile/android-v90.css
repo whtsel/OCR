@@ -1,0 +1,37 @@
+/* Responsive Android additions. Everything else is the desktop v90 stylesheet. */
+.bbx-android .android-tools-row { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; margin:.7rem 0; }
+.bbx-android .android-privacy { margin:.65rem 0; }
+.bbx-android .android-desktop-only,
+.bbx-android .android-ads-disabled > :not(#buildExpiryV90),
+.bbx-android .ad-space-v49,
+.bbx-android .android-file-chooser video,
+.bbx-android .android-file-chooser #seasonPackPanel,
+.bbx-android .android-file-chooser #stopDownload,
+.bbx-android .android-file-chooser #saveSelectedFile,
+.bbx-android .android-file-chooser #dlLockNote,
+.bbx-android #navWeb { display:none !important; }
+.bbx-android .android-file-chooser .player { min-height:0; }
+.bbx-android .android-file-chooser .file-play-pill-v74,
+.bbx-android .android-file-chooser .file-dl-pill-v74 { padding:8px 10px; }
+.bbx-android .android-release-title { flex:1 0 100%; color:inherit; }
+.bbx-android .android-source-search:not([hidden]) { display:grid; gap:.65rem; justify-items:start; margin:.7rem 0 1.3rem; }
+.bbx-android .android-source-search .src { width:100%; flex-wrap:wrap; }
+.bbx-android .android-library-row { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:14px; gap:8px; }
+.bbx-android .android-keyless { min-height:0; padding-bottom:10px; }
+.bbx-android .android-keyless .hero-inner { min-height:0; padding-block:clamp(18px, 5vw, 54px); }
+.bbx-android .android-keyless h1 { font-size:clamp(1.7rem, 5vw, 3.2rem); }
+.bbx-android .android-keyless .hero-desc { display:block; }
+.bbx-android .android-ads-disabled { padding:0; border:0; background:none; }
+.bbx-android .android-music-actions { margin-top:14px; }
+@media (max-width: 760px) {
+  .bbx-android .topbar { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px 8px; padding:7px 12px; }
+  .bbx-android .brand { grid-column:1; grid-row:1; min-width:0; min-height:42px; }
+  .bbx-android .topactions { grid-column:2; grid-row:1; display:flex; align-items:center; }
+  .bbx-android .nav { grid-column:1/-1; grid-row:2; display:flex; justify-content:flex-start; overflow-x:auto; scrollbar-width:none; width:100%; }
+  .bbx-android .nav .navlink { flex:0 0 auto; min-height:40px; }
+  .bbx-android .searchwrap { grid-column:1/-1; grid-row:3; max-width:none; width:100%; min-width:0; }
+  .bbx-android .searchwrap input { min-height:41px; font-size:16px; }
+  .bbx-android .topactions .langsel { max-width:90px; }
+  .bbx-android .android-tools-row button { min-height:42px; }
+  .bbx-android .android-file-chooser .file { min-height:52px; }
+}

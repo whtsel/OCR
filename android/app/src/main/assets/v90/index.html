@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BlackBox Stream v90</title>
+  <link rel="stylesheet" href="/styles.css?v=74r10" />
+  <link rel="stylesheet" href="/local-share-v70.css?v=74r10" />
+  <link rel="stylesheet" href="/v73.css?v=74r10" />
+  <link rel="stylesheet" href="/v74.css?v=74r10" />
+  <link rel="stylesheet" href="/anime-media-v74.css?v=74r10" />
+  <link rel="stylesheet" href="/simple-player-v74.css?v=74simple" />
+  <link rel="stylesheet" href="/music-tidy-v74.css?v=74music" />
+  <link rel="stylesheet" href="/music-picker-v78.css?v=78pick" />
+  <link rel="stylesheet" href="/music-library-v79.css?v=79lib" />
+  <link rel="stylesheet" href="/finish-v85.css?v=85finish" />
+  <link rel="stylesheet" href="/privacy-v86.css?v=86priv" />
+  <link rel="stylesheet" href="/ads-v88.css?v=88ads" />
+</head>
+<body>
+
+<!-- ============================ shell ============================ -->
+<header class="topbar">
+  <button class="brand" id="homeBtn">
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+      <path d="M12 2 3 6.5v11L12 22l9-4.5v-11L12 2Z" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <path d="M10 9.2v5.6l5-2.8-5-2.8Z" fill="currentColor"/>
+    </svg>
+    <span>BlackBox<span class="dim">Stream</span></span>
+  </button>
+
+  <nav class="nav">
+    <button class="navlink active" data-nav="home">Home</button>
+    <button class="navlink" data-nav="movies">Movies</button>
+    <button class="navlink" data-nav="series">Series</button>
+    <button class="navlink" data-nav="anime">Anime</button>
+    <button class="navlink" data-nav="music" id="navMusic">Music</button>
+    <button class="navlink" data-nav="web" id="navWeb" hidden>Anime Web</button>
+    <button class="navlink" data-nav="list" id="navList">My List</button>
+    <button class="navlink" data-nav="library">Library</button>
+    <button class="navlink" data-nav="share" id="navShare">Local Share</button>
+  </nav>
+
+  <div class="searchwrap">
+    <input id="searchInput" type="search" placeholder="Search movies and series…" autocomplete="off" />
+    <div id="suggestBox" class="suggest" hidden></div>
+    <button id="searchBtn" class="iconbtn" title="Search">
+      <svg viewBox="0 0 24 24" width="17" height="17"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16.5 16.5 4 4" stroke="currentColor" stroke-width="2"/></svg>
+    </button>
+  </div>
+
+  <div class="topactions">
+    <select id="langSel" class="langsel" title="Catalogue language">
+      <option value="en-US">English</option>
+      <option value="es-ES">Español</option>
+      <option value="fr-FR">Français</option>
+      <option value="de-DE">Deutsch</option>
+      <option value="hi-IN">हिन्दी</option>
+      <option value="ar-SA">العربية</option>
+      <option value="id-ID">Indonesia</option>
+      <option value="pt-BR">Português</option>
+      <option value="ur-PK">اردو</option>
+      <option value="fil-PH">Filipino</option>
+    </select>
+    <span id="bbxVer" class="bbxver" title="Build version. If this is not the version you just installed, the browser served a cached copy — press Ctrl+F5 once.">v90</span>
+    <button id="communityGlobalCount" class="community-global-count-v80" type="button" title="Peer-confirmed community users online">● Checking peers…</button>
+    <span id="engineDot" class="dot" title="engine status"></span>
+    <button id="settingsBtn" class="iconbtn" title="Settings">
+      <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" stroke="currentColor" stroke-width="2"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="catbar" id="catBar">
+  <button class="cat on" data-cat="home">Home</button>
+  <button class="cat" data-cat="movie">Movies</button>
+  <button class="cat" data-cat="tv">TV Series</button>
+  <button class="cat" data-cat="trending">Trending</button>
+  <button class="cat" data-cat="top">Top rated</button>
+  <button class="cat" data-cat="upcoming">Coming soon</button>
+  <button class="cat" data-cat="anime">Anime</button>
+  <button class="cat" data-cat="c-drama" title="Chinese dramas (Mandarin/Cantonese)">Chinese Drama</button>
+  <button class="cat" data-cat="c-movie" title="Chinese-produced, Chinese-language films">Chinese Movies</button>
+  <button class="cat" data-cat="hindi" title="Hindi / Bollywood">Hindi</button>
+  <button class="cat" data-cat="genre:16">Animation</button>
+  <button class="cat" data-cat="genre:28">Action</button>
+  <button class="cat" data-cat="genre:35">Comedy</button>
+  <button class="cat" data-cat="genre:27">Horror</button>
+  <button class="cat" data-cat="genre:10749">Romance</button>
+  <button class="cat" data-cat="genre:878">Sci-Fi</button>
+</div>
+
+<main id="app">
+
+  <!-- ---------- HOME ---------- -->
+  <section id="viewHome" class="view">
+    <div id="hero" class="hero">
+      <div class="hero-skeleton">Loading…</div>
+    </div>
+    <!-- Home's advertisement, in the document rather than built by the home-row script:
+         measured, the rows script never reaches the code that appended it (one /api/tmdb
+         call, zero rows), so the box was simply missing from Home. As a plain element here
+         it cannot fail to render, and it is ONE box - the three-per-row layout belongs to
+         the category pages only. -->
+    <div class="home-ad-solo-v83" role="note" aria-label="Advertisement contact information">
+      <div class="ad-space-v49">
+        <span>ADVERTISEMENT ENQUIRIES</span>
+        <strong>Contact for advertisement</strong>
+      </div>
+    </div>
+    <div id="heroDots" class="hero-dots"></div>
+    <div id="rows"></div>
+</section>
+
+  <!-- ---------- SEARCH / BROWSE ---------- -->
+  <section id="viewBrowse" class="view" hidden>
+    <h1 id="browseTitle" class="viewtitle">Search</h1>
+
+    <!-- Three advertisements per row on every category page (Movies, TV Series, Trending,
+         Top rated, Coming soon, Anime, Chinese Drama, Chinese Movies, Hindi, Animation,
+         Action, Comedy, Horror, Romance, Sci-Fi) - the same box as everywhere else, three
+         of them, evenly spaced. Home keeps a single box: see makeRow()/home-ad-resume-v80. -->
+    <div class="ad-trio-v83" role="note" aria-label="Advertisement contact information">
+      <div class="ad-space-v49">
+        <span>ADVERTISEMENT ENQUIRIES</span>
+        <strong>Contact for advertisement</strong>
+      </div>
+      <div class="ad-space-v49">
+        <span>ADVERTISEMENT ENQUIRIES</span>
+        <strong>Contact for advertisement</strong>
+      </div>
+      <div class="ad-space-v49">
+        <span>ADVERTISEMENT ENQUIRIES</span>
+        <strong>Contact for advertisement</strong>
+      </div>
+    </div>
+
+    <p id="browseAfricanNotice" class="african-origin-note-v80" hidden>Only titles with documented African production countries are shown. International productions with non-African production countries are excluded.</p>
+    <div id="browseFilters" class="filterbar browse" hidden>
+      <label class="filt"><span>Type</span>
+        <select id="fType">
+          <option value="all">All</option>
+          <option value="movie">Movies</option>
+          <option value="tv">Series</option>
+        </select>
+      </label>
+      <label class="filt"><span>Year</span>
+        <select id="fYear"><option value="">Any</option></select>
+      </label>
+      <label class="filt"><span>Sort</span>
+        <select id="fSortBy">
+          <option value="relevance">Relevance</option>
+          <option value="popularity">Popularity</option>
+          <option value="rating">Rating</option>
+          <option value="newest">Newest</option>
+        </select>
+      </label>
+      <span class="sub" id="resultCount"></span>
+    </div>
+    <div id="genreBar" class="genres"></div>
+    <div id="browseGrid" class="grid"></div>
+    <div class="morewrap"><button id="browseMore" class="secondary" hidden>Load more</button>
+      <span class="sub" id="moreState"></span></div>
+</section>
+
+  <!-- ---------- MY LIST ---------- -->
+  <section id="viewList" class="view" hidden>
+    <h1 class="viewtitle">My List</h1>
+
+    <div class="ad-space-v49" role="note" aria-label="Advertisement contact information">
+      <span>ADVERTISEMENT ENQUIRIES</span>
+      <strong>Contact for advertisement</strong>
+    </div>
+
+    <p class="sub">Saved titles. Coming-soon titles stay here until a release appears.</p>
+    <div id="watchGrid" class="grid"></div>
+</section>
+
+  <!-- ---------- DETAIL ---------- -->
+  <section id="viewDetail" class="view" hidden>
+    <button class="backbtn" id="detailBack">&larr; Back</button>
+
+    <div class="ad-space-v49" role="note" aria-label="Advertisement contact information">
+      <span>ADVERTISEMENT ENQUIRIES</span>
+      <strong>Contact for advertisement</strong>
+    </div>
+
+    <div id="detailBody"></div>
+</section>
+
+  <!-- ---------- ANIME WEB (v21) ----------
+       Some titles only exist behind a site that refuses to be scraped. This tab puts the
+       site itself in our window: their player, their scripts, no extraction, nothing new
+       downloaded. Only sites measured as embeddable are listed. -->
+  <section id="viewWeb" class="view" hidden>
+    <h1 class="viewtitle">Anime Web</h1>
+
+    <div class="ad-space-v49" role="note" aria-label="Advertisement contact information">
+      <span>ADVERTISEMENT ENQUIRIES</span>
+      <strong>Contact for advertisement</strong>
+    </div>
+
+
+    <!-- What a person actually has is a title, not a URL. This is the primary control:
+         type the show, press play, watch. Nothing third-party is involved. -->
+    <div class="findbar" id="findRow">
+      <span class="findbar-label">▶ Watch something</span>
+      <input id="findTitle" class="srcinput find-input" type="search" spellcheck="false"
+             placeholder="Type a title — e.g. Bleach" autocomplete="off" />
+      <input id="findEp" class="find-ep" type="number" min="1" step="1"
+             placeholder="Ep" title="Episode number (leave empty for the newest)" />
+      <button id="findGo" class="primary">▶ Find &amp; play</button>
+      <span class="sub find-note">
+        No link needed. The app searches the site for that title, takes the series it names,
+        and plays the episode here — in our player, with no site, no ads and no pop-ups.
+      </span>
+    </div>
+    <div class="epchips" id="epRow" hidden></div>
+
+    <!-- The choice comes first, and nothing third-party loads until it is made. -->
+    <div class="webchooser" id="webChooser">
+      <div class="wc-card primarycard">
+        <h2>▶ Play in the app</h2>
+        <p class="sub">
+          Our player, our page. No ads, no pop-ups, no site to navigate — and the English
+          subtitles come out of the release file itself. This is the path where everything
+          you see belongs to this app.
+        </p>
+        <div class="wc-actions">
+          <button class="primary" id="webInApp">▶ Play in the app</button>
+          <span class="sub" id="webInAppNote">looks for this title in the sources</span>
+        </div>
+      </div>
+
+      <div class="wc-card">
+        <h2>Or open a site in here</h2>
+        <p class="sub">
+          Those pages belong to someone else: their ads, their language, their layout. We
+          cannot change any of that from outside. What we do stop is the part that is
+          actually dangerous — new tabs, pop-ups, and the page redirecting this app.
+        </p>
+        <div class="wcsites" id="webSites"></div>
+        <p class="sub wc-note" id="webSandboxNote"></p>
+      </div>
+    </div>
+
+    <div class="webtools" id="webTools" hidden>
+      <select id="webSite" class="langsel" title="Site"></select>
+      <input id="webQuery" class="srcinput" type="search" spellcheck="false"
+             placeholder="Title to look for on the site" />
+      <button id="webGo" class="secondary">Search</button>
+      <button id="webReload" class="secondary" title="Reload the page">↻</button>
+      <button id="webBack" class="secondary" title="Back inside the site">←</button>
+      <button id="webFull" class="secondary" title="Fill the window">⛶ Full screen</button>
+      <button id="webLeave" class="ghost" title="Back to the in-app player">◀ Play in the app</button>
+    </div>
+    <p class="sub webnote">The frame sandbox is permanent. If a site refuses it, use <strong>⤓ Use this page</strong> or <strong>▶ Play link in the app</strong>.</p>
+
+    <!-- The route that needs no sandbox and shows no ads: the engine takes the stream out
+         of the page and our own player plays it. -->
+    <div class="weblink" id="webLinkRow">
+      <span class="weblink-label">Have a link? <span class="opt">(optional)</span></span>
+      <input id="webLink" class="srcinput" type="url" spellcheck="false"
+             placeholder="Paste an episode page address (https://…)" />
+      <button id="webRescue" class="secondary"
+              title="Take the page already open in the frame above and play it in our player">⤓ Use this page</button>
+      <button id="webLinkGo" class="primary">▶ Play link in the app</button>
+      <span class="sub">Only needed if you want one exact episode. <strong>⤓ Use this page</strong>
+        takes whatever address is in the frame above — you never have to type one.</span>
+    </div>
+    <p class="sub webnote" id="webNote" hidden></p>
+    <div class="webofficial" id="webOfficial"><span class="sub officialnote">External launches are disabled; BlackBox keeps playback inside the app.</span></div>
+    <div class="webframe" id="webFrameWrap" hidden>
+      <!-- The permanent sandbox omits popup, top-navigation and download capabilities.
+           This stops an ad from opening a tab, spawning a pop-up, or sending the whole app
+           somewhere else. Scripts and the framed provider's own origin remain available;
+           CSP limits frames to the fixed cross-origin allowlist, never the BlackBox origin. -->
+      <iframe id="webFrame" title="Anime site" allowfullscreen
+              sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+              allow="fullscreen; encrypted-media; picture-in-picture"
+              referrerpolicy="no-referrer"></iframe>
+    </div>
+    <p class="sub webhint" id="webHint" hidden>
+      The page inside the frame is theirs, not ours — its ads and its language come with it.
+      Nothing here starts by itself: a framed page has to wait for your click.
+      If its player refuses to run, <strong>⤓ Use this page</strong> walks the page's own chain in the
+      engine and plays the stream in our player — no page, no ads, no wall.
+    </p>
+</section>
+
+  <!-- ---------- COMMUNITY v74 · randomized peer-confirmed E2EE + Subtitle Commons ---------- -->
+
+  <!-- ---------- MUSIC ---------- -->
+  <section id="viewMusic" class="view music-view-v47" hidden>
+    <div class="music-hero-v47">
+      <div class="music-hero-glow music-glow-one"></div>
+      <div class="music-hero-glow music-glow-two"></div>
+      <div class="music-hero-content">
+        <span class="music-eyebrow-v47">BLACKBOX MUSIC</span>
+        <h1>Find your sound.</h1>
+        <p>Search artists, browse clearly separated albums and ordered tracks, or save a whole album into its own offline collection. Exact audio still comes from outside BlackBox and is never replaced with a different title.</p>
+        <div class="music-hero-searchline-v83">
+          <div class="music-search-dock-v47">
+            <span class="music-search-icon-v47">⌕</span>
+            <input id="musicQuery" type="search" placeholder="Search a song, artist or album" autocomplete="off" />
+            <button id="musicGo" class="music-search-btn-v47">Search</button>
+            <button id="musicClear" class="music-clear-btn-v47" hidden>Clear</button>
+          </div>
+          <!-- The music advertisement sits directly to the right of the search bar, in the
+               hero's empty right side, and is the same box as the ones on the browse,
+               detail and web pages: same 2-card width and height from --ad-slot-*-v80,
+               so it reads as one placement used everywhere rather than a second style. -->
+          <div class="ad-space-v49 music-hero-ad-v83" role="note" aria-label="Advertisement contact information">
+            <span>ADVERTISEMENT ENQUIRIES</span>
+            <strong>Contact for advertisement</strong>
+          </div>
+        </div>
+        <div class="music-hero-meta-v47">
+          <span><b>14</b> curated genres</span><span><b>2,620</b> full albums</span><span><b>35,995</b> ordered tracks</span><span>Whole-album offline collections</span>
+        </div>
+        <span id="musicMsg" class="music-message-v47"></span>
+      </div>
+    </div>
+
+    <div id="musicSourcePopup" class="music-source-popup-v59" role="dialog" aria-modal="true" aria-labelledby="musicSourcePopupTitle" aria-describedby="musicSourcePopupCopy" hidden>
+      <div id="musicSourcePopupCard" class="music-source-popup-card-v59">
+        <button id="musicSourcePopupDrag" class="music-source-popup-drag-v70" type="button" aria-label="Drag the Music source notice" title="Drag to move · double-click to reset">⋮⋮</button>
+        <span class="music-source-popup-kicker-v59">5-SECOND SOURCE NOTICE · DRAGGABLE</span>
+        <div id="musicSourcePopupRing" class="music-source-popup-ring-v59" style="--source-progress:0"><span id="musicSourcePopupPercent">0%</span></div>
+        <h2 id="musicSourcePopupTitle">BLACKBOX DOES NOT HOST ANY MEDIA.</h2>
+        <p id="musicSourcePopupCopy">Nothing in the Music catalogue is hosted by BlackBox. Every exact audio track must be fetched from its outside source, so loading can take time. Please be patient and keep the selected Play control active.</p>
+        <div class="music-source-popup-track-v59" aria-hidden="true"><i id="musicSourcePopupBar"></i></div>
+        <small id="musicSourcePopupStatus" aria-live="polite">Reading this notice · 0 of 5 seconds</small>
+        <button id="musicSourcePopupCancel" type="button" title="Close source notice" hidden disabled>Cancel</button>
+      </div>
+    </div>
+
+    <div id="musicGenreChips" class="music-genre-chips-v47" aria-label="Music genres"></div>
+
+    <div class="music-layout-v47">
+      <div class="music-main-v47">
+        <div id="musicSearchPane" hidden>
+          <div class="music-section-title-v47">
+            <div><span class="music-kicker-v47">STRUCTURED SEARCH</span><h2>Artists · Albums · Tracks</h2></div>
+            <span class="sub" id="musicSearchMeta"></span>
+          </div>
+          <div id="musicTorrGrid" class="music-results-v47"></div>
+        </div>
+        <div id="musicRows"></div>
+      </div>
+
+      <aside id="musicLibrarySidebar" class="music-library-v47">
+        <div class="music-library-head-v47">
+          <div><span class="music-kicker-v47">YOUR COLLECTION</span><h2>Downloaded</h2></div>
+          <span id="musicDownloadCount" class="music-count-v47">0</span>
+        </div>
+        <div class="music-library-controls-v47">
+          <button id="musicLibPlayPause" class="music-control-main-v47" title="Play or pause">▶</button>
+          <button id="musicLibPlayAll" class="music-control-v47" title="Play all">Play all</button>
+          <button id="musicLibShuffle" class="music-control-v47" title="Shuffle downloaded music">⇄ Shuffle</button>
+          <button id="musicOpenQueue" class="music-control-v47" title="Open playback queue">Queue</button>
+        </div>
+        <div id="musicFrequencyPanel" class="music-frequency-panel-v51" hidden aria-live="polite">
+          <div class="music-frequency-head-v51">
+            <div><span>NOW PLAYING · LIVE SPECTRUM</span><strong id="musicFrequencyTitle">Waiting for music</strong><small id="musicFrequencyArtist">Play any track to start</small></div>
+            <i id="musicFrequencyState">IDLE</i>
+          </div>
+          <canvas id="musicFrequencyCanvas" class="music-frequency-canvas-v51" width="560" height="132" role="img" aria-label="Live frequency spectrum for the current song"></canvas>
+          <div class="music-frequency-scale-v51"><span>BASS</span><span>MID</span><span>TREBLE</span></div>
+        </div>
+        <div id="musicDownloadedList" class="music-downloaded-list-v47">
+          <div class="music-library-empty-v47"><span>↓</span><strong>Your downloads will live here</strong><small>Play a full track and it is saved to your collection.</small></div>
+        </div>
+        <div class="music-ad-info-v49" role="note" aria-label="Advertisement contact information">
+          <span>ADVERTISEMENT ENQUIRIES</span>
+          <strong>Contact for advertisement</strong>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ---------- MUSIC GENRE (30-pick quick page) ---------- -->
+  <section id="viewMusicGenre" class="view music-genre-view-v50" hidden>
+    <button class="backbtn" id="musicGenreBack">&larr; Back to Music</button>
+
+    <div class="ad-space-v49" role="note" aria-label="Advertisement contact information">
+      <span>ADVERTISEMENT ENQUIRIES</span>
+      <strong>Contact for advertisement</strong>
+    </div>
+
+    <div id="musicGenrePage" class="music-genre-page-v50"></div>
+</section>
+
+  <!-- ---------- MUSIC DETAIL (trackId) ---------- -->
+  <section id="viewMusicDetail" class="view" hidden>
+    <button class="backbtn" id="musicDetailBack">&larr; Back to Music</button>
+
+    <div class="ad-space-v49" role="note" aria-label="Advertisement contact information">
+      <span>ADVERTISEMENT ENQUIRIES</span>
+      <strong>Contact for advertisement</strong>
+    </div>
+
+    <div id="musicDetailBody" style="padding:14px 18px">
+      <p class="sub">Loading track…</p>
+    </div>
+</section>
+
+  <!-- ---------- LIVE TV (IPTV) ---------- -->
+
+  <!-- ---------- LOCAL SHARE ---------- -->
+  <section id="viewShare" class="view local-share-v69" hidden>
+    <div class="local-share-hero-v69">
+      <div>
+        <span>DEVICE-TO-DEVICE · SAME WI-FI</span>
+        <h1>Local Share</h1>
+        <p>Choose one task: share completed movies, or receive them from another device on this Wi-Fi. BlackBox finds the network automatically and keeps the full app private.</p>
+      </div>
+      <div id="localShareState" class="local-share-state-v69"><i></i><strong>Checking…</strong></div>
+    </div>
+
+
+    <div class="ad-space-v49" role="note" aria-label="Advertisement contact information">
+      <span>ADVERTISEMENT ENQUIRIES</span>
+      <strong>Contact for advertisement</strong>
+    </div>
+    <div id="localShareMode" class="local-share-mode-v69" role="tablist" aria-label="Choose Local Share task">
+      <button type="button" class="on" data-share-mode="send" role="tab" aria-selected="true">1 · Share my movies</button>
+      <button type="button" data-share-mode="receive" role="tab" aria-selected="false">2 · Receive movies</button>
+    </div>
+
+    <div class="local-share-layout-v69">
+      <section id="localShareSenderPanel" class="local-share-panel-v69 local-share-sender-v69">
+        <div class="local-share-panel-head-v69"><div><span>STEP 1 · SENDER</span><h2>Choose movies to share</h2></div><label class="local-share-switch-v69"><input id="localShareEnabled" type="checkbox"><i></i><b>Share</b></label></div>
+        <p class="local-share-explain-v69">Turn Share on, select a completed movie, then give the receiver the link and six-digit code. No internet is required.</p>
+        <details class="local-share-device-advanced-v69">
+          <summary>Device name and advanced settings</summary>
+          <div class="local-share-device-v69">
+            <label><span>Device name</span><input id="localShareDeviceName" maxlength="48" autocomplete="off"></label>
+            <button id="localShareSaveName" type="button">Save name</button>
+          </div>
+        </details>
+        <div id="localSharePairBox" class="local-share-pair-v69" hidden>
+          <div><span>PAIRING CODE</span><strong id="localShareCode">—— ——</strong><small id="localShareReceiverSlots">0 / 10 paired · independent four-hour sessions</small></div>
+          <button id="localShareRotate" type="button">Rotate code</button>
+        </div>
+        <div id="localShareAddresses" class="local-share-addresses-v69"></div>
+        <p id="localShareNetworkStatus" class="local-share-network-status-v69">Detecting active private Wi-Fi interfaces…</p>
+
+        <details id="localShareSetupGuide" class="local-share-guide-v70" open>
+          <summary><span>Windows setup guide</span><strong>Use this once if the phone cannot open the LAN address</strong></summary>
+          <ol>
+            <li>Connect the laptop and receiver to the same trusted Wi-Fi or phone hotspot.</li>
+            <li>On Windows, open <b>Settings → Network &amp; internet → Wi-Fi → the current network</b>, then set <b>Network profile type</b> to <b>Private</b>.</li>
+            <li>Open <b>Windows Security → Firewall &amp; network protection → Allow an app through firewall → Change settings</b>. Find <code>blackbox-local-share.exe</code> and tick <b>Private</b>. You do not need to disable the firewall or enable Public.</li>
+            <li>Close BlackBox, start it again with <b>Start BlackBox Stream.bat</b>, turn Share on, and use the refreshed LAN address above.</li>
+          </ol>
+          <p><b>Phone side:</b> normally no hotspot-phone or iPhone setting is needed when that hotspot allows its devices to communicate. Streaming here stays on the local network and does not consume internet/mobile data. If the address still cannot open, the hotspot may isolate connected devices.</p>
+        </details>
+
+        <div class="local-share-subhead-v69 local-share-sessions-head-v70"><div><strong>Paired receiver sessions</strong><small>Review each independent four-hour receiver and remove only the one you choose.</small></div><button id="localShareSessionsRefresh" class="chipbtn" type="button">Refresh sessions</button></div>
+        <div id="localShareSessions" class="local-share-session-list-v70"></div>
+
+        <div class="local-share-safety-note-v71"><strong>Local Defender gate</strong><span>Each exact completed file is scanned once by Microsoft Defender and cached only while its identity stays unchanged. Local Share fails closed: scanning, blocked, failed, or unavailable files remain private, with no “share anyway” override.</span></div>
+        <div class="local-share-subhead-v69"><div><strong>Completed movies</strong><small>Share clean downloads, watch one-time scan state, or safely delete a blocked source and find another release for the same exact title.</small></div><div class="local-share-bulk-v70"><button id="localShareAll" class="primary" type="button">Share all</button><button id="localShareSelect" class="chipbtn" type="button">Select movies</button><button id="localShareRefresh" class="chipbtn" type="button">Refresh</button></div></div>
+        <div id="localShareSelectionActions" class="local-share-selection-actions-v70" hidden><span id="localShareSelectionCount">0 selected</span><button id="localShareShareSelected" class="primary" type="button">Share selected</button><button id="localShareStopSelected" class="chipbtn danger" type="button">Stop selected</button><button id="localShareSelectionCancel" class="chipbtn" type="button">Cancel</button></div>
+        <div id="localShareLibrary" class="local-share-list-v69"></div>
+        <p id="localShareSenderMsg" class="msg"></p>
+      </section>
+
+      <section id="localShareReceiverPanel" class="local-share-panel-v69 local-share-receiver-v69" hidden>
+        <div class="local-share-panel-head-v69"><div><span>STEP 2 · RECEIVER</span><h2>Find the sender automatically</h2></div><button id="localShareDiscover" class="primary" type="button">Scan Wi-Fi</button></div>
+        <p class="local-share-explain-v69">On the receiving device, press Scan Wi-Fi, choose the sender, and enter its six-digit code. Pairing lasts four hours.</p>
+        <div id="localSharePeers" class="local-share-peer-list-v69"></div>
+        <details id="localShareManual" class="local-share-manual-v69">
+          <summary>Manual address fallback</summary>
+          <p>Use this only if Scan Wi-Fi cannot see the sender. You may paste the complete sender link.</p>
+          <div class="local-share-connect-v69">
+            <input id="localSharePeerAddress" autocomplete="off" placeholder="http://192.168.1.25:8420/local-share">
+            <input id="localSharePeerCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6-digit code">
+            <button id="localShareConnect" type="button">Connect</button>
+          </div>
+        </details>
+        <div id="localShareRemoteHead" class="local-share-subhead-v69" hidden><div><strong id="localShareRemoteTitle">Shared movies</strong><small>Stream now or save an explicit copy to this device.</small></div></div>
+        <div id="localShareRemoteLibrary" class="local-share-remote-grid-v69"></div>
+        <p id="localShareReceiverMsg" class="msg"></p>
+      </section>
+    </div>
+
+    <div class="local-share-privacy-v69">
+      <strong>Private boundary</strong>
+      <span>No cloud relay, file upload, account, UPnP, port-forwarding, browser cookies or arbitrary file paths. Receivers can access only eligible exact files explicitly shared through Local Share; files must have a cached local Microsoft Defender clean verdict. A maximum of ten receiver sessions are bound to individual Wi-Fi addresses and expire independently after four hours. Important: direct Wi-Fi links reveal the sender’s private LAN IP to paired receivers; this build does not mask it with a relay or onion address. Use only a trusted private Wi-Fi network.</span>
+    </div>
+</section>
+
+  <!-- ---------- LIBRARY ---------- -->
+  <section id="viewLibrary" class="view" hidden>
+    <h1 class="viewtitle">Library</h1>
+    <p class="sub">Your downloaded collection keeps its artwork, exact filename, status, and saved date. Scroll the row horizontally; completed browser-compatible files play here while exact-file saving remains available.</p>
+
+    <div class="ad-space-v49" role="note" aria-label="Advertisement contact information">
+      <span>ADVERTISEMENT ENQUIRIES</span>
+      <strong>Contact for advertisement</strong>
+    </div>
+    <div id="libraryList" class="liblist library-collection-v70"></div>
+</section>
+
+</main>
+
+<div id="localSharePlayer" class="overlay local-share-player-v69" hidden>
+  <div class="player">
+    <div class="player-head local-share-player-head-v70">
+      <div class="local-share-player-card-v70"><div id="localSharePlayerArtFallback" class="local-share-player-art-fallback-v70">▶</div><img id="localSharePlayerArt" alt="" hidden><div><span class="local-share-player-kicker-v69">PLAYING FROM LOCAL SHARE</span><h3 id="localSharePlayerTitle">—</h3><p id="localSharePlayerFile" class="sub">Directly from the paired sender on this Wi-Fi</p></div></div>
+      <div class="local-share-player-actions-v69"><button id="localShareFullscreen" class="chipbtn" type="button">Full screen</button><button id="localSharePlayerClose" class="roundbtn" type="button" title="Close">✕</button></div>
+    </div>
+    <div class="videobox"><video id="localShareVideo" controls playsinline preload="metadata"></video><div id="localShareVideoMsg" class="player-msg"></div></div>
+    <p class="sub">Closing this player stops the receiver request. No different file is selected if playback fails.</p>
+  </div>
+</div>
+
+<!-- ============================ player ============================ -->
+<div id="playerWrap" class="overlay" hidden>
+  <div class="player">
+    <div class="player-head">
+      <div>
+        <h3 id="playerTitle">—</h3>
+        <p id="playerMode" class="sub"></p>
+      </div>
+      <button id="closePlayer" class="roundbtn" title="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2"/></svg>
+      </button>
+    </div>
+
+    <div class="videobox">
+      <video id="video" controls playsinline></video>
+      <!-- Explicitly chosen, size-bounded community WebVTT subtitles use this text-only overlay. -->
+      <div id="subOverlay" class="suboverlay" hidden></div>
+      <div id="playerMsg" class="player-msg"></div>
+    </div>
+
+    <div class="player-bar">
+      <div class="progress"><div id="bar"></div></div>
+      <div class="stats">
+        <span id="statProgress">0%</span>
+        <span id="statSpeed">—</span>
+        <span id="statPeers">— peers</span>
+        <span class="spacer"></span>
+        <button id="saveSelectedFile" class="chipbtn" hidden>Save exact file</button>
+        <button id="stopDownload" class="chipbtn danger">Stop &amp; remove</button>
+        <button id="ccBtn" class="chipbtn" hidden title="Community subtitles">CC</button>
+      </div>
+    </div>
+
+    <section id="seasonPackPanel" class="season-pack-v61 season-pack-v62" aria-labelledby="seasonPackTitle" hidden>
+      <div class="season-pack-head-v61">
+        <div>
+          <span class="season-pack-kicker-v61">SERIES / SEASON PACK</span>
+          <h3 id="seasonPackTitle">Save episodes on your terms</h3>
+        </div>
+        <strong id="seasonPackTotal">0 B</strong>
+      </div>
+      <p id="seasonPackMeta" class="season-pack-meta-v61"></p>
+      <div id="seasonPackEpisodes" class="season-pack-episodes-v61"></div>
+      <aside class="season-temp-storage-v62">
+        <div><strong>Temporary watching uses BlackBox private storage</strong><p>Play episodes normally without making a second browser copy. When you finish the season, delete its torrent files here to recover the shown disk space.</p></div>
+        <button id="seasonDeleteFiles" type="button" class="ghost danger">Delete watched season files</button>
+      </aside>
+      <div class="season-pack-controls-v61 season-pack-controls-v62">
+        <button id="seasonPackFull" type="button" class="primary">Save full season ZIP</button>
+        <div class="season-budget-editor-v62">
+          <label for="seasonPackBudgetValue">Part data budget · remembered · 50 MB–256 GB</label>
+          <div class="season-budget-input-v62">
+            <input id="seasonPackBudgetValue" type="number" inputmode="decimal" min="0.048828125" max="256" step="0.01" value="1" aria-describedby="seasonPackPlan" />
+            <select id="seasonPackBudgetUnit" aria-label="Part budget unit"><option value="GB" selected>GB</option><option value="MB">MB</option></select>
+          </div>
+          <div id="seasonPackPresets" class="season-budget-presets-v62" aria-label="Quick part-size presets">
+            <button type="button" data-budget-mb="250">250 MB</button><button type="button" data-budget-mb="500">500 MB</button><button type="button" data-budget-mb="1024">1 GB</button><button type="button" data-budget-mb="2048">2 GB</button><button type="button" data-budget-mb="4096">4 GB</button><button type="button" data-budget-mb="8192">8 GB</button><button type="button" data-budget-mb="16384">16 GB</button><button type="button" data-budget-mb="32768">32 GB</button>
+          </div>
+        </div>
+        <button id="seasonPackAllParts" type="button" class="ghost">Save all parts to folder</button>
+        <button id="seasonPackCancel" type="button" class="ghost danger" hidden>Cancel transfer</button>
+      </div>
+      <p id="seasonPackPlan" class="season-pack-plan-v61"></p>
+      <div id="seasonPackParts" class="season-pack-parts-v61"></div>
+      <div class="season-pack-progress-v61" aria-hidden="true"><i id="seasonPackProgressBar"></i></div>
+      <p id="seasonPackStatus" class="season-pack-status-v61" aria-live="polite">Nothing starts until you choose Full Season or a part.</p>
+    </section>
+    <p class="sub dllock" id="dlLockNote" hidden></p>
+    <div id="fileList" class="filelist"></div>
+  </div>
+</div>
+
+<!-- ============================ settings ============================ -->
+<div id="settingsWrap" class="overlay" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Settings</h3>
+      <button id="closeSettings" class="roundbtn">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2"/></svg>
+      </button>
+    </div>
+
+    <label class="label" for="cred">TMDB API key or read access token</label>
+    <p class="sub">Needed for the catalogue and artwork. Get one free at themoviedb.org → Settings → API.</p>
+    <div class="row">
+      <input id="cred" type="password" placeholder="Paste your key or token" autocomplete="off" />
+      <button id="saveCred" class="primary">Save</button>
+    </div>
+    <label class="check">
+      <input type="checkbox" id="remember" checked />
+      <span>Remember on this device</span>
+    </label>
+    <p id="credMsg" class="msg"></p>
+
+    <div class="modal-foot">
+      <button id="forgetCred" class="ghost">Forget saved key</button>
+      <span class="sub" id="credState"></span>
+    </div>
+
+    <hr class="sep" />
+    <label class="label">Online music &amp; trailers</label>
+    <p class="sub">Full-length music audio and trailers use a small playback helper. Install it once; BlackBox stores it in its own media folder and runs it only when you press Play. Some providers may ask for a signed-in session; browser-cookie access remains off unless you turn it on.</p>
+    <div class="row" style="margin:8px 0;gap:8px;flex-wrap:wrap"><button id="ytFetchNow" class="primary">Enable full playback</button><span class="sub">One-time official download</span></div>
+    <label class="check">
+      <input type="checkbox" id="ytCookies" />
+      <span>Allow full music audio and trailers to use my browser cookies</span>
+    </label>
+    <p id="ytState" class="sub"></p>
+
+    <hr class="sep" />
+    <label class="label">Open a torrent directly</label>
+    <p class="sub">No key needed. Paste a magnet link or the full local path to a <code>.torrent</code> file. Remote torrent URLs are intentionally refused.</p>
+    <div class="row">
+      <input id="uri" type="text" spellcheck="false" placeholder="magnet:?xt=urn:btih:… or C:\path\file.torrent" />
+      <button id="addBtn" class="primary">Open</button>
+    </div>
+    <p id="addMsg" class="msg"></p>
+
+    <hr class="sep" />
+    <!-- v86: what leaves this device, said once, in words a person can check.
+         The gate lives in privacy-v86.js; this panel only reports it. -->
+    <div class="privacy-v86" id="privacyPanel">
+      <div class="privacy-head-v86">
+        <span>NETWORK PRIVACY</span>
+        <b id="privacyStateChip" class="privacy-chip-v86 off">OFF</b>
+      </div>
+      <label class="check privacy-toggle-v86">
+        <input type="checkbox" id="privacyShare" />
+        <span>Share source votes with the public network</span>
+      </label>
+      <p class="sub" id="privacyLead">
+        Off by default. While it is off, every outbound Community and peer request is refused
+        inside this app before it is sent — nothing is queued, encrypted or "anonymised", it
+        simply does not leave.
+      </p>
+      <ul class="privacy-list-v86" id="privacySends"></ul>
+      <div class="privacy-head-v86 second"><span>WHAT THIS CANNOT DO</span></div>
+      <ul class="privacy-list-v86 warn" id="privacyCannot"></ul>
+      <p class="privacy-note-v86" id="privacyRelay"></p>
+      <div class="row privacy-row-v86">
+        <button id="privacyRotate" class="ghost">New vote key</button>
+        <button id="privacyCheck" class="ghost">Check what is being sent</button>
+        <span class="sub" id="privacyBlocked"></span>
+      </div>
+      <p class="sub" id="privacyMsg"></p>
+    </div>
+
+    <!-- v88: the switch v87 never had. Nothing here is a promise the code does not keep -
+         every sentence is filled from ads-v88.js facts(), beside the switch that acts on it. -->
+    <div class="ads-v88" id="adsPanel">
+      <div class="privacy-head-v86">
+        <span>SPONSORED BOXES</span>
+        <b id="adsStateChip" class="privacy-chip-v86 off">OFF</b>
+      </div>
+      <label class="check privacy-toggle-v86">
+        <input type="checkbox" id="adsSponsorToggle" />
+        <span>Show sponsored boxes</span>
+      </label>
+      <p class="sub ads-note-v88" id="adsNote">
+        Off. The boxes say "Advertisement enquiries" and nothing else.
+      </p>
+      <p class="sub ads-note-v88" id="buildExpiryV90"></p>
+      <dl class="ads-facts-v88">
+        <dt>WHAT LEAVES THIS DEVICE</dt>
+        <dd id="adsSends"></dd>
+        <dt>WHAT YOU GET</dt>
+        <dd id="adsGets"></dd>
+        <dt>WHAT AN AD CANNOT DO</dt>
+        <dd id="adsCannot"></dd>
+      </dl>
+    </div>
+  </div>
+</div>
+
+
+<!-- Persistent background audio player -->
+<div id="bgAudioBar" hidden style="position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#0f1117;border-top:1px solid #2a2e3a;display:flex;align-items:center;gap:12px;padding:8px 14px;box-shadow:0 -4px 18px rgba(0,0,0,.45);">
+  <button id="bgDrag" class="bg-drag-v69" type="button">⋮⋮</button>
+  <button id="bgCollapse" class="bg-collapse-v69" type="button" title="Minimize music player" aria-expanded="true">▾</button>
+  <img id="bgArt" src="" alt="" style="width:44px;height:44px;border-radius:4px;object-fit:cover;background:#222;flex-shrink:0"/>
+  <div id="bgFrequencyWrap" class="bg-frequency-wrap-v51" hidden title="Live frequency spectrum">
+    <canvas id="bgFrequencyCanvas" width="180" height="72" role="img" aria-label="Live frequency spectrum for the current song"></canvas>
+    <span id="bgFrequencyState">LIVE</span>
+  </div>
+  <div id="bgAudioControls" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+    <div class="bg-audio-main-v69" style="display:flex;align-items:center;gap:8px;min-width:0">
+      <button id="bgPrev" title="Previous" style="width:28px;height:28px;border-radius:50%;border:1px solid #2a2e3a;background:#151821;color:#cbd5e0;font-size:10px;cursor:pointer;flex-shrink:0">⏮</button>
+      <button id="bgPlayBtn" style="width:32px;height:32px;border-radius:50%;border:none;background:#1dd1a1;color:#000;font-size:14px;cursor:pointer;flex-shrink:0">▶</button>
+      <button id="bgNext" title="Next" style="width:28px;height:28px;border-radius:50%;border:1px solid #2a2e3a;background:#151821;color:#cbd5e0;font-size:10px;cursor:pointer;flex-shrink:0">⏭</button>
+      <div style="flex:1;min-width:0">
+        <div id="bgTitle" style="font-size:13px;font-weight:600;color:#e6e6e6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2"></div>
+        <div id="bgArtist" style="font-size:11px;color:#9aa0b2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+      </div>
+      <button id="bgShuffle" title="Shuffle" style="border:1px solid #2a2e3a;background:#151821;color:#9aa0b2;font-size:11px;cursor:pointer;padding:4px 7px;border-radius:6px;flex-shrink:0">🔀</button>
+      <span id="bgTime" style="font-size:11px;color:#9aa0b2;flex-shrink:0">0:00 / 0:00</span>
+    </div>
+    <div class="bg-audio-extra-v69" style="display:flex;align-items:center;gap:8px">
+      <input id="bgSeek" type="range" min="0" max="100" value="0" style="flex:1;accent-color:#1dd1a1;height:3px;cursor:pointer"/>
+      <button id="bgQueueToggle" class="bg-queue-toggle-v49" type="button" title="Open queue">Queue <span id="bgQCount"></span></button>
+      <button id="bgClose" style="border:none;background:transparent;color:#9aa0b2;font-size:16px;cursor:pointer;padding:4px 6px">✕</button>
+    </div>
+  </div>
+  <audio id="bgAudio" preload="metadata" style="display:none"></audio>
+</div>
+<div id="bgQueuePanel" class="bg-queue-panel-v49" hidden>
+  <div class="bg-queue-head-v49"><div><span>UP NEXT</span><strong>Playback queue</strong></div><button id="bgQueueClose" type="button" title="Close queue">✕</button></div>
+  <p class="bg-queue-note-v49">The next two tracks prepare automatically. When the list ends, the selected genre keeps playing without repeating the current song.</p>
+  <div id="bgQueueList" class="bg-queue-list-v49"></div>
+</div>
+<script src="/purify.min.js?v=3.4.17"></script>
+<script src="/hls.min.js?v=45"></script>
+<script src="/app.js?v=74r10"></script>
+<!-- v80: exposes app.js state (musicQueue, musicDownloads) to the add-on modules
+     without eval, which the app's CSP blocks. Must load right after app.js. -->
+<script src="/app-bridge-v80.js?v=80bridge"></script>
+<!-- v87: sponsored boxes, filled from the Telegram ad bot when the user turns them on. -->
+<script src="/ads-v88.js?v=88ads"></script>
+<script src="/expiry-v90.js?v=90exp"></script>
+<script src="/music-catalog-v64.js?v=74r10"></script>
+<script src="/music-albums-v64.js?v=74r10"></script>
+<script src="/movie-sources-v70.js?v=74r10"></script>
+<script src="/source-votes-v74.js?v=74vote"></script>
+<!-- v80: was an inline <script>; the app's CSP (script-src 'self') blocks those, so
+     the vote-server setting never applied. Same-origin file instead. -->
+<script src="/privacy-v86.js?v=86priv"></script>
+<script src="/vote-config-v74.js?v=80cfg"></script>
+<script src="/votes-sync-v74.js?v=74vsync"></script>
+<script src="/local-share-v70.js?v=74r10"></script>
+<script src="/anime-media-v74.js?v=74r10"></script>
+<script src="/simple-player-v74.js?v=74simple"></script>
+<script src="/play-anyway-v74.js?v=74anyi"></script>
+<script src="/fast-source-v74.js?v=74fast"></script>
+<script src="/music-tidy-v74.js?v=74music"></script>
+<!-- v75: a vote requires a finished download of that exact source. Loads last so it can
+     gate the vote entry point and the source rows created by the modules above. -->
+<script src="/vote-gate-v75.js?v=75gate"></script>
+<!-- v76: music search that answers as you type, a close control on the music bar,
+     and a reload button for a stuck screen. -->
+<script src="/music-search-v76.js?v=76search"></script>
+<script src="/music-ui-v76.js?v=76ui"></script>
+<script src="/music-picker-v78.js?v=78pick"></script>
+<script src="/music-library-v79.js?v=79lib"></script>
+<!-- v86: the settings panel for the gate above. -->
+<script src="/privacy-panel-v86.js?v=86panel"></script>
+</body>
+</html>

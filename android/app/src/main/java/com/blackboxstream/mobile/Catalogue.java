@@ -12,7 +12,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 final class Catalogue {
-    private static final String TMDB = "https://api.themoviedb.org/3";
+    static final String TMDB = "https://api.themoviedb.org/3";
     private static final int MAX_REPLY = 1024 * 1024;
     enum Filter {
         OPEN("Open catalogue"), MOVIE("Movies"), TV("Series"), ANIME("Anime"), AUDIO("Music"), WATCHLIST("Saved titles");
@@ -183,7 +183,7 @@ final class Catalogue {
         } catch (JSONException | StackOverflowError invalid) { throw new IOException("MusicBrainz sent an invalid catalogue response."); }
     }
 
-    private static String fetch(URI base, String path, String key) throws IOException {
+    static String fetch(URI base, String path, String key) throws IOException {
         boolean apiKey = key.length() == 32 && key.matches("[0-9a-fA-F]{32}");
         String url = base.toASCIIString() + path + (apiKey ? (path.contains("?") ? "&" : "?") + "api_key=" + key : "");
         HttpsURLConnection request = (HttpsURLConnection) URI.create(url).toURL().openConnection();

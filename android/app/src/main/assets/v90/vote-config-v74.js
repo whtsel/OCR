@@ -1,0 +1,1 @@
+window.BBX_VOTES_SERVER=window.BBX_VOTES_SERVER||"";

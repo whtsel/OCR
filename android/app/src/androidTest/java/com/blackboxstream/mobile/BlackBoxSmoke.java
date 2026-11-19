@@ -12,6 +12,7 @@ import android.os.SystemClock;
 import android.util.Base64;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebView;
 import android.widget.EditText;
 import android.widget.TextView;
 import java.io.ByteArrayInputStream;
@@ -28,6 +29,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
@@ -55,7 +58,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         try {
             verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
-                    + (liveVerified ? "PASS Live catalogue: full Sintel rendered and sought to 2:30 while still downloading verified torrent pieces\n" : ""));
+                    + (liveVerified ? "PASS v90 Android: original search and source picker opened full Sintel, rendered and sought to 2:30 before the transfer finished\n" : ""));
             finish(Activity.RESULT_OK, result);
         } catch (Throwable bad) {
             result.putString("stream", "\nFAIL BlackBox Android smoke: " + android.util.Log.getStackTraceString(bad) + "\n");
@@ -85,7 +88,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                         && film.directEntry(app).remote() && Arrays.equals(meta.hash, TorrentMeta.magnet(film.magnet()).hash));
             }
             screenFromHome(visible, "Sources", FilmActivity.class, "▶  Watch torrent");
-            if (fixtures != null && "yes".equals(fixtures.getString("live_cinema"))) verifyLiveFilm(app, db, visible);
+            verifyV90OnAndroid(app, db, fixtures != null && "yes".equals(fixtures.getString("live_cinema")));
             screenFromHome(visible, "Torrents", TorrentActivity.class, "Open a torrent");
             screenFromHome(visible, "Discover", DiscoverActivity.class, "Play on-device sample  ›");
             screenFromHome(visible, "Local Share", LanShareActivity.class, "Connect securely");
@@ -147,19 +150,32 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
     }
 
-    private void verifyLiveFilm(Context app, LibraryStore db, Activity home) throws Exception {
+    private void verifyV90OnAndroid(Context app, LibraryStore db, boolean live) throws Exception {
         Cinema.Film film = Cinema.FILMS.get(0);
         MediaEntry entry = film.torrentEntry();
-        Downloads.deleteCopy(app, entry);
+        if (live) Downloads.deleteCopy(app, entry);
+        Activity desktop = launch(V90Activity.class, null);
         Activity screen = null;
-        ActivityMonitor monitor = addMonitor(PlayerActivity.class.getName(), null, false);
         try {
-            assertPass("One tap chooses the actual featured film torrent", ui(() -> {
-                TextView watch = find(home.getWindow().getDecorView(), "▶  Watch now");
-                return watch != null && watch.performClick();
-            }));
-            screen = waitForMonitorWithTimeout(monitor, 10000);
-            assertPass("The featured source opens the Android player", screen != null);
+            WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
+            assertPass("The Android v90 launcher hosts the bundled Windows interface", web != null);
+            await("Original v90 boot and Open films row complete on Android WebView", 18000, () -> jsTrue(web,
+                    "document.title.includes('BlackBox Stream v90') && document.querySelector('#rows .card') && document.querySelector('#engineDot.ok') && !!window.bbxExpiryV90"));
+            assertPass("Original v90 search accepts a full title", jsTrue(web,
+                    "(document.querySelector('#searchInput').value='Sintel',document.querySelector('#searchBtn').click(),true)"));
+            await("Original browse cards show the exact title", 12000, () -> jsTrue(web,
+                    "!document.querySelector('#viewBrowse').hidden && Array.from(document.querySelectorAll('#browseGrid .card')).some(c=>c.textContent.includes('Sintel'))"));
+            assertPass("A v90 result opens its original Detail view", jsTrue(web,
+                    "(Array.from(document.querySelectorAll('#browseGrid .card')).find(c=>c.textContent.includes('Sintel')).click(),true)"));
+            await("Native adapter supplies the exact source to the original v90 source rows", 12000, () -> jsTrue(web,
+                    "!document.querySelector('#viewDetail').hidden && !!Array.from(document.querySelectorAll('#sourcesBox .src')).find(c=>c.title.includes('Blender open film'))"));
+            assertPass("Finding sources does not queue a movie transfer", !live || !db.isOffline(entry) && (db.get(entry.id) == null || db.get(entry.id).transfer < 0));
+            if (!live) return;
+            ActivityMonitor monitor = addMonitor(PlayerActivity.class.getName(), null, false);
+            assertPass("Playing the v90 source starts the exact manifest lookup", jsTrue(web,
+                    "(Array.from(document.querySelectorAll('#sourcesBox .src')).find(c=>c.title.includes('Blender open film')).click(),true)"));
+            screen = waitForMonitorWithTimeout(monitor, 18000);
+            assertPass("The original v90 chooser opens a native Android player", screen != null);
             await("Sintel renders from the public torrent web seed before download completes", 65000,
                     () -> ui(() -> engine != null && engine.entry() != null && entry.id.equals(engine.entry().id)
                             && engine.ready() && engine.duration() > 720000 && engine.videoWidth() > 640
@@ -174,12 +190,31 @@ public final class BlackBoxSmoke extends Instrumentation {
                     + "; transfer=" + (row == null ? "not queued" : row.transferError + " / " + Downloads.received(db, row) + " verified bytes"), problem);
         } finally {
             Activity player = screen;
-            ui(() -> { if (player != null) player.finish(); if (engine != null) engine.close(); return null; });
-            Downloads.deleteCopy(app, entry);
-            db.getWritableDatabase().delete("media", "id=?", new String[] {entry.id});
-            TorrentJobs.descriptor(app, film.hash).delete();
+            ui(() -> { if (player != null) player.finish(); if (engine != null) engine.close(); desktop.finish(); return null; });
+            if (live) {
+                Downloads.deleteCopy(app, entry);
+                db.getWritableDatabase().delete("media", "id=?", new String[] {entry.id});
+                TorrentJobs.descriptor(app, film.hash).delete();
+            }
             waitForIdleSync();
         }
+    }
+
+    private boolean jsTrue(WebView web, String script) throws Exception {
+        CompletableFuture<String> result = new CompletableFuture<>();
+        ui(() -> { web.evaluateJavascript("Boolean(" + script + ")", result::complete); return null; });
+        return "true".equals(result.get(8, TimeUnit.SECONDS));
+    }
+
+    private static WebView findWeb(View view) {
+        if (view instanceof WebView) return (WebView) view;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                WebView found = findWeb(group.getChildAt(i)); if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     private void screenFromHome(Activity home, String button, Class<? extends Activity> type, String text) throws Exception {
