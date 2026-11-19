@@ -22,12 +22,14 @@ final class V90Online {
     static final String KNABEN = "https://api.knaben.org/v1";
     static final String CSV = "https://torrents-csv.com/service/search";
     static final String JIKAN = "https://api.jikan.moe/v4";
+    static final String ANILIST = "https://graphql.anilist.co";
     private static final int LIMIT = 2 * 1024 * 1024;
     private static final String PUBLIC_TRACKERS = "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"
             + "&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce";
 
     interface Requester { String get(String endpoint, JSONObject post) throws IOException; }
     private final Requester http;
+    private volatile long retryJikanAt;
     private final Map<String, Cached> cache = new LinkedHashMap<String, Cached>(48, .75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<String, Cached> e) { return size() > 48; }
     };
@@ -136,11 +138,55 @@ final class V90Online {
     }
 
     JSONObject anime(String mode, String q, int page) throws IOException, JSONException {
-        // v90 talks to Jikan and expects a flat list of anime title/format/cover records.
-        if (mode.equals("search") && searchText(q).isEmpty()) return new JSONObject().put("items", new JSONArray());
-        String route = mode.equals("search") ? "/anime?sfw=true&q=" + encode(searchText(q))
-                : "/top/anime?sfw=true" + (mode.equals("airing") ? "&filter=airing" : "");
-        return parseAnime(http.get(JIKAN + route + "&limit=" + (mode.equals("search") ? 12 : 24) + "&page=" + Math.max(1, Math.min(100, page)), null));
+        // Keep the v90 shape even if Jikan cannot be reached on this network.
+        boolean search = "search".equals(mode), airing = "airing".equals(mode);
+        String title = searchText(q);
+        int limit = search ? 12 : 24, number = Math.max(1, Math.min(100, page));
+        if (search && title.isEmpty()) return animePage(new JSONArray(), 1, false, "");
+        if (retryJikanAt == 0 || System.nanoTime() - retryJikanAt >= 0) {
+            String route = search ? "/anime?sfw=true&q=" + encode(title) : "/top/anime?sfw=true" + (airing ? "&filter=airing" : "");
+            try {
+                return parseAnime(http.get(JIKAN + route + "&limit=" + limit + "&page=" + number, null));
+            } catch (IOException | JSONException unreachable) { retryJikanAt = System.nanoTime() + 120_000_000_000L; }
+        }
+        String query = "query Catalogue($page:Int!,$limit:Int!" + (search ? ",$title:String!" : "") + "){"
+                + "Page(page:$page,perPage:$limit){pageInfo{lastPage hasNextPage}media(type:ANIME,isAdult:false,"
+                + (search ? "search:$title,sort:[SEARCH_MATCH]" : airing ? "status:RELEASING,sort:[POPULARITY_DESC]" : "sort:[SCORE_DESC]")
+                + "){id idMal title{english romaji native} format episodes startDate{year} popularity averageScore genres status "
+                + "description(asHtml:false) coverImage{large} bannerImage trailer{id site}}}}";
+        JSONObject variables = new JSONObject().put("page", number).put("limit", limit);
+        if (search) variables.put("title", title);
+        try {
+            return parseAniList(http.get(ANILIST, new JSONObject().put("query", query).put("variables", variables)));
+        } catch (IOException | JSONException unreachable) {
+            throw new IOException("Jikan and AniList did not return an anime catalogue. You can still look up an exact source by title.", unreachable);
+        }
+    }
+
+    static JSONObject parseAniList(String json) throws JSONException {
+        JSONObject data = new JSONObject(json).getJSONObject("data").getJSONObject("Page");
+        JSONArray media = data.getJSONArray("media"), items = new JSONArray();
+        for (int i = 0; i < Math.min(media.length(), 30); i++) {
+            JSONObject row = media.optJSONObject(i);
+            if (row == null || row.optLong("id") <= 0) continue;
+            JSONObject titles = row.optJSONObject("title"), date = row.optJSONObject("startDate");
+            JSONObject cover = row.optJSONObject("coverImage"), trailer = row.optJSONObject("trailer");
+            if (titles == null) continue;
+            String en = text(titles, "english"), romaji = text(titles, "romaji");
+            if (en.isEmpty() && romaji.isEmpty()) continue;
+            long mal = row.optLong("idMal", 0);
+            String video = trailer != null && "youtube".equalsIgnoreCase(text(trailer, "site")) ? text(trailer, "id") : "";
+            items.put(new JSONObject().put("id", mal > 0 ? Long.toString(mal) : "anilist" + row.optLong("id"))
+                    .put("title", en.isEmpty() ? romaji : en).put("romaji", romaji).put("native", text(titles, "native"))
+                    .put("year", date == null ? 0 : date.optInt("year")).put("episodes", row.optInt("episodes"))
+                    .put("score", row.optInt("averageScore")).put("popularity", row.optInt("popularity"))
+                    .put("format", text(row, "format")).put("status", text(row, "status"))
+                    .put("cover", cover == null ? "" : text(cover, "large")).put("banner", text(row, "bannerImage"))
+                    .put("overview", text(row, "description")).put("genres", row.optJSONArray("genres") == null ? new JSONArray() : row.getJSONArray("genres"))
+                    .put("trailer", video.matches("[A-Za-z0-9_-]{11}") ? video : ""));
+        }
+        JSONObject pages = data.optJSONObject("pageInfo");
+        return animePage(items, pages == null ? 1 : pages.optInt("lastPage", 1), pages != null && pages.optBoolean("hasNextPage"), "AniList");
     }
 
     static JSONObject parseAnime(String text) throws JSONException {
@@ -172,7 +218,12 @@ final class V90Online {
         }
         int pages = paging == null ? 1 : Math.max(1, paging.optInt("last_visible_page", 1));
         boolean more = paging != null && paging.optBoolean("has_next_page");
-        return new JSONObject().put("items", items).put("pagination", new JSONObject().put("lastPage", pages).put("hasNextPage", more));
+        return animePage(items, pages, more, "Jikan");
+    }
+
+    private static JSONObject animePage(JSONArray items, int pages, boolean more, String provider) throws JSONException {
+        return new JSONObject().put("items", items).put("provider", provider)
+                .put("pagination", new JSONObject().put("lastPage", Math.max(1, pages)).put("hasNextPage", more));
     }
 
     private static String text(JSONObject row, String name) { return row.isNull(name) ? "" : row.optString(name, ""); }

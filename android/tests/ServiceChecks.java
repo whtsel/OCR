@@ -101,5 +101,18 @@ public final class ServiceChecks {
         check("Jikan catalogue maps an actual title, normalizes year and score, and preserves v90 pagination",
                 title.getInt("year") == 2010 && title.getInt("score") == 81 && "Horizon Test".equals(title.getString("title"))
                 && anime.getJSONObject("pagination").getBoolean("hasNextPage") && anime.getJSONObject("pagination").getInt("lastPage") == 2);
+        int[] jikanCalls = {0};
+        V90Online failover = new V90Online((endpoint, body) -> {
+            if (endpoint.startsWith(V90Online.JIKAN)) { jikanCalls[0]++; throw new IOException("Jikan fixture is offline"); }
+            check("fallback uses AniList with an SFW filter and the exact query variable", V90Online.ANILIST.equals(endpoint)
+                    && body.optString("query").contains("isAdult:false") && "Horizon Test".equals(body.optJSONObject("variables").optString("title")));
+            return "{\"data\":{\"Page\":{\"pageInfo\":{\"lastPage\":2,\"hasNextPage\":true},\"media\":[{\"id\":1,\"idMal\":489,\"title\":{\"romaji\":\"Horizon Test\"},\"format\":\"TV\",\"averageScore\":81}]}}}";
+        });
+        JSONObject alternate = failover.anime("search", "Horizon Test", 1);
+        check("AniList replaces a failed Jikan call without changing the title identity or catalogue shape", "AniList".equals(alternate.getString("provider"))
+                && alternate.getJSONArray("items").getJSONObject(0).getString("id").equals("489")
+                && alternate.getJSONObject("pagination").getInt("lastPage") == 2);
+        failover.anime("search", "Horizon Test", 2);
+        check("consecutive Anime pages do not re-wait on the failed provider", jikanCalls[0] == 1);
     }
 }

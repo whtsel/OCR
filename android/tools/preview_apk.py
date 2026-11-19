@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-DEFAULT_APK = Path(__file__).resolve().parents[1] / 'artifacts/BlackBox-Stream-Android-1.2.0.apk'
+DEFAULT_APK = Path(__file__).resolve().parents[1] / 'artifacts/BlackBox-Stream-Android-1.3.0.apk'
 
 
 def main():

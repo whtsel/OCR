@@ -383,16 +383,17 @@ public final class BlackBoxSmoke extends Instrumentation {
         java.util.concurrent.ExecutorService probes = java.util.concurrent.Executors.newFixedThreadPool(4);
         try {
             java.util.Map<String, java.util.concurrent.Future<String>> responses = new java.util.LinkedHashMap<>();
-            for (String name : Arrays.asList("Knaben", "Torrents-CSV", "Jikan", "MusicBrainz")) {
+            for (String name : Arrays.asList("Knaben", "Torrents-CSV", "Anime catalogue", "MusicBrainz")) {
                 responses.put(name, probes.submit(() -> {
-                    String route = name.equals("Jikan") ? "/api/anime/search?q=Astro%20Boy&page=1"
+                    String route = name.equals("Anime catalogue") ? "/api/anime/search?q=Astro%20Boy&page=1"
                             : name.equals("MusicBrainz") ? "/api/mobile/music?q=Goldberg%20Variations"
                             : "/api/sources/" + (name.equals("Knaben") ? "find" : "deep") + "?type=movie&title=Elephants%20Dream&year=2006";
                     V90Api.Reply reply = api.call("GET", route, "");
                     if (reply.status != 200) return "unavailable (" + reply.status + ": " + reply.value.optString("message") + ")";
                     if ("unavailable".equals(reply.value.optString("indexStatus"))) return reply.value.optString("note");
-                    org.json.JSONArray entries = reply.value.optJSONArray(name.equals("Jikan") ? "items" : name.equals("MusicBrainz") ? "results" : "sources");
-                    return "answered with " + (entries == null ? 0 : entries.length()) + " results";
+                    org.json.JSONArray entries = reply.value.optJSONArray(name.equals("Anime catalogue") ? "items" : name.equals("MusicBrainz") ? "results" : "sources");
+                    String provider = reply.value.optString("provider");
+                    return (provider.isEmpty() ? "" : provider + " ") + "answered with " + (entries == null ? 0 : entries.length()) + " results";
                 }));
             }
             StringBuilder report = new StringBuilder();
