@@ -45,11 +45,10 @@ public final class LanShareService extends Service {
         String[] ids = intent.getStringArrayExtra(EXTRA_FILES);
         int run = ++generation;
         starting = true; notice = null;
-        closeServer();
+        retireShare();
         if (timeout != null) main.removeCallbacks(timeout);
         try { startForeground(16, notification()); }
         catch (IllegalStateException | SecurityException unavailable) { starting = false; notice = "Android couldn't start sharing. Open this screen and try again."; stopSelf(); return START_NOT_STICKY; }
-        remove(scratch); scratch = null;
         worker.execute(() -> {
             File temp = null;
             LanShare.Server server = null;
@@ -79,7 +78,7 @@ public final class LanShareService extends Service {
                 final LanShare.Server opened = server;
                 final File dir = temp;
                 main.post(() -> {
-                    if (run != generation) { opened.close(); remove(dir); return; }
+                    if (run != generation) { retire(opened, dir); return; }
                     active = opened; scratch = dir; starting = false;
                     timeout = () -> { if (run == generation) stopSelf(); };
                     main.postDelayed(timeout, TTL);
@@ -105,10 +104,21 @@ public final class LanShareService extends Service {
 
     @Override public void onTimeout(int startId, int foregroundServiceType) { stopSelf(startId); }
     @Override public void onDestroy() {
-        generation++; starting = false; closeServer(); remove(scratch); main.removeCallbacksAndMessages(null);
+        generation++; starting = false; retireShare();
+        if (timeout != null) main.removeCallbacks(timeout);
+        // Stale startup callbacks still run to retire any socket already opened by the worker.
         worker.shutdownNow(); stopForeground(STOP_FOREGROUND_REMOVE); super.onDestroy();
     }
-    private static void closeServer() { LanShare.Server s = active; active = null; if (s != null) s.close(); }
+    private void retireShare() {
+        LanShare.Server server = active; active = null;
+        File dir = scratch; scratch = null;
+        retire(server, dir);
+    }
+    private static void retire(LanShare.Server server, File dir) {
+        if (server == null && dir == null) return;
+        if (server != null) server.revoke();
+        IoCleanup.run(() -> { try { if (server != null) server.close(); } finally { remove(dir); } });
+    }
     private static void remove(File dir) {
         if (dir == null) return;
         File[] files = dir.listFiles(); if (files != null) for (File f : files) f.delete(); dir.delete();

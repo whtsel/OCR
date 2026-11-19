@@ -151,6 +151,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                     ui(() -> { screen.finish(); engine.close(); return null; });
                     db.getWritableDatabase().delete("media", "id=?", new String[] {entry.id});
                 }
+                assertPass("Closing the LAN player tears down TLS off the UI thread", ui(() -> engine.entry() == null));
             }
         } finally { bytes.delete(); }
     }

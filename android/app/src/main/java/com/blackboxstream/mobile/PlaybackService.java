@@ -13,6 +13,7 @@ import android.content.res.AssetFileDescriptor;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
+import android.media.MediaDataSource;
 import android.media.MediaMetadata;
 import android.media.MediaPlayer;
 import android.media.session.MediaSession;
@@ -32,6 +33,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** A single native playback session. Video is visible-only; audio can outlive the activity. */
 public final class PlaybackService extends Service {
@@ -60,7 +62,7 @@ public final class PlaybackService extends Service {
     private AudioFocusRequest request;
     private LibraryStore store;
     private MediaPlayer player;
-    private MediaBytes externalSource;
+    private ExternalSource externalSource;
     private Object visibleOwner;
     private SurfaceHolder display;
     private MediaEntry entry;
@@ -179,12 +181,9 @@ public final class PlaybackService extends Service {
                                 : "Local Share isn't connected. Reopen its invitation or play a saved copy.");
                         return;
                     }
-                    externalSource = prepared;
-                    prepare(p -> p.setDataSource(new android.media.MediaDataSource() {
-                        @Override public int readAt(long offset, byte[] buffer, int start, int size) throws IOException { return prepared.read(offset, buffer, start, size); }
-                        @Override public long getSize() { return prepared.size(); }
-                        @Override public void close() { closeSource(prepared); }
-                    }));
+                    ExternalSource source = new ExternalSource(prepared);
+                    externalSource = source;
+                    prepare(p -> p.setDataSource(source));
                 });
             });
         } else if (next.fromPhone() && !store.isOffline(next)) {
@@ -465,12 +464,27 @@ public final class PlaybackService extends Service {
     }
 
     private static void closeSource(MediaBytes bytes) {
-        if (bytes != null) try { bytes.close(); } catch (IOException ignored) { }
+        if (bytes != null) IoCleanup.run(() -> {
+            try { bytes.close(); } catch (IOException ignored) { }
+        });
+    }
+
+    private static final class ExternalSource extends MediaDataSource {
+        private final MediaBytes bytes;
+        private final AtomicBoolean closed = new AtomicBoolean();
+        ExternalSource(MediaBytes bytes) { this.bytes = bytes; }
+        @Override public int readAt(long offset, byte[] buffer, int start, int size) throws IOException {
+            if (closed.get()) throw new IOException("Playback source closed.");
+            return bytes.read(offset, buffer, start, size);
+        }
+        @Override public long getSize() { return bytes.size(); }
+        // Android may also invoke this from release(). TLS close can write to the socket.
+        @Override public void close() { if (closed.compareAndSet(false, true)) closeSource(bytes); }
     }
 
     private void dropPlayer() {
         generation++;
-        closeSource(externalSource); externalSource = null;
+        if (externalSource != null) { externalSource.close(); externalSource = null; }
         main.removeCallbacks(tick);
         if (player != null) { player.release(); player = null; }
         abandonFocus();

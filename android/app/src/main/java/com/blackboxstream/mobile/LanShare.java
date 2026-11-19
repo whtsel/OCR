@@ -122,7 +122,7 @@ final class LanShare {
                 while (!expired()) {
                     try {
                         SSLSocket sock = (SSLSocket) listener.accept();
-                        if (!privateV4(sock.getInetAddress(), allowLoopback) || !sameNetwork(invite.host, sock.getInetAddress(), prefix)) {
+                        if (expired() || !privateV4(sock.getInetAddress(), allowLoopback) || !sameNetwork(invite.host, sock.getInetAddress(), prefix)) {
                             sock.close(); continue;
                         }
                         active.add(sock);
@@ -176,8 +176,9 @@ final class LanShare {
         }
 
         boolean expired() { return closed || System.nanoTime() - expires >= 0; }
+        void revoke() { closed = true; }
         @Override public void close() {
-            closed = true;
+            revoke();
             try { listener.close(); } catch (IOException ignored) { }
             for (Socket sock : active) { try { sock.close(); } catch (IOException ignored) { } }
             workers.shutdownNow();
