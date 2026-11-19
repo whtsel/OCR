@@ -173,6 +173,7 @@ public final class PlaybackService extends Service {
                 main.post(() -> {
                     if (destroyed || ticket != generation) { closeSource(prepared); return; }
                     if (prepared == null) {
+                        if (store.isOffline(next)) { open(next, true, startWhenPrepared); return; }
                         fail(next.torrent() ? "Waiting for torrent data. Check Offline for progress or a seeder error, then tap Retry."
                                 : "Local Share isn't connected. Reopen its invitation or play a saved copy.");
                         return;

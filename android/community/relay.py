@@ -92,6 +92,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'text/plain; charset=us-ascii')
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-BlackBox-Community', '1')
         self.send_header('Connection', 'close')
         self.end_headers()
         if data:
@@ -113,6 +114,9 @@ class Handler(BaseHTTPRequestHandler):
         return match[1], 0 if write else int(cursor[1])
 
     def do_GET(self):
+        if self.path in ('/', '/health'):
+            self.respond(200, b'BlackBox Community relay v1\nReady. Use this HTTPS origin in BlackBox Community > Create room.\nInvite only. The relay never receives your room key or message text.\n')
+            return
         target = self.locate(False)
         if not target:
             return

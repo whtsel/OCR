@@ -242,7 +242,12 @@ final class LanShare {
         return new MediaBytes() {
             @Override public long size() { return item.length; }
             @Override public synchronized int read(long offset, byte[] data, int start, int count) throws IOException {
-                return peer.read(item, offset, data, start, count);
+                if (offset < 0) throw invalid();
+                if (count == 0) return 0;
+                if (offset >= item.length) return -1;
+                int limit = (int) Math.min(count, item.length - offset);
+                for (int done = 0; done < limit; ) done += peer.read(item, offset + done, data, start + done, limit - done);
+                return limit;
             }
             @Override public void close() { peer.close(); }
         };

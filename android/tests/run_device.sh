@@ -9,10 +9,14 @@ adb=${ADB:-adb}
 out=$("$adb" shell am instrument -w -r com.blackboxstream.mobile.test/com.blackboxstream.mobile.BlackBoxSmoke)
 printf '%s\n' "$out"
 if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_CODE: -1'* ]]; then
-    "$adb" logcat -d -t 500 -s BlackBoxSmoke AndroidRuntime JobScheduler MediaPlayer || true
+    device_log=$("$adb" logcat -d -v brief -s AndroidRuntime:E BlackBoxSmoke:I MediaPlayer:E | tail -65 || true)
+    printf '%s\n' "$device_log"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
-        brief=$(printf '%s\n' "$out" | grep -m1 -E 'FAIL BlackBox Android|INSTRUMENTATION_FAILED' || true)
-        printf '::error::%s\n' "${brief:-Android instrumentation did not pass}"
+        diagnostic=$(printf '%s\n%s\n' "$out" "$device_log" | tail -c 4300)
+        diagnostic=${diagnostic//'%'/'%25'}
+        diagnostic=${diagnostic//$'\r'/'%0D'}
+        diagnostic=${diagnostic//$'\n'/'%0A'}
+        printf '::error::Android smoke failed: %s\n' "${diagnostic:-no result or application logs}"
     fi
     exit 1
 fi

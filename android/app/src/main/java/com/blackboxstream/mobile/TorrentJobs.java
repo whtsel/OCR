@@ -53,7 +53,7 @@ final class TorrentJobs {
         } finally { STREAMS.remove(e.transfer, pieces); }
     }
 
-    static boolean streaming(MediaEntry e) { return STREAMS.containsKey(e.transfer); }
+    static boolean streaming(MediaEntry e) { return received(e) > 0; }
     static long received(MediaEntry e) { TorrentTransfer.Pieces p = STREAMS.get(e.transfer); return p == null ? 0 : p.received(); }
     static MediaBytes open(MediaEntry e) throws IOException {
         TorrentTransfer.Pieces p = STREAMS.get(e.transfer);

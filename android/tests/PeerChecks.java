@@ -78,6 +78,10 @@ public final class PeerChecks {
                         && Arrays.equals(Arrays.copyOf(actual, n), Arrays.copyOfRange(payload, (int) seek, (int) seek + n)));
             } finally { allowRemainder.countDown(); }
             transfer.get(20, TimeUnit.SECONDS);
+            long boundary = metainfo.pieceLength - media.offset - 2;
+            byte[] header = new byte[16];
+            check("reads fill the requested range across two verified torrent pieces", source.read(boundary, header, 0, header.length) == header.length
+                    && Arrays.equals(header, Arrays.copyOfRange(payload, (int) boundary, (int) boundary + header.length)));
         }
         check("selected file with unaligned borders matches original bytes", Arrays.equals(payload, Files.readAllBytes(part.toPath()))
                 && pieces.received() == payload.length);
@@ -100,6 +104,11 @@ public final class PeerChecks {
                     @Override public void total(long bytes) throws IOException { if (bytes != payload.length) throw new IOException("Unexpected LAN size"); }
                 }, null);
                 check("LAN offline copy matches the source file", Arrays.equals(Files.readAllBytes(offline.toPath()), payload));
+            }
+            try (MediaBytes stream = LanShare.open(invitation, selected, null)) {
+                byte[] largeRead = new byte[300000];
+                check("LAN player reads spanning multiple transport chunks are complete", stream.read(10000, largeRead, 0, largeRead.length) == largeRead.length
+                        && Arrays.equals(largeRead, Arrays.copyOfRange(payload, 10000, 310000)));
             }
             byte[] wrongKey = invitation.key.clone(); wrongKey[0] ^= 1;
             refused("wrong invitation secret is rejected", () -> new LanShare.Peer(new LanShare.Invite(loopback, invitation.port, invitation.pin, wrongKey)).close());

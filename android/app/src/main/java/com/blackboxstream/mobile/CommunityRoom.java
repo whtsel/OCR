@@ -89,6 +89,7 @@ final class CommunityRoom {
             try (java.io.OutputStream out = request.getOutputStream()) { out.write(envelope); }
             int status = request.getResponseCode();
             if (status != 201) throw status(status);
+            verifyProtocol(request);
         } finally { request.disconnect(); }
     }
 
@@ -98,6 +99,7 @@ final class CommunityRoom {
         try {
             int status = request.getResponseCode();
             if (status != 200) throw status(status);
+            verifyProtocol(request);
             byte[] data = TorrentMeta.slurp(request.getInputStream(), MAX_FEED);
             long cursor = after;
             List<Event> rows = new ArrayList<>();
@@ -156,6 +158,12 @@ final class CommunityRoom {
         conn.setRequestMethod(method); conn.setConnectTimeout(7000); conn.setReadTimeout(10000);
         conn.setInstanceFollowRedirects(false); conn.setUseCaches(false);
         conn.setRequestProperty("Accept", "text/plain"); return conn;
+    }
+
+    private static void verifyProtocol(HttpsURLConnection request) throws IOException {
+        if (!"1".equals(request.getHeaderField("X-BlackBox-Community"))) {
+            throw new IOException("This address is not a BlackBox Community v1 relay.");
+        }
     }
 
     private static IOException status(int status) {

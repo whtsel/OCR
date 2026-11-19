@@ -59,21 +59,27 @@ final class TorrentTransfer {
                     if (offset < 0) throw new IOException("Invalid read");
                     if (count == 0) return 0;
                     if (offset >= item.length) return -1;
-                    long point = item.offset + offset;
-                    int piece = (int) (point / meta.pieceLength);
-                    int n = (int) Math.min(Math.min(count, item.length - offset), meta.pieceLength - point % meta.pieceLength);
+                    int full = (int) Math.min(count, item.length - offset);
                     long deadline = System.nanoTime() + 40_000_000_000L;
-                    synchronized (Pieces.this) {
-                        if (!verified.get(piece)) urgent = piece;
-                        while (!closed && !abandoned && !verified.get(piece)) {
-                            try { Pieces.this.wait(1000); }
-                            catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IOException("Torrent read interrupted", e); }
-                            if (System.nanoTime() - deadline >= 0) throw new IOException("Waiting for a torrent seeder timed out.");
+                    // Stagefright may request a container header that crosses a piece boundary.
+                    // Fill the complete requested range (except at EOF), never sparse padding.
+                    for (int copied = 0; copied < full; ) {
+                        long point = item.offset + offset + copied;
+                        int piece = (int) (point / meta.pieceLength);
+                        int n = (int) Math.min(full - copied, meta.pieceLength - point % meta.pieceLength);
+                        synchronized (Pieces.this) {
+                            if (!verified.get(piece)) urgent = piece;
+                            while (!closed && !abandoned && !verified.get(piece)) {
+                                try { Pieces.this.wait(1000); }
+                                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IOException("Torrent read interrupted", e); }
+                                if (System.nanoTime() - deadline >= 0) throw new IOException("Waiting for a torrent seeder timed out.");
+                            }
+                            if (closed || !verified.get(piece)) throw new IOException("This torrent is no longer downloading.");
                         }
-                        if (closed || !verified.get(piece)) throw new IOException("This torrent is no longer downloading.");
+                        synchronized (input) { input.seek(offset + copied); input.readFully(data, start + copied, n); }
+                        copied += n;
                     }
-                    synchronized (input) { input.seek(offset); input.readFully(data, start, n); }
-                    return n;
+                    return full;
                 }
                 @Override public void close() throws IOException {
                     closed = true;

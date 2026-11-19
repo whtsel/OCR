@@ -187,7 +187,7 @@ public final class CommunityActivity extends Activity {
     private boolean valid(CommunityRoom active) { return room == active && !isFinishing() && !isDestroyed(); }
     private String problem(Exception error) {
         String msg = error.getMessage();
-        return msg != null && (msg.startsWith("The Community relay returned") || msg.startsWith("This relay is rate-limited")) ? msg
+        return msg != null && (msg.startsWith("The Community relay returned") || msg.startsWith("This relay is rate-limited") || msg.equals("This address is not a BlackBox Community v1 relay.")) ? msg
                 : "Could not reach this BlackBox HTTPS relay. Check the invitation, certificate and connection.";
     }
     private void toast(String text) { Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
