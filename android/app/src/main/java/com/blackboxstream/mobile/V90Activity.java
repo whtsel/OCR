@@ -224,7 +224,7 @@ public final class V90Activity extends Activity {
         // Keep the desktop sources byte-for-byte on disk. Change only how the mobile shell loads them.
         html = html.replace("</head>", "<link rel=\"stylesheet\" href=\"/android-v90.css\" />\n</head>")
                 .replace("<script src=\"/app.js", "<script src=\"/android-api.js\"></script>\n<script src=\"/app.js")
-                .replaceAll("<script src=\"/(?:fast-source-v74|play-anyway-v74|local-share-v70|ads-v88|source-votes-v74|vote-gate-v75|votes-sync-v74|privacy-panel-v86)\\.js[^\"]*\"></script>", "")
+                .replaceAll("<script src=\"/(?:fast-source-v74|play-anyway-v74|local-share-v70|ads-v88|source-votes-v74|vote-gate-v75|votes-sync-v74|privacy-panel-v86|music-catalog-v64|music-albums-v64|music-tidy-v74|music-search-v76|music-ui-v76|music-picker-v78|music-library-v79)\\.js[^\"]*\"></script>", "")
                 .replace("</body>", "<script src=\"/android-port.js\"></script>\n<script src=\"/android-catalogue.js\"></script>\n</body>");
         return html.getBytes(StandardCharsets.UTF_8);
     }

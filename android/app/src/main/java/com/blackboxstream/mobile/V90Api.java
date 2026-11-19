@@ -171,7 +171,7 @@ final class V90Api {
     private Reply prepareMedia(MediaEntry entry, boolean download) throws IOException, JSONException {
         if (download && !Downloads.canKeep(entry)) return fail(415, "This stream cannot be downloaded. Choose a direct media file.");
         MediaEntry existing = db.get(entry.id);
-        if (existing == null) db.save(entry, true);
+        if (existing == null || existing.kind != entry.kind) db.save(entry, true);
         if (download) {
             if (existing != null) Downloads.failIfMissing(app, existing);
             try { ensureQueued(entry); }

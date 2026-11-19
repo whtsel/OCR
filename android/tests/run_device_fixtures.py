@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Forward controlled fixtures to adb and, in release validation, require public media."""
+from argparse import ArgumentParser
 from base64 import b64encode
 from contextlib import ExitStack
 from pathlib import Path
-import os
 import json
+import os
 import ssl
 import subprocess
 import tempfile
@@ -21,6 +22,11 @@ def base64(data):
 
 
 def main():
+    parser = ArgumentParser(description=__doc__)
+    parser.add_argument('--record-public-hashes', type=Path, help='Record the independently collected digests after public Android acceptance passes.')
+    args = parser.parse_args()
+    if args.record_public_hashes and os.environ.get('BBX_VERIFY_PUBLIC_MEDIA') != '1':
+        parser.error('--record-public-hashes requires BBX_VERIFY_PUBLIC_MEDIA=1')
     adb = os.environ.get('ADB', 'adb')
     with ExitStack() as cleanup:
         root = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix='bbx-device-')))
@@ -45,6 +51,8 @@ def main():
                    BBX_FIXTURE_RELAY=f'https://127.0.0.1:{relay.server_port}',
                    BBX_FIXTURE_CERT=base64(cert.read_bytes()))
         if os.environ.get('BBX_VERIFY_PUBLIC_MEDIA') == '1':
+            if subprocess.check_output([adb, 'shell', 'getprop', 'ro.kernel.qemu'], text=True).strip() != '1':
+                raise RuntimeError('Public acceptance requires an emulator: it changes display geometry and disables networking for offline playback.')
             from check_playable_media import verify
             try:
                 expected = verify()
@@ -59,6 +67,8 @@ def main():
             cleanup.callback(subprocess.run, [adb, 'shell', 'wm', 'size', 'reset'], check=False)
             cleanup.callback(subprocess.run, [adb, 'shell', 'wm', 'density', 'reset'], check=False)
         subprocess.run([str(ROOT / 'run_device.sh')], env=env, check=True, timeout=570)
+        if args.record_public_hashes:
+            args.record_public_hashes.write_text(env['BBX_PUBLIC_MEDIA_HASHES'] + '\n', encoding='ascii')
 
 
 if __name__ == '__main__':

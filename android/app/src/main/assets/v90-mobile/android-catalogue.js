@@ -131,11 +131,19 @@
       const row = makeRow('Playable anime · complete archive films', items, null);
       row.querySelectorAll('.card').forEach((card, i) => { card.dataset.playableKey = items[i]._androidPlayable; });
       if (state.browse?.mode === 'anime') host.replaceChildren(row);
-    } catch { archive = null; }
+    } catch {
+      archive = null;
+      if (state.browse?.mode === 'anime') host.replaceChildren(button('Retry playable anime', () => {
+        host.replaceChildren(); showAnimeArchive();
+      }));
+    }
   }
   const lookupSources = loadSourcesFor;
   loadSourcesFor = function (item) {
-    if (item?._androidPlayable?.startsWith('anime:')) return Promise.resolve();
+    if (item?._androidPlayable?.startsWith('anime:')) {
+      sourceLookupAbortV69?.abort();
+      return Promise.resolve();
+    }
     return lookupSources(item);
   };
   const renderDetail = renderDetailLayout;
@@ -235,6 +243,8 @@
   warmMusicTrack = async () => '';
   proactivelyWarmMusicItems = () => {};
   wireMusicWarmup = () => {};
+  restoreMusicPlaybackSession = () => {};
+  loadMusicDownloads = async () => {};
   async function refreshAudioRows() {
     const host = byId('androidAudioLibrary');
     if (!host) return;

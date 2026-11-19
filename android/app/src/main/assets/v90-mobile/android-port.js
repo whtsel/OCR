@@ -113,7 +113,7 @@
     if (state.resolveId) return toast('Cancel the current source check first.');
     try {
       if (/^https:\/\//i.test(link) && !/\.torrent$/i.test(new URL(link).pathname)) {
-        const download = options.mode === 'download';
+        const download = options.mode === 'download' || options.saveCopy === true;
         const result = await read('/api/mobile/direct', {url: link, title: title || undefined, kind: options.kind, download});
         node('settingsWrap').hidden = true;
         if (download) toast(result.offline ? 'Already downloaded.' : 'Download queued in Library.');
@@ -216,7 +216,8 @@
         card.dataset.offline = String(entry.offline);
         const copy = el('div', 'download-card-copy-v70');
         const status = entry.offline ? 'Offline copy' : entry.queued ? (entry.total > 0
-          ? `${Math.min(99, Math.floor(100 * entry.received / entry.total))}% saved` : 'Waiting to download') : entry.error || entry.label;
+          ? `${Math.min(99, Math.floor(100 * entry.received / entry.total))}% saved`
+          : entry.received > 0 ? `${fmtBytes(entry.received)} saved` : 'Waiting to download') : entry.error || entry.label;
         copy.append(el('h3', '', entry.title), el('p', entry.error && !entry.queued ? 'msg err' : 'sub', `${entry.kind} · ${status}`));
         const actions = el('div', 'android-tools-row');
         actions.append(button(entry.position > 0 ? 'Resume' : 'Play', () => bbxAndroidOpen('play', entry.id), 'primary android-library-play'));

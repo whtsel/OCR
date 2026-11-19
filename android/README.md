@@ -4,19 +4,20 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Install and use
 
-Install **BlackBox-Stream-Android-1.3.0.apk**. It targets Android 15, supports Android 7.0+ with an up-to-date Android System WebView, and updates the 1.2.0 build when signed by the same key. p11 is a separate app. This is a signed sideload, not a Play Store release. As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
+Install **BlackBox-Stream-Android-1.4.0.apk**. It targets Android 15, supports Android 7.0+ with an up-to-date Android System WebView, and updates the 1.3.0 build when signed by the same key. p11 is a separate app. This is a signed sideload, not a Play Store release. As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 
 1. In **Settings**, add your TMDB v3 API key or Read Access Token for v90 movie/series artwork, catalogue, search, and details. **Remember on this device** is optional. **My List** stores your choices locally.
-2. Open a title and select **Sources → Play** or **Download** on a release you are authorized to use. If it has multiple media files, select the exact file. The app verifies the descriptor and exposes only verified pieces to the player. Pause and seek work when the required data arrives. The finished file is saved in **Library**.
-3. Without a key you can still use **Anime**, search for torrent candidates by title, open a magnet, or try a full Blender film from **Home → Open films**. **Search → Sintel → Sources → Play** is a no-key path with a licensed full film and a pinned torrent/web seed.
+2. No key required: try **Search → Sintel → Play in BlackBox**, **Anime → Playable anime → The Dull Sword**, or **Music → Cloud Dancer**. Use **Download** to save a complete file, then **Library → Offline copy → Play/Resume** to reopen it without a network connection. Use Wi-Fi for large video downloads.
+3. For other titles, look under **Sources**, choose an authorized direct file or an indexed release, and select the exact file if there is more than one. Metadata, trailers, and index results do not guarantee playback. You can also supply your own direct HTTPS file, magnet, `.torrent`, M3U or audio file.
 
 | Feature | Android behavior |
 | --- | --- |
 | **Movies, Series, and Anime** | v90 browsing, detail cards and season/episode/source filters. TMDB supplies movies and series, and Jikan supplies Anime metadata with AniList as a fallback. Regional official watch listings open the provider guide outside the app. |
 | **Online sources** | Search the selected title or episode through Knaben and Torrents-CSV. The provider results are candidates, not a promise of playable seeds or download rights. No media starts from a search result until you explicitly choose a source. The selected job, v1 info hash, and file index must agree. |
 | **Open/import** | **Settings → Open a torrent directly** accepts a magnet, HTTPS `.torrent`, or direct HTTPS media. **Choose .torrent file** supports local descriptors. **Import M3U or phone media** opens the device library with Android's file picker. Magnet intents fill the picker but do not start downloads. |
-| **Player and offline** | Android's native player reads progressive, verified media and can resume from its saved position. A completed torrent can play without the original peer. Non-torrent files can use **Keep offline**. Large film transfers can use hundreds of MB; **Library** lets you cancel a queued download. |
-| **Music and trailers** | v90's genres, albums and track catalogue are retained, with MusicBrainz metadata search. Import audio or an authorized playlist for native/background and offline playback. Official online audio and trailers open in YouTube or a browser; the Windows `yt-dlp` installer, browser-cookie access, embedded anime hosts, and automatic online album downloads are not ported. |
+| **Player and offline** | Android's native player opens direct HTTPS files, phone media and verified torrent pieces. **Download** queues a saved copy without starting the player. **Library** shows progress, cancellation, and retry; completed copies are reopened locally. Large films can use hundreds of MB. |
+| **Music** | Search and filter Incompetech's Creative Commons tracks, or use your own audio file, playlist, or direct HTTPS audio link. **Play** opens the Android player and supports background audio; it does not launch YouTube. MusicBrainz metadata is not an audio source. The Windows online music and whole-album downloader are not included. |
+| **Anime and trailers** | The playable archive shelf uses identified full Wikimedia Commons files. Other anime listings need a working episode source or your own file; Jikan/AniList only supply metadata. Optional **Find official trailer** is labeled separately and opens a browser. Windows-only embedded anime hosts, `yt-dlp`, and browser-cookie access are not included. |
 | **Local Share and rooms** | **Local Share** opens the Android secure Wi-Fi sharing protocol. **Settings → Community rooms** supports private encrypted recommendations through your own HTTPS relay. They are not compatible with the Windows binary's network protocols. Sponsored boxes and public peer votes are off in the port. |
 
 ## What the sources support
@@ -37,6 +38,12 @@ The [WebTorrent open-film collection](https://github.com/webtorrent/webtorrent/b
 | *Big Buck Bunny* (2008) | [Blender Foundation / Peach](https://studio.blender.org/projects/big-buck-bunny/) — cropped project artwork. |
 | *Tears of Steel* (2012) | [Blender Foundation / Mango](https://studio.blender.org/projects/tears-of-steel/) — cropped film still. |
 | *Cosmos Laundromat: First Cycle* (2015) | [Blender Institute / Gooseberry](https://studio.blender.org/projects/cosmos-laundromat/) — cropped project artwork. |
+
+## Open anime and music credits
+
+- [*The Dull Sword* (1917)](https://commons.wikimedia.org/wiki/File:Namakura_Gatana_with_music.webm), Jun’ichi Kōuchi. Public-domain film in Japan and the US; “Ishikari Lore” by Kevin MacLeod (incompetech.com), [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
+- [*The Animal Olympics* (1928)](https://commons.wikimedia.org/wiki/File:The_Animal_Olympics_(1928).webm), Yasuji Murata. Public-domain silent animation in Japan and the US.
+- [Incompetech](https://incompetech.com/music/royalty-free/) streams original recordings by Kevin MacLeod under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Every track card includes its title, artist, license and original reference. BlackBox requests exact files by their published recording identity, not a YouTube match.
 
 ## Community relay
 
@@ -66,7 +73,7 @@ gradle :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-There are no external Android library dependencies. `./tools/build_apk.sh` builds and test-signs the standalone release APK using AAPT2, javac, D8 and apksigner. Set `ANDROID_SDK_ROOT` and `JAVA_HOME` if needed. The default output is `build/BlackBox-Stream-Android-1.3.0.apk`. Only an APK signed with the same key can update an installed copy. Use release signing for distribution; no private keys or SDK binaries belong in Git. `python3 tools/make_samples.py` recreates the original samples (Pillow, DejaVu fonts, FFmpeg with libx264/AAC).
+There are no external Android library dependencies. `./tools/build_apk.sh` builds and test-signs the standalone release APK using AAPT2, javac, D8 and apksigner. Set `ANDROID_SDK_ROOT` and `JAVA_HOME` if needed. The default output is `build/BlackBox-Stream-Android-1.4.0.apk`. Only an APK signed with the same key can update an installed copy. Use release signing for distribution; no private keys or SDK binaries belong in Git. `python3 tools/make_samples.py` recreates the original samples (Pillow, DejaVu fonts, FFmpeg with libx264/AAC).
 
 ## Tests
 
@@ -80,7 +87,7 @@ python3 tests/run_peers.py
 JSON_JAR=/path/to/json-20240303.jar python3 tests/run_services.py
 ```
 
-The HTTPS host checks cover direct links, magnet/M3U imports, offline transfers, exact descriptor hashes, incorrect web-seed ranges/bytes and cross-file pieces. The peer tests use an independent real libtorrent seeder and local HTTP/UDP/DHT fixtures to verify magnet metadata, progressive seek reads, and exact selected files. They also exercise TLS-pinned LAN streaming and copying, unauthorized IDs/keys and revocation. Service checks exercise two encrypted Community clients through the SQLite relay, TMDB/MusicBrainz transport, and Knaben, Torrents-CSV, Jikan and AniList response handling and failover. They cover exact title/episode filtering, deduplication, and rejection of index-provided peer addresses and untrusted web seed URLs.
+The HTTPS host checks cover direct links, magnet/M3U imports, offline transfers, exact descriptor hashes, incorrect web-seed ranges/bytes and cross-file pieces. The peer tests use an independent real libtorrent seeder and local HTTP/UDP/DHT fixtures to verify magnet metadata, progressive seek reads, and exact selected files. They also exercise TLS-pinned LAN streaming and copying, unauthorized IDs/keys and revocation. Service checks exercise two encrypted Community clients through the SQLite relay, TMDB/MusicBrainz transport, and Knaben, Torrents-CSV, Jikan and AniList response handling and failover. They cover exact title/episode filtering, deduplication, rejection of index-provided peer addresses and untrusted web seed URLs, and parsing and validation of licensed anime/music catalogue entries.
 
 To test a torrent on a real phone with a controlled source, run `python3 tests/seed_android_demo.py --bind 192.168.1.20` on a computer that has Python libtorrent, replacing the address with the computer's private Wi-Fi IPv4 address. It prints a magnet and creates a `.torrent` for the original bundled sample. Put your phone on the same Wi-Fi and try either input. Only the demo asset is seeded; no DHT/UPnP service or public ports are opened by this fixture.
 
@@ -91,10 +98,11 @@ gradle :app:assembleDebug :app:assembleDebugAndroidTest
 ./tests/run_device.sh
 # With libtorrent and OpenSSL: also forward a controlled seeder and HTTPS relay with adb reverse.
 python3 tests/run_device_fixtures.py
-# Also exercise v90 search, source choice, native playback and seek of the full public Sintel torrent:
-BBX_VERIFY_LIVE_FILM=1 python3 tests/run_device_fixtures.py
+# Emulator: tap the real movie/anime/music Play and Download controls,
+# verify full-file bytes, then reopen from Library with both Wi-Fi and data disabled.
+BBX_VERIFY_LIVE_FILM=1 BBX_VERIFY_PUBLIC_MEDIA=1 python3 tests/run_device_fixtures.py
 # Independently check the first and last video pieces for all four public films:
 python3 tests/check_open_films.py
 ```
 
-`BlackBoxSmoke` opens the real screens, decodes and seeks the bundled video, schedules a private copy using a debug-only data source, plays that copy after its source is unavailable, streams it from the native TLS LAN byte source, and tests audio playback/background. The forwarded fixtures additionally find an imported magnet in the Library, resolve metadata from an independent libtorrent seed, play while the transfer is incomplete, compare the final offline copy, and send a recommendation through the actual Community relay. The live check opens *Sintel* from the **original v90 search screen and source list**, verifies that the native player renders and advances on the full film, then seeks to 2:30 before the transfer finishes. TMDB auth/catalogue regression tests use controlled HTTPS responses, not a live customer credential. Provider availability, seed counts and supported codecs can vary by phone, network and title. Test two phones on real Wi-Fi for Local Share network routing. Host tests do not establish Android playback performance or compatibility with arbitrary codecs, swarms, providers, or networks.
+`BlackBoxSmoke` opens the real screens, decodes and seeks the bundled video, schedules a private copy using a debug-only data source, plays that copy after its source is unavailable, streams it from the native TLS LAN byte source, and tests audio playback/background. The forwarded fixtures additionally find an imported magnet in the Library, resolve metadata from an independent libtorrent seed, play while the transfer is incomplete, compare the final offline copy, and send a recommendation through the actual Community relay. The live check opens *Sintel* from the **original v90 search screen and source list**, verifies that the native player renders and advances on the full film, then seeks to 2:30 before the transfer finishes. Public playback acceptance checks the direct *Sintel* film, *The Dull Sword*, *Cloud Dancer* and a search result for *Sauropod Spotting*, comparing every download with an independent full HTTPS copy before switching the emulator offline. CI packages only after these tests pass, repeats the same public checks on the signed standalone app, and then retains that build for distribution signing. TMDB auth/catalogue regression tests use controlled HTTPS responses, not a live customer credential. Provider availability, seed counts and supported codecs can vary by phone, network and title. Test two phones on real Wi-Fi for Local Share network routing. Host tests do not establish Android playback performance or compatibility with arbitrary codecs, swarms, providers, or networks.

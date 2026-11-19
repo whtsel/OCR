@@ -63,7 +63,8 @@ public final class BlackBoxSmoke extends Instrumentation {
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
-            verify();
+            if (fixtures != null && "yes".equals(fixtures.getString("public_only"))) verifyCandidate();
+            else verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
                     + (liveVerified ? "PASS v90 Android: original search and source picker opened full Sintel, rendered and sought to 2:30 before the transfer finished\n" : "")
                     + (publicMediaVerified ? "PASS Android in-app playback and complete downloads: Sintel, The Dull Sword, Cloud Dancer and Sauropod Spotting (bytes matched public files; all four played with networking off)\n" : "")
@@ -233,6 +234,19 @@ public final class BlackBoxSmoke extends Instrumentation {
             }
             waitForIdleSync();
         }
+    }
+
+    /** Run the same public media acceptance on the non-debuggable standalone app. */
+    private void verifyCandidate() throws Exception {
+        Context app = getTargetContext();
+        assertPass("Standalone media acceptance does not depend on debug fixtures",
+                (app.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0);
+        boolean bound = ui(() -> app.bindService(new Intent(app, PlaybackService.class), binding, Context.BIND_AUTO_CREATE));
+        assertPass("Standalone native playback service binds", bound);
+        try {
+            await("Standalone native playback service is ready", 8000, () -> ui(() -> engine != null));
+            verifyPublicMedia(app, LibraryStore.get(app));
+        } finally { ui(() -> { if (engine != null) engine.close(); app.unbindService(binding); return null; }); }
     }
 
     private void verifyPublicMedia(Context app, LibraryStore db) throws Exception {

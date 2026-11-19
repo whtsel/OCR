@@ -3,8 +3,8 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 adb=${ADB:-adb}
-"$adb" install -r "$root/app/build/outputs/apk/debug/app-debug.apk"
-"$adb" install -r -t "$root/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+"$adb" install -r "${BBX_APP_APK:-$root/app/build/outputs/apk/debug/app-debug.apk}"
+"$adb" install -r -t "${BBX_TEST_APK:-$root/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk}"
 "$adb" shell input keyevent 82
 args=()
 if [[ -n "${BBX_FIXTURE_MAGNET:-}" ]]; then
@@ -17,9 +17,14 @@ fi
 if [[ -n "${BBX_PUBLIC_MEDIA_HASHES:-}" ]]; then
     args+=(-e public_media "$BBX_PUBLIC_MEDIA_HASHES")
 fi
+if [[ "${BBX_VERIFY_PUBLIC_ONLY:-0}" == 1 ]]; then
+    : "${BBX_PUBLIC_MEDIA_HASHES:?Provide the independently collected public file hashes}"
+    args+=(-e public_only yes)
+fi
 out=$("$adb" shell am instrument -w -r "${args[@]}" com.blackboxstream.mobile.test/com.blackboxstream.mobile.BlackBoxSmoke)
 printf '%s\n' "$out"
-if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_CODE: -1'* ]]; then
+if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_CODE: -1'* ||
+    ( -n "${BBX_PUBLIC_MEDIA_HASHES:-}" && "$out" != *'all four played with networking off'* ) ]]; then
     device_log=$("$adb" logcat -d -v brief -s AndroidRuntime:E BlackBoxSmoke:I MediaPlayer:E | tail -65 || true)
     printf '%s\n' "$device_log"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
