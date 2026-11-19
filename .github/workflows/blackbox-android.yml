@@ -59,6 +59,9 @@ jobs:
             exit 1
           fi
           python3 -c 'import libtorrent; print(libtorrent.version)'
+      - name: Check the first and last pieces of the public open films
+        continue-on-error: true
+        run: python3 android/tests/check_open_films.py
       - name: Enable Android emulator virtualization
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
