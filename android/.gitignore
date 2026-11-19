@@ -11,3 +11,4 @@ local.properties
 *.sqlite3-shm
 *.sqlite3-wal
 __pycache__/
+blackbox-demo/

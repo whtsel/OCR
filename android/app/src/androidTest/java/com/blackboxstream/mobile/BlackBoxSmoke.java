@@ -69,7 +69,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             assertPass("Tap opens native PlayerActivity", sample != null);
             bound = ui(() -> app.bindService(new Intent(app, PlaybackService.class), binding, Context.BIND_AUTO_CREATE));
             await("sample decodes H.264 and playback advances", 16000, () -> ui(() -> engine != null && engine.ready()
-                    && engine.videoWidth() == 640 && engine.duration() >= 13500 && engine.playing() && engine.position() > 500));
+                    && engine.videoWidth() == 640 && engine.renderedVideo() && engine.duration() >= 13500 && engine.playing() && engine.position() > 500));
             ui(() -> { engine.pause(); engine.seek(6500); return null; });
             await("native seek completes", 6000, () -> ui(() -> !engine.playing() && !engine.seeking()
                     && Math.abs(engine.position() - 6500) < 1000));
@@ -146,7 +146,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 try {
                     await("Android MediaDataSource actually plays the pinned TLS LAN stream", 17000,
                             () -> ui(() -> engine.entry() != null && entry.id.equals(engine.entry().id) && engine.ready()
-                                    && engine.videoWidth() == 640 && engine.playing() && engine.position() > 500));
+                                    && engine.videoWidth() == 640 && engine.renderedVideo() && engine.playing() && engine.position() > 500));
                 } finally {
                     ui(() -> { screen.finish(); engine.close(); return null; });
                     db.getWritableDatabase().delete("media", "id=?", new String[] {entry.id});

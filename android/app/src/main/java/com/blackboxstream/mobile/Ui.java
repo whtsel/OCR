@@ -124,9 +124,11 @@ final class Ui {
         w.setNavigationBarColor(BG);
         if (Build.VERSION.SDK_INT >= 30) {
             w.setDecorFitsSystemWindows(false);
-            if (w.getInsetsController() != null) w.getInsetsController().setSystemBarsAppearance(0,
-                    android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+            // PhoneWindow may not have installed its decor yet during Activity.onCreate().
             root.setOnApplyWindowInsetsListener((v, insets) -> {
+                android.view.WindowInsetsController bars = v.getWindowInsetsController();
+                if (bars != null) bars.setSystemBarsAppearance(0, android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
                 android.graphics.Insets window = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
                 android.graphics.Insets keyboard = insets.getInsets(WindowInsets.Type.ime());
                 v.setPadding(window.left, window.top, window.right, Math.max(window.bottom, keyboard.bottom));

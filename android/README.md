@@ -66,6 +66,8 @@ JSON_JAR=/path/to/json-20240303.jar python3 tests/run_services.py
 
 The HTTPS host checks cover original direct links/playlists and offline transfers. The peer tests use an independent real libtorrent seeder and local HTTP/UDP/DHT fixtures to verify magnet metadata, progressive seek reads, and exact selected files. They also exercise TLS-pinned LAN streaming and copying, unauthorized IDs/keys and revocation. Service checks exercise two actual encrypted Community clients through the SQLite relay and controlled TMDB/MusicBrainz API responses; live provider credentials are not part of the tests.
 
+To test a torrent on a real phone with a controlled source, run `python3 tests/seed_android_demo.py --bind 192.168.1.20` on a computer that has Python libtorrent, replacing the address with the computer's private Wi-Fi IPv4 address. It prints a magnet and creates a `.torrent` for the original bundled sample. Put your phone on the same Wi-Fi and try either input. Only the demo asset is seeded; no DHT/UPnP service or public ports are opened by this fixture.
+
 For Android runtime verification, use an unlocked emulator/phone:
 
 ```sh

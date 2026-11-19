@@ -65,7 +65,7 @@ public final class PlaybackService extends Service {
     private SurfaceHolder display;
     private MediaEntry entry;
     private String failure;
-    private boolean preparing, ready, video, buffering, ended, playing, foreground, resumeOnFocus, destroyed, startWhenPrepared;
+    private boolean preparing, ready, video, buffering, ended, playing, foreground, resumeOnFocus, destroyed, startWhenPrepared, rendered;
     private long queuedPosition, lastPersist;
     private int generation;
 
@@ -119,6 +119,7 @@ public final class PlaybackService extends Service {
     boolean ready() { return ready; }
     boolean playing() { return playing; }
     boolean video() { return video; }
+    boolean renderedVideo() { return rendered; }
     boolean buffering() { return buffering; }
     boolean inBackgroundSession() { return foreground; }
     boolean seeking() { return queuedPosition >= 0 && ready; }
@@ -249,6 +250,7 @@ public final class PlaybackService extends Service {
             });
             candidate.setOnInfoListener((p, what, extra) -> {
                 if (p != player) return false;
+                if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) { rendered = true; emit(); }
                 if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START || what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
                     buffering = what == MediaPlayer.MEDIA_INFO_BUFFERING_START;
                     updateSession();
@@ -472,7 +474,7 @@ public final class PlaybackService extends Service {
         main.removeCallbacks(tick);
         if (player != null) { player.release(); player = null; }
         abandonFocus();
-        playing = ready = preparing = buffering = ended = resumeOnFocus = false;
+        playing = ready = preparing = buffering = ended = resumeOnFocus = rendered = false;
         queuedPosition = -1;
     }
 
