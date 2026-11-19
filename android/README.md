@@ -1,26 +1,40 @@
 # BlackBox Stream for Android
 
-BlackBox is a new native Android player and library, independent of p11 and the Windows app. This version includes direct links/files, offline copies, BitTorrent, discovery, encrypted Local Share, and invite-only Community rooms. There is no WebView, desktop engine or account requirement.
+BlackBox is a native Android counterpart to the PC app's browse → title → source → player flow. It does not run a WebView or require the PC engine. The built-in **Open cinema** shelf contains four complete, licensed films; it does not reproduce the v90 title/source inventory or automatic source search. Add your own authorized sources to expand the catalogue.
 
-## Install and try it
+## Install and watch
 
-Install **BlackBox-Stream-Android-1.1.0.apk** on Android 7.0 or newer. This is a test-signed build, not a Play Store release. It can update the previous native BlackBox test build if the signing key matches; the app package remains separate from p11. Android may ask you to allow the app opening the APK to install it.
+Install **BlackBox-Stream-Android-1.2.0.apk** on Android 7.0 or newer. This is a signed sideload build, not a Play Store release. It updates the previous native BlackBox build when installed with the same signer; it is a different package from p11. Android may ask you to allow installs from the app opening the APK.
 
-| Feature | How to try it |
+Open **Watch** and tap **Watch now** on *Sintel*, or pick any title in **Open cinema** and tap **Watch torrent**. **Sources** lets you choose the verified torrent or its original HTTPS file. Playback can begin as verified pieces arrive, and the completed torrent file appears in **Offline**. Film transfers use Internet data and may be large (roughly 129–571 MB each); use Wi-Fi if you prefer. You can cancel an unfinished copy from **Offline** or the player.
+
+| Feature | How to use it |
 | --- | --- |
-| **Player and offline** | Tap **Play sample** for the bundled 14-second film. Audio sample *Low Orbit* is also built in. Open your own phone file or direct HTTPS media link, tap **Keep offline**, then play the finished copy from **Offline**. Local copies and playback position persist. Audio can continue in the background. |
-| **Torrents and magnets** | Tap **Torrents**. Paste a v1/hybrid `magnet:?xt=urn:btih:…` link or pick a `.torrent` document. Choose the exact media file. Verified pieces can be read by the Android player while the job runs; a completed copy stays in **Offline**. The peer must be reachable and have the needed pieces. Use content you own or are authorized to download. |
-| **Discover** | Tap **Discover** for playable open media and offline samples. Add your own TMDB key in **Catalogue key** for Movies, Series and Anime discovery/search. In **Music**, search MusicBrainz tracks, albums and artists without a key. Save catalogue metadata in **Saved titles**. Metadata results do not provide the film/song; open a matching source from your own Library or visit the official listing. |
+| **Find a title** | Search the included films and your saved Library. **Add media → Import an M3U playlist** brings in your own titles with exact HTTPS files, HTTPS `.torrent` links or v1/hybrid magnets. Search the imported titles in **Watch** or **Library**. |
+| **Torrents and magnets** | Tap **Torrents** under **Your sources**, use **Add media**, or open a magnet from another Android app. Paste a magnet / HTTPS `.torrent` link or pick a `.torrent` document, then select the exact media file. A peer or web seed must have the required pieces. |
+| **Player and offline** | Open a film, phone file or direct HTTPS link. Tap **Keep offline** for supported non-torrent sources; torrents keep a copy if the transfer completes. Offline media, watch position and Library entries persist. Music can continue in the background. The samples at the bottom of **Watch** require no connection. |
+| **Discover** | Add your TMDB credential in **Catalogue key** for film, series and anime metadata browsing. **Music** searches MusicBrainz tracks, albums and artists without a key. Keep metadata in **Saved titles**. Apart from exact Open cinema films, a metadata result is not a playable source. Use **Find my sources** to match a saved source or open the official listing. |
 | **Local Share** | Put two BlackBox devices on the same private Wi-Fi/Ethernet. On the sender choose **Local Share → Choose media to share**, select a bundled sample or completed offline file, and send its invitation privately. On the receiver paste it under **Receive** and tap **Connect securely**. Select a title to stream or **Keep offline** to save a private copy. **Stop sharing** revokes the invitation; rotating it changes both its secret and its TLS identity. |
 | **Community** | On **Community**, create a room on a configured HTTPS relay or paste a `BBX-ROOM-1` invitation. Share the invitation privately, then post encrypted messages or exact HTTPS media recommendations. A second invited client with the key can read them. [The relay setup is below.](#community-relay) |
 
 ## What the sources support
 
-- **Direct media:** use codecs your phone supports. H.264 MP4 and AAC/MP3 are good first tests. HTTPS HLS is for streaming, not offline file downloads. An M3U file or URL may import up to 500 HTTPS items (max 1 MiB). Playable web pages and DRM streams are not download sources.
-- **BitTorrent:** v1 and hybrid files, selected audio/video files in multifile torrents, TCP peers, BEP 9 metadata, HTTP(S)/UDP trackers, and bounded IPv4 DHT peer lookup. v2-only, uTP-only/MSE-only swarms, web seeds and uploading/seeding are not implemented. Private `.torrent` downloads do not use DHT. Trackerless magnets use DHT to resolve metadata. Peers/trackers can see the downloader IP; connections happen only after choosing a magnet or torrent. A stopped torrent job may restart incomplete pieces rather than resume from disk. A completed file is always verified before it enters Offline.
-- **Discovery:** open assets are exact pinned MDN examples (Blender Foundation's *Big Buck Bunny* and *Sintel* excerpts, CC BY 3.0, and the MDN CC0 *Flower* clip) plus BlackBox's original samples. Metadata comes from TMDB and MusicBrainz; it isn't a built-in source of copyrighted streams. Keys are kept in app-private storage, not sent to a BlackBox server. This product uses the TMDB API but is not endorsed or certified by TMDB.
+- **Direct media:** use codecs your phone supports. H.264 MP4 and AAC/MP3 are good first tests. HTTPS HLS is for streaming, not offline file downloads. An M3U file or URL may import up to 500 exact source entries (max 1 MiB). Playable web pages and DRM streams are not download sources.
+- **BitTorrent:** v1 and hybrid files, selected audio/video files in multifile torrents, TCP peers, BEP 9 metadata, HTTP(S)/UDP trackers, bounded IPv4 DHT peer lookup, HTTPS BEP 19 `url-list` / magnet `ws` web seeds and hash-matched HTTPS `xs` descriptors. Invalid byte ranges or piece hashes are not published to the player. v2-only and uTP-only/MSE-only swarms and uploading/seeding are not supported. Private `.torrent` downloads do not use DHT. Trackerless magnets use DHT to resolve metadata. Peers/trackers can see the downloader IP; connections happen only after choosing a magnet or torrent. A stopped torrent job may restart incomplete pieces rather than resume from disk. A completed file is always verified before it enters Offline.
+- **Discovery:** the full films are separate from the MDN examples (Blender Foundation's *Big Buck Bunny* and *Sintel* excerpts and the CC0 *Flower* clip) and BlackBox's original samples. Metadata comes from TMDB and MusicBrainz. Credentials are kept in app-private storage, not sent to a BlackBox server. This product uses the TMDB API but is not endorsed or certified by TMDB.
 - **Local Share:** fifteen-minute, explicit per-file share. The sender listens only on the selected private IPv4 interface; the receiver uses that local network. TLS checks the sender's fingerprint from a high-entropy invitation before sending its key. No cloud relay, port mapping, implicit access to other files, or public discovery. Only the intended recipient should get the invite. Some guest Wi-Fi networks isolate devices. The new protocol is Android BlackBox-to-BlackBox, not the old Windows LAN protocol. Finished copies can also be exported through the Android share sheet.
 - **Storage:** app-private SQLite/library/media, no broad filesystem permission. Finished files only are shareable. Direct HTTPS downloads can resume with a matching strong ETag and byte range; the limit is 4 GiB per file. Android schedules jobs based on battery/network availability. Uninstalling removes the library and private copies, not originals or exported files.
+
+## Open cinema credits
+
+The [WebTorrent open-film collection](https://github.com/webtorrent/webtorrent/blob/master/docs/free-torrents.md) supplies the four pinned torrent descriptors and HTTPS seeds. The APK contains the descriptors and cropped artwork, not the film files. Film and artwork are provided under [Creative Commons Attribution 3.0](https://creativecommons.org/licenses/by/3.0/).
+
+| Film | Creator / original project |
+| --- | --- |
+| *Sintel* (2010) | [Blender Foundation / Durian](https://studio.blender.org/projects/sintel/) — artwork is a frame from the film. |
+| *Big Buck Bunny* (2008) | [Blender Foundation / Peach](https://studio.blender.org/projects/big-buck-bunny/) — cropped project artwork. |
+| *Tears of Steel* (2012) | [Blender Foundation / Mango](https://studio.blender.org/projects/tears-of-steel/) — cropped film still. |
+| *Cosmos Laundromat: First Cycle* (2015) | [Blender Institute / Gooseberry](https://studio.blender.org/projects/cosmos-laundromat/) — cropped project artwork. |
 
 ## Community relay
 
@@ -50,7 +64,7 @@ gradle :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-There are no external Android library dependencies. `./tools/build_apk.sh` builds and test-signs the standalone release APK using AAPT2, javac, D8 and apksigner. Set `ANDROID_SDK_ROOT` and `JAVA_HOME` if needed. The default output is `build/BlackBox-Stream-Android-1.1.0.apk`. Only an APK signed with the same key can update an installed copy. Use release signing for distribution; no private keys or SDK binaries belong in Git. `python3 tools/make_samples.py` recreates the original samples (Pillow, DejaVu fonts, FFmpeg with libx264/AAC).
+There are no external Android library dependencies. `./tools/build_apk.sh` builds and test-signs the standalone release APK using AAPT2, javac, D8 and apksigner. Set `ANDROID_SDK_ROOT` and `JAVA_HOME` if needed. The default output is `build/BlackBox-Stream-Android-1.2.0.apk`. Only an APK signed with the same key can update an installed copy. Use release signing for distribution; no private keys or SDK binaries belong in Git. `python3 tools/make_samples.py` recreates the original samples (Pillow, DejaVu fonts, FFmpeg with libx264/AAC).
 
 ## Tests
 
@@ -64,7 +78,7 @@ python3 tests/run_peers.py
 JSON_JAR=/path/to/json-20240303.jar python3 tests/run_services.py
 ```
 
-The HTTPS host checks cover original direct links/playlists and offline transfers. The peer tests use an independent real libtorrent seeder and local HTTP/UDP/DHT fixtures to verify magnet metadata, progressive seek reads, and exact selected files. They also exercise TLS-pinned LAN streaming and copying, unauthorized IDs/keys and revocation. Service checks exercise two actual encrypted Community clients through the SQLite relay and controlled TMDB/MusicBrainz API responses; live provider credentials are not part of the tests.
+The HTTPS host checks cover direct links, magnet/M3U imports, offline transfers, exact descriptor hashes, incorrect web-seed ranges/bytes and cross-file pieces. The peer tests use an independent real libtorrent seeder and local HTTP/UDP/DHT fixtures to verify magnet metadata, progressive seek reads, and exact selected files. They also exercise TLS-pinned LAN streaming and copying, unauthorized IDs/keys and revocation. Service checks exercise two actual encrypted Community clients through the SQLite relay and controlled TMDB/MusicBrainz API responses; live provider credentials are not part of the tests.
 
 To test a torrent on a real phone with a controlled source, run `python3 tests/seed_android_demo.py --bind 192.168.1.20` on a computer that has Python libtorrent, replacing the address with the computer's private Wi-Fi IPv4 address. It prints a magnet and creates a `.torrent` for the original bundled sample. Put your phone on the same Wi-Fi and try either input. Only the demo asset is seeded; no DHT/UPnP service or public ports are opened by this fixture.
 
@@ -75,6 +89,10 @@ gradle :app:assembleDebug :app:assembleDebugAndroidTest
 ./tests/run_device.sh
 # With libtorrent and OpenSSL: also forward a controlled seeder and HTTPS relay with adb reverse.
 python3 tests/run_device_fixtures.py
+# Also exercise native playback and seek of the full public Sintel torrent:
+BBX_VERIFY_LIVE_FILM=1 python3 tests/run_device_fixtures.py
+# Independently check the first and last video pieces for all four public films:
+python3 tests/check_open_films.py
 ```
 
-`BlackBoxSmoke` opens the real screens, decodes and seeks the bundled video, schedules a private copy using a debug-only data source, plays that copy after its source is unavailable, streams it from the native TLS LAN byte source, and tests audio playback/background. The forwarded fixtures additionally resolve a magnet from a real independent seed, play the selected file and compare the offline copy, and send a recommendation through the actual Community relay. They use controlled HTTPS catalogue responses, not live provider credentials. Test two phones on real Wi-Fi for network routing and select your own authorized Internet media for a live network test. Host tests do not establish Android playback performance or compatibility with arbitrary codecs, swarms, providers, or networks.
+`BlackBoxSmoke` opens the real screens, decodes and seeks the bundled video, schedules a private copy using a debug-only data source, plays that copy after its source is unavailable, streams it from the native TLS LAN byte source, and tests audio playback/background. The forwarded fixtures additionally find an imported magnet in the Library, resolve metadata from an independent libtorrent seed, play while the transfer is incomplete, compare the final offline copy, and send a recommendation through the actual Community relay. The live check launches the featured title from **Watch**, requires a rendered frame and advancing playback of the full *Sintel*, then seeks to 2:30 before the download finishes. TMDB and MusicBrainz checks use controlled HTTPS responses, not live provider credentials. Test two phones on real Wi-Fi for Local Share network routing. Host tests do not establish Android playback performance or compatibility with arbitrary codecs, swarms, providers, or networks.
