@@ -6,7 +6,12 @@ adb=${ADB:-adb}
 "$adb" install -r "$root/app/build/outputs/apk/debug/app-debug.apk"
 "$adb" install -r -t "$root/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
 "$adb" shell input keyevent 82
-out=$("$adb" shell am instrument -w -r com.blackboxstream.mobile.test/com.blackboxstream.mobile.BlackBoxSmoke)
+args=()
+if [[ -n "${BBX_FIXTURE_MAGNET:-}" ]]; then
+    args=(-e fixture_magnet "$BBX_FIXTURE_MAGNET" -e fixture_torrent "$BBX_FIXTURE_TORRENT"
+          -e fixture_relay "$BBX_FIXTURE_RELAY" -e fixture_cert "$BBX_FIXTURE_CERT")
+fi
+out=$("$adb" shell am instrument -w -r "${args[@]}" com.blackboxstream.mobile.test/com.blackboxstream.mobile.BlackBoxSmoke)
 printf '%s\n' "$out"
 if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_CODE: -1'* ]]; then
     device_log=$("$adb" logcat -d -v brief -s AndroidRuntime:E BlackBoxSmoke:I MediaPlayer:E | tail -65 || true)

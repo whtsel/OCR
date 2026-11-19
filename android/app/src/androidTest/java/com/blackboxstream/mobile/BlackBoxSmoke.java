@@ -9,28 +9,44 @@ import android.content.ServiceConnection;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.SystemClock;
+import android.util.Base64;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
 import java.security.MessageDigest;
+import java.security.cert.CertificateFactory;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.FutureTask;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManagerFactory;
 
 /** Real-device/emulator smoke, separate from the JVM tests and the distributed APK. */
 public final class BlackBoxSmoke extends Instrumentation {
     private PlaybackService engine;
     private int checks;
+    private Bundle fixtures;
     private final ServiceConnection binding = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder local) { engine = ((PlaybackService.LocalBinder) local).get(); }
         @Override public void onServiceDisconnected(ComponentName name) { engine = null; }
     };
 
-    @Override public void onCreate(Bundle args) { super.onCreate(args); start(); }
+    @Override public void onCreate(Bundle args) {
+        super.onCreate(args);
+        fixtures = args;
+        start();
+    }
 
     @Override public void onStart() {
         Bundle result = new Bundle();
@@ -96,6 +112,10 @@ public final class BlackBoxSmoke extends Instrumentation {
             offline = null;
 
             verifyLanOnAndroid(app, db);
+            if (fixtures != null && fixtures.containsKey("fixture_magnet")) {
+                verifyTorrentOnAndroid(app, db);
+                verifyServicesOnAndroid();
+            }
             Activity audio = launch(PlayerActivity.class, LibraryStore.SAMPLE_AUDIO.id);
             try {
                 await("audio plays through foreground media session", 16000, () -> ui(() -> engine.ready() && engine.playing()
@@ -154,6 +174,74 @@ public final class BlackBoxSmoke extends Instrumentation {
                 assertPass("Closing the LAN player tears down TLS off the UI thread", ui(() -> engine.entry() == null));
             }
         } finally { bytes.delete(); }
+    }
+
+    private byte[] fixtureBytes(String argument) {
+        return Base64.decode(fixtures.getString(argument), Base64.DEFAULT);
+    }
+
+    private void verifyTorrentOnAndroid(Context app, LibraryStore db) throws Exception {
+        TorrentMeta descriptor = TorrentMeta.read(fixtureBytes("fixture_torrent"));
+        assertPass("Android reads the independently generated .torrent file", descriptor.items.size() == 1
+                && descriptor.items.get(0).playable());
+        String magnet = new String(fixtureBytes("fixture_magnet"), StandardCharsets.US_ASCII);
+        TorrentMeta resolved = new TorrentNetwork(() -> false).resolve(TorrentMeta.magnet(magnet));
+        assertPass("Android retrieves exact BEP 9 metadata through a magnet", Arrays.equals(descriptor.info, resolved.info));
+
+        MediaEntry entry = TorrentJobs.save(app, resolved, resolved.items.get(0));
+        Downloads.deleteCopy(app, entry);
+        Activity screen = null;
+        try {
+            ui(() -> { Downloads.enqueue(app, entry); return null; });
+            screen = launch(PlayerActivity.class, entry.id);
+            await("Android plays the selected torrent video", 55000, () -> ui(() -> engine.entry() != null
+                    && entry.id.equals(engine.entry().id) && engine.ready() && engine.videoWidth() == 640
+                    && engine.renderedVideo() && engine.playing() && engine.position() > 500));
+            await("Verified torrent file is committed to Offline", 45000,
+                    () -> db.isOffline(entry) && db.get(entry.id).transfer == -1);
+            try (InputStream original = app.getResources().openRawResource(R.raw.dawn);
+                 InputStream copy = new FileInputStream(db.offline(entry))) {
+                assertPass("Torrent's offline copy matches the independent seeder", Arrays.equals(sha(original), sha(copy)));
+            }
+        } finally {
+            Activity player = screen;
+            ui(() -> { if (player != null) player.finish(); engine.close(); return null; });
+            Downloads.deleteCopy(app, entry);
+            db.getWritableDatabase().delete("media", "id=?", new String[] {entry.id});
+            TorrentJobs.descriptor(app, TorrentMeta.hex(resolved.hash)).delete();
+        }
+    }
+
+    private void verifyServicesOnAndroid() throws Exception {
+        String relay = fixtures.getString("fixture_relay");
+        // Trust only the ephemeral runner certificate in this instrumentation process.
+        // The distributed app uses Android's normal trusted HTTPS certificates.
+        KeyStore trust = KeyStore.getInstance(KeyStore.getDefaultType());
+        trust.load(null, null);
+        trust.setCertificateEntry("fixture", CertificateFactory.getInstance("X.509")
+                .generateCertificate(new ByteArrayInputStream(fixtureBytes("fixture_cert"))));
+        TrustManagerFactory managers = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        managers.init(trust);
+        SSLContext tls = SSLContext.getInstance("TLS");
+        tls.init(null, managers.getTrustManagers(), null);
+        SSLSocketFactory previous = HttpsURLConnection.getDefaultSSLSocketFactory();
+        HttpsURLConnection.setDefaultSSLSocketFactory(tls.getSocketFactory());
+        try {
+            List<Catalogue.Card> movies = Catalogue.browse(URI.create(relay + "/3"), Catalogue.Filter.MOVIE,
+                    Catalogue.Shelf.TRENDING, "A + B", "aabbccddeeff1100aabbccddeeff1100", 1);
+            assertPass("Android parses catalogue metadata from HTTPS", movies.size() == 1
+                    && "A + B".equals(movies.get(0).title) && movies.get(0).entry() == null);
+            List<Catalogue.Card> music = Catalogue.music(URI.create(relay + "/ws/2"), Catalogue.Music.TRACKS, "Low Orbit");
+            assertPass("Android parses MusicBrainz-shaped search results", music.size() == 1 && music.get(0).musicBrainz());
+
+            CommunityRoom sender = CommunityRoom.create(relay), receiver = CommunityRoom.parse(sender.code());
+            CommunityRoom.Event recommendation = CommunityRoom.Event.make("Android test", "Try this clip", "https://media.example/dawn.mp4");
+            sender.post(recommendation);
+            CommunityRoom.Feed received = receiver.fetch(0);
+            assertPass("Android sends and decrypts a recommendation through the actual Community relay",
+                    received.events.size() == 1 && recommendation.text.equals(received.events.get(0).text)
+                            && recommendation.link.equals(received.events.get(0).link));
+        } finally { HttpsURLConnection.setDefaultSSLSocketFactory(previous); }
     }
 
     private Activity launch(Class<? extends Activity> type, String id) {

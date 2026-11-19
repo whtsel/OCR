@@ -73,6 +73,8 @@ For Android runtime verification, use an unlocked emulator/phone:
 ```sh
 gradle :app:assembleDebug :app:assembleDebugAndroidTest
 ./tests/run_device.sh
+# With libtorrent and OpenSSL: also forward a controlled seeder and HTTPS relay with adb reverse.
+python3 tests/run_device_fixtures.py
 ```
 
-`BlackBoxSmoke` opens the real screens, decodes and seeks the bundled video, schedules a private copy using a debug-only data source, plays that copy after its source is unavailable, streams it from the native TLS LAN byte source, and tests audio playback/background. Test two phones on real Wi-Fi for network routing and select your own authorized Internet media for a live network test. Host tests do not establish Android playback performance or compatibility with arbitrary codecs, swarms, providers, or networks.
+`BlackBoxSmoke` opens the real screens, decodes and seeks the bundled video, schedules a private copy using a debug-only data source, plays that copy after its source is unavailable, streams it from the native TLS LAN byte source, and tests audio playback/background. The forwarded fixtures additionally resolve a magnet from a real independent seed, play the selected file and compare the offline copy, and send a recommendation through the actual Community relay. They use controlled HTTPS catalogue responses, not live provider credentials. Test two phones on real Wi-Fi for network routing and select your own authorized Internet media for a live network test. Host tests do not establish Android playback performance or compatibility with arbitrary codecs, swarms, providers, or networks.
