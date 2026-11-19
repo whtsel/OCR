@@ -156,8 +156,8 @@ public final class BlackBoxSmoke extends Instrumentation {
         if (live) Downloads.deleteCopy(app, entry);
         Activity desktop = launch(V90Activity.class, null);
         Activity screen = null;
+        WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
         try {
-            WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
             assertPass("The Android v90 launcher hosts the bundled Windows interface", web != null);
             await("Original v90 boot and Open films row complete on Android WebView", 18000, () -> jsTrue(web,
                     "document.title.includes('BlackBox Stream v90') && document.querySelector('#rows .card') && document.querySelector('#engineDot.ok') && !!window.bbxExpiryV90"));
@@ -186,7 +186,8 @@ public final class BlackBoxSmoke extends Instrumentation {
             liveVerified = true;
         } catch (AssertionError problem) {
             MediaEntry row = db.get(entry.id);
-            throw new AssertionError(problem.getMessage() + "; player=" + ui(() -> engine == null ? "unbound" : engine.failure())
+            String page = web == null ? "no WebView" : js(web, "JSON.stringify({url:location.href, title:document.title, adapter:typeof window.bbxAndroidOpen, view:window.__BBX_STATE__?.view, row:!!document.querySelector('#rows .card'), engine:document.querySelector('#engineDot')?.className, sources:document.querySelector('#sourcesBox')?.innerText.slice(0,160)})");
+            throw new AssertionError(problem.getMessage() + "; page=" + page + "; player=" + ui(() -> engine == null ? "unbound" : engine.failure())
                     + "; transfer=" + (row == null ? "not queued" : row.transferError + " / " + Downloads.received(db, row) + " verified bytes"), problem);
         } finally {
             Activity player = screen;
@@ -201,9 +202,13 @@ public final class BlackBoxSmoke extends Instrumentation {
     }
 
     private boolean jsTrue(WebView web, String script) throws Exception {
+        return "true".equals(js(web, "Boolean(" + script + ")"));
+    }
+
+    private String js(WebView web, String script) throws Exception {
         CompletableFuture<String> result = new CompletableFuture<>();
-        ui(() -> { web.evaluateJavascript("Boolean(" + script + ")", result::complete); return null; });
-        return "true".equals(result.get(8, TimeUnit.SECONDS));
+        ui(() -> { web.evaluateJavascript(script, result::complete); return null; });
+        return result.get(8, TimeUnit.SECONDS);
     }
 
     private static WebView findWeb(View view) {

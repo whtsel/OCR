@@ -138,7 +138,11 @@ public final class V90Activity extends Activity {
     }
 
     private boolean active() { return resumed && !isFinishing() && !isDestroyed() && !closed && !V90Api.expired(); }
-    private void launch(Class<? extends Activity> screen) { startActivity(new Intent(this, screen)); }
+    private void launch(Class<? extends Activity> screen) {
+        Intent request = new Intent(this, screen);
+        if (screen == MainActivity.class) request.putExtra("device_library", true);
+        startActivity(request);
+    }
     private void toast(String text) { if (!closed) Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
 
     private void reply(int id, V90Api.Reply result) {

@@ -15,19 +15,22 @@
   }
   const player = () => node('playerWrap');
   const originalNoKey = renderNoKey;
-  renderNoKey = function () {
-    originalNoKey();
+  function fillKeylessHome() {
     const quick = node('heroTorrent');
     if (quick) quick.onclick = () => bbxAndroidOpen('torrent');
     const hero = node('hero');
     hero.classList.add('android-keyless');
-    hero.querySelector('.hero-desc').textContent = 'Use your TMDB key for the full v90 movie and series catalogue. You can also look up torrent sources by title or play the open films below without a key.';
+    const description = hero.querySelector('.hero-desc');
+    if (!description || !quick) return;
+    description.textContent = 'Use your TMDB key for the full v90 movie and series catalogue. You can also look up torrent sources by title or play the open films below without a key.';
     read('/api/mobile/open-films').then(({results}) => {
       if (state.tmdb || !hero.classList.contains('android-keyless')) return;
       const rows = node('rows');
       rows.replaceChildren(makeRow('Open films · full-length sources', results, null));
     }).catch(() => {});
-  };
+  }
+  renderNoKey = function () { originalNoKey(); fillKeylessHome(); };
+  if (!state.tmdb && node('heroSettings')) fillKeylessHome();
   const originalLoadHome = loadHome;
   loadHome = function (...args) {
     node('hero')?.classList.remove('android-keyless');
@@ -36,6 +39,15 @@
 
   // Keep the original search cards, title details and source list; add the index search option
   // when there is no TMDB credential. An index result is never autoplayed.
+  const originalSourceCard = sourceCardV70;
+  sourceCardV70 = function (source) {
+    const card = originalSourceCard(source);
+    const play = card.querySelector('.source-play-chip-v74');
+    play?.classList.add('android-source-play');
+    const title = el('span', 'android-release-title', source.title || 'Selected release');
+    card.prepend(title);
+    return card;
+  };
   const originalSearch = doSearch;
   doSearch = function () {
     originalSearch();
@@ -66,8 +78,6 @@
         : notes.filter(Boolean).join(' ') || 'The source indexes did not answer. Try opening an authorized magnet instead.';
       for (const source of sources.values()) {
         const card = sourceCardV70(source);
-        // The PC detail page already displays the title. Standalone index search needs it in each row.
-        card.prepend(el('strong', 'android-release-title', source.title));
         station.append(card);
       }
     });
@@ -79,32 +89,56 @@
     if (panel && (state.view !== 'browse' || state.browse?.mode !== 'search')) panel.hidden = true;
   });
 
-  // The desktop file picker can use Windows paths; a phone uses SAF or an exact HTTPS descriptor.
-  const openDesktopTorrent = openTorrent;
+  // Bind every chooser to the specific manifest job from the chosen source, not a recent torrent.
   openTorrent = async function (source, title, options = {}) {
     const link = String(source || '').trim();
-    if (/^magnet:\?/i.test(link)) return openDesktopTorrent(link, title, options);
-    if (/^https:\/\//i.test(link) && /\.torrent$/i.test(new URL(link).pathname)) {
-      if (state.resolveId) return toast('Cancel the current source check first.');
-      state.resolveId = 'starting';
-      showFinding('Fetching and verifying the exact .torrent descriptor…');
-      try {
-        const manifest = await resolveWithContentEngineV70(link, 'android-https-descriptor');
-        if (!manifest.files?.length) throw new Error('No media file in this descriptor.');
-        node('settingsWrap').hidden = true;
-        hideFinding(); showPlayer(manifest, title || manifest.name, options);
-      } catch (error) { toast(error.message || 'Could not open that descriptor.'); }
-      finally { state.resolveId = null; state.findingCancel = null; hideFinding(); }
+    const name = title || titleOf(state.movie || {}) || 'Selected release';
+    if (!/^magnet:\?/i.test(link) && !/^https:\/\//i.test(link)) {
+      toast('Paste a magnet or HTTPS link, or pick a local .torrent file.');
       return;
     }
-    if (/^https:\/\//i.test(link)) {
-      try {
+    if (state.resolveId) return toast('Cancel the current source check first.');
+    try {
+      if (/^https:\/\//i.test(link) && !/\.torrent$/i.test(new URL(link).pathname)) {
         const {id} = await read('/api/mobile/direct', {url: link, title: title || undefined});
         node('settingsWrap').hidden = true; bbxAndroidOpen('play', id);
-      } catch (error) { toast(error.message); }
-      return;
-    }
-    toast('Paste a magnet or HTTPS link, or pick a local .torrent file.');
+        return;
+      }
+    } catch (error) { toast(error.message); return; }
+    let job, cancelled = false;
+    state.resolveId = 'starting';
+    state.findingCancel = async () => {
+      cancelled = true;
+      if (job) await read(`/api/content-job/${job}/cancel`, {}).catch(() => {});
+    };
+    showFinding(`Checking complete manifest for ${name.slice(0, 72)}…`);
+    try {
+      ({job} = await read('/api/content-resolve', {uri: link}));
+      if (cancelled) { await state.findingCancel(); return; }
+      state.resolveId = job;
+      const until = Date.now() + 130000;
+      while (!cancelled && Date.now() < until) {
+        const reply = await read(`/api/content-job/${job}`);
+        if (cancelled || reply.state === 'cancelled') return;
+        if (reply.state === 'error') throw new Error(reply.error);
+        if (reply.state === 'done') {
+          const manifest = reply.result;
+          if (manifest?.job !== job || manifest.id !== manifest.info_hash || !manifest.files?.length)
+            throw new Error('The exact source did not return a verified file list.');
+          node('settingsWrap').hidden = true;
+          hideFinding();
+          showPlayer(manifest, title || manifest.name, options);
+          return;
+        }
+        findingText(reply.msg || 'Waiting for the selected source…');
+        await new Promise(resolve => setTimeout(resolve, 600));
+      }
+      if (!cancelled) {
+        await state.findingCancel();
+        toast('No peers answered for this manifest in time. Try another authorized release.');
+      }
+    } catch (error) { if (!cancelled) toast(`Source check stopped: ${error.message}`); }
+    finally { state.resolveId = null; state.findingCancel = null; hideFinding(); }
   };
 
   // Let the original v90 chooser render file rows. The Windows byte reader is replaced with
@@ -117,12 +151,13 @@
     if (control) control.disabled = true;
     message.classList.add('on'); message.textContent = `Preparing ${choice.name}…`;
     try {
-      const result = await read(`/api/torrent/${encodeURIComponent(torrent.id)}/select/${index}`, {title});
+      const result = await read(`/api/torrent/${encodeURIComponent(torrent.id)}/select/${index}`, {title, job: torrent.job});
       if (!result.manifest_verified || !result.id) throw new Error('The Android engine did not accept that file.');
-      rememberDownloadMetaV70(torrent, choice, title);
-      player().hidden = true; state.playerFrom = null;
-      if (downloadOnly) toast('This exact file is queued in Library.');
-      else bbxAndroidOpen('play', result.id);
+      if (state.torrent === torrent && !player().hidden) {
+        player().hidden = true; state.playerFrom = null;
+        if (downloadOnly) toast('This exact file is queued in Library.');
+        else bbxAndroidOpen('play', result.id);
+      }
       if (state.view === 'library') refreshLibrary();
     } catch (error) { message.textContent = error.message; toast(error.message); }
     finally { if (control) control.disabled = false; }
@@ -177,8 +212,16 @@
     return false;
   };
 
+  // There is no Windows downloader to install in this APK.
+  showMusicSourcePopup = () => {};
+  ensureMusicPlaybackReady = async () => {
+    toast('Choose a phone audio file or direct HTTPS audio link in Device library.');
+    return false;
+  };
+
   function installMobileControls() {
     const version = node('bbxVer'); version.title = 'PC v90 interface · Android engine';
+    node('communityGlobalCount')?.classList.add('android-desktop-only');
     const menu = node('settingsWrap');
     const field = node('uri');
     field.placeholder = 'Magnet or HTTPS media / .torrent URL';

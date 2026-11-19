@@ -35,7 +35,7 @@ sed 's|<manifest xmlns|<manifest package="'"$pkg"'" xmlns|; s/\${applicationId}/
 "$aapt2" compile --dir "$main/res" -o "$work/compiled.zip"
 "$aapt2" link -I "$android" --manifest "$work/AndroidManifest.xml" --java "$work/r" -o "$work/resources.apk" \
     --min-sdk-version "$min" --target-sdk-version "$target" --version-code "$code" --version-name "$version" \
-    -0 mp4 -0 m4a --no-compile-sdk-metadata "$work/compiled.zip"
+    -A "$main/assets" -0 mp4 -0 m4a --no-compile-sdk-metadata "$work/compiled.zip"
 readarray -d '' -t sources < <(find "$main/java" "$work/r" -name '*.java' -print0)
 if [[ -n "${ECJ_JAR:-}" ]]; then
     "$java" -jar "$ECJ_JAR" -1.8 -proc:none -encoding UTF-8 -nowarn \

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Add classes.dex to AAPT2's APK and align stored resources; sign only after this step."""
 from pathlib import Path
+from hashlib import sha256
 import shutil
 import struct
 import sys
@@ -12,6 +13,14 @@ def check(apk):
         assert z.testzip() is None, 'APK has a corrupt ZIP entry'
         for name in ('classes.dex', 'AndroidManifest.xml', 'resources.arsc', 'res/raw/dawn.mp4', 'res/raw/orbit.m4a'):
             assert name in z.namelist(), f'Missing {name}'
+        manifest = Path(__file__).resolve().parents[1] / 'V90-ASSETS.sha256'
+        if manifest.is_file():
+            for line in manifest.read_text(encoding='utf-8').splitlines():
+                digest, name = line.split(maxsplit=1)
+                member = 'assets/v90/' + name
+                assert sha256(z.read(member)).hexdigest() == digest, f'Desktop source changed: {member}'
+            for name in ('android-api.js', 'android-port.js', 'android-v90.css'):
+                assert 'assets/v90-mobile/' + name in z.namelist(), f'Missing Android adapter {name}'
         for entry in z.infolist():
             if entry.filename in ('resources.arsc', 'res/raw/dawn.mp4', 'res/raw/orbit.m4a'):
                 assert entry.compress_type == ZIP_STORED, f'{entry.filename} must be uncompressed'

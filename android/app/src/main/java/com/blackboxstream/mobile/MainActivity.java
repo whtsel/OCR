@@ -92,6 +92,7 @@ public final class MainActivity extends Activity implements PlaybackService.List
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         store = LibraryStore.get(this);
+        if (state == null && getIntent().getBooleanExtra("device_library", false)) tab = 1;
         if (state != null) {
             tab = state.getInt("tab");
             query = state.getString("query", "");

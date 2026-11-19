@@ -8,7 +8,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -27,9 +26,6 @@ final class V90Api {
     private final V90Online online;
     private final ExecutorService resolver = Executors.newFixedThreadPool(2);
     private final Map<String, Resolve> jobs = new LinkedHashMap<>();
-    private final Map<String, TorrentMeta> manifests = new LinkedHashMap<String, TorrentMeta>(24, .75f, true) {
-        @Override protected boolean removeEldestEntry(Map.Entry<String, TorrentMeta> old) { return size() > 24; }
-    };
     private volatile String key;
     private volatile boolean closed;
 
@@ -55,7 +51,7 @@ final class V90Api {
 
     void close() {
         closed = true;
-        synchronized (this) { for (Resolve job : jobs.values()) job.cancelled = true; jobs.clear(); manifests.clear(); }
+        synchronized (this) { for (Resolve job : jobs.values()) job.cancelled = true; jobs.clear(); }
         resolver.shutdownNow();
     }
 
@@ -103,7 +99,8 @@ final class V90Api {
             if (path.startsWith("/api/content-job/") || path.startsWith("/api/job/")) return status(path, get);
             if (!get && path.matches("/api/torrent/[a-f0-9]{40}/select/[0-9]{1,4}")) {
                 String[] parts = path.split("/");
-                return select(parts[3], Integer.parseInt(parts[5]), new JSONObject(body.isEmpty() ? "{}" : body).optString("title"));
+                JSONObject selection = new JSONObject(body);
+                return select(parts[3], Integer.parseInt(parts[5]), selection.optString("job"), selection.optString("title"));
             }
             if (get && path.equals("/api/mobile/library")) return library();
             if (!get && path.equals("/api/mobile/direct")) {
@@ -126,7 +123,7 @@ final class V90Api {
             return fail(400, invalid instanceof IllegalArgumentException && invalid.getMessage() != null ? invalid.getMessage() : "Invalid v90 request data.");
         } catch (IOException failed) {
             return fail(502, safeFailure(failed, "Couldn't complete the request. Check the connection and try again."));
-        } catch (RuntimeException failure) { return fail(500, "Android couldn't complete this operation."); }
+        } catch (RuntimeException | StackOverflowError failure) { return fail(500, "Android couldn't complete this operation."); }
     }
 
     private Reply catalogue(Uri uri, String route) throws JSONException, IOException {
@@ -234,9 +231,10 @@ final class V90Api {
         String link = source.trim();
         if (link.length() > 12000 || !(link.regionMatches(true, 0, "magnet:?", 0, 8) || MediaSources.torrentDescriptor(link)))
             return fail(400, "Use a v1 magnet, an HTTPS .torrent URL, or choose a .torrent document in the Android picker.");
-        if (jobs.size() >= 24) {
-            jobs.values().removeIf(job -> !job.working());
-            if (jobs.size() >= 24) return fail(429, "Too many torrent lookups. Cancel one and try again.");
+        if (jobs.size() >= 12) {
+            java.util.Iterator<Resolve> old = jobs.values().iterator();
+            while (old.hasNext() && jobs.size() >= 12) if (!old.next().working()) old.remove();
+            if (jobs.size() >= 12) return fail(429, "Too many torrent lookups. Cancel one and try again.");
         }
         Resolve job = new Resolve(); jobs.put(job.id, job);
         resolver.execute(() -> {
@@ -248,7 +246,7 @@ final class V90Api {
                 if (!playable) throw new IOException("There is no Android-playable audio or video file under 4 GiB in this torrent.");
                 synchronized (V90Api.this) {
                     if (job.cancelled || closed) return;
-                    manifests.put(TorrentMeta.hex(meta.hash), meta); job.meta = meta;
+                    job.meta = meta;
                 }
             } catch (IOException | RuntimeException failed) { job.error = safeFailure(failed, "Couldn't load and verify the torrent manifest."); }
         });
@@ -261,8 +259,10 @@ final class V90Api {
         String hash = TorrentMeta.hex(magnet.hash);
         for (Cinema.Film film : Cinema.FILMS) if (film.hash.equals(hash)) return film.metadata(app).withMagnet(magnet);
         synchronized (this) {
-            TorrentMeta cached = manifests.get(hash);
-            if (cached != null) return cached.withMagnet(magnet);
+            for (Resolve job : jobs.values()) {
+                TorrentMeta cached = job.meta;
+                if (!job.cancelled && cached != null && TorrentMeta.hex(cached.hash).equals(hash)) return cached.withMagnet(magnet);
+            }
         }
         File cache = TorrentJobs.descriptor(app, hash);
         if (cache.isFile()) {
@@ -276,7 +276,7 @@ final class V90Api {
         String[] parts = path.split("/");
         Resolve job = parts.length < 4 ? null : jobs.get(parts[3]);
         if (job == null) return fail(404, "Torrent lookup has ended. Open the source again.");
-        if (!get && parts.length == 5 && parts[4].equals("cancel")) job.cancelled = true;
+        if (!get && parts.length == 5 && parts[4].equals("cancel")) { job.cancelled = true; job.meta = null; }
         else if (!get || parts.length != 4) return fail(400, "Invalid lookup status request.");
         if (job.cancelled) return ok(new JSONObject().put("state", "cancelled"));
         if (job.error != null) return ok(new JSONObject().put("state", "error").put("error", job.error));
@@ -285,13 +285,14 @@ final class V90Api {
         for (TorrentMeta.Item f : job.meta.items) if (f.playable() && files.length() < 1024)
             files.put(new JSONObject().put("idx", f.index).put("name", f.name).put("len", f.length));
         JSONObject data = new JSONObject().put("id", TorrentMeta.hex(job.meta.hash)).put("info_hash", TorrentMeta.hex(job.meta.hash))
-                .put("name", job.meta.name).put("files", files).put("added", System.currentTimeMillis() / 1000L);
+                .put("name", job.meta.name).put("files", files).put("job", job.id);
         return ok(new JSONObject().put("state", "done").put("pct", 100).put("result", data));
     }
 
-    private synchronized Reply select(String hash, int index, String title) throws JSONException, IOException {
-        TorrentMeta meta = manifests.get(hash);
-        if (meta == null) return fail(404, "Open the exact source again to verify its manifest.");
+    private synchronized Reply select(String hash, int index, String jobId, String title) throws JSONException, IOException {
+        Resolve job = jobs.get(jobId);
+        TorrentMeta meta = job == null || job.cancelled ? null : job.meta;
+        if (meta == null || !TorrentMeta.hex(meta.hash).equals(hash)) return fail(409, "The selected file doesn't match this verified source check. Open the release again.");
         if (index < 0 || index >= meta.items.size() || !meta.items.get(index).playable()) return fail(415, "This file is not an Android media selection.");
         TorrentMeta.Item file = meta.items.get(index);
         Cinema.Film film = Cinema.fromTorrent("torrent:" + hash + ":" + index);
