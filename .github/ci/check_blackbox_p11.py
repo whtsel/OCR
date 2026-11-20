@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Diagnostic for the hash-pinned archive; never repack or distribute the APK or audio."""
+"""Check archived p11 or its CI-only ZIP dependency probe. Publish no APKs or audio."""
 
 import argparse
 from functools import partial
@@ -264,8 +264,24 @@ def find_server(pid):
     raise RuntimeError('could not reach p11’s own loopback helper status endpoint')
 
 
-def android(apk, work):
-    verify_apk(apk)
+def verify_repair(original, probe):
+    verify_apk(original)
+    with zipfile.ZipFile(original) as before, zipfile.ZipFile(probe) as after:
+        original_names = {name for name in before.namelist() if not name.startswith('META-INF/')}
+        probe_names = [name for name in after.namelist() if not name.startswith('META-INF/')]
+        if len(probe_names) != len(original_names) + 1 or set(probe_names) != original_names | {'classes2.dex'}:
+            raise RuntimeError('unexpected entries in test repaired APK')
+        for name in sorted(original_names):
+            if before.read(name) != after.read(name):
+                raise RuntimeError(f'test repaired APK modified app bytes in {name}')
+    print('Diagnostic APK: original app bytes match; only compression library DEX and test signature added')
+
+
+def android(apk, work, original=None):
+    if original is None:
+        verify_apk(apk)
+    else:
+        verify_repair(original, apk)
     adb('root')  # Isolated, disposable emulator only; needed for process-owned socket diagnostics.
     adb('wait-for-device')
     props = {prop: adb('shell', 'getprop', prop) for prop in
@@ -350,6 +366,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('download', 'host', 'android'))
     parser.add_argument('apk', type=Path, nargs='?')
+    parser.add_argument('--original', type=Path, help='verified original for comparison with a ZIP-only test repair')
     args = parser.parse_args()
     if args.mode != 'host' and args.apk is None:
         parser.error('APK path required')
@@ -360,7 +377,7 @@ def main():
             elif args.mode == 'host':
                 host(Path(work), args.apk)
             else:
-                android(args.apk, Path(work))
+                android(args.apk, Path(work), args.original)
     except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
         print(f'::error::{diagnostic(str(error)).replace(chr(10), " ")}')
         sys.exit(1)

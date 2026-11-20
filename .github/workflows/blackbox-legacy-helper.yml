@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/blackbox-legacy-helper.yml'
       - '.github/ci/check_blackbox_p11.py'
+      - '.github/ci/prepare_blackbox_p11_repair.sh'
+      - '.github/ci/install_audio_probe.sh'
 permissions:
   contents: read
 concurrency:
@@ -22,18 +24,20 @@ jobs:
         with:
           persist-credentials: false
       - name: Install a host audio decoder
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends ffmpeg
+        run: bash .github/ci/install_audio_probe.sh
       - name: Control audio and exact original recordings
         run: python3 -u .github/ci/check_blackbox_p11.py host
   old-app:
-    name: Unmodified p11 on Android API ${{ matrix.api }}
+    name: p11 on API ${{ matrix.api }} (${{ matrix.variant }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        api: [34, 35]
+        include:
+          - api: 34
+            variant: archived
+          - api: 35
+            variant: zip-dependency
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -42,9 +46,14 @@ jobs:
       - name: Download and verify the archived APK
         run: python3 -u .github/ci/check_blackbox_p11.py download "$RUNNER_TEMP/blackbox-p11.apk"
       - name: Install a host audio decoder
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends ffmpeg
+        run: bash .github/ci/install_audio_probe.sh
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        if: matrix.variant == 'zip-dependency'
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - name: Make a temporary APK with the missing ZIP library
+        if: matrix.variant == 'zip-dependency'
+        run: bash .github/ci/prepare_blackbox_p11_repair.sh "$RUNNER_TEMP/blackbox-p11.apk" "$RUNNER_TEMP/blackbox-probe.apk"
       - name: Enable emulator acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -58,4 +67,9 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
-          script: python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-p11.apk"
+          script: |
+            if [ '${{ matrix.variant }}' = 'zip-dependency' ]; then
+              python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-probe.apk" --original "$RUNNER_TEMP/blackbox-p11.apk"
+            else
+              python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-p11.apk"
+            fi
