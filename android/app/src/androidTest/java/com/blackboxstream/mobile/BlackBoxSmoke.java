@@ -229,7 +229,9 @@ public final class BlackBoxSmoke extends Instrumentation {
             // Seed only the disposable test package. These files prove local playback, NOT live recording availability.
             assertPass("Preview cache starts empty", cache.mkdir());
             seedPreparedFixture(cache, spec("pick:3579685431", "The Fate of Ophelia", "Taylor Swift", "The Life of a Showgirl", 226, ""));
-            seedPreparedFixture(cache, spec("pick:62724015", "Locked out of Heaven", "Bruno Mars", "Unorthodox Jukebox", 233, ""));
+            JSONObject lockedRecording = spec("pick:62724015", "Locked out of Heaven", "Bruno Mars", "Unorthodox Jukebox", 233, "");
+            seedPreparedFixture(cache, lockedRecording);
+            String savedPlay = "#musicDownloadedList [data-libplay='" + new PreparedMusic.Track(lockedRecording).key + "']";
             desktop = launch(V90Activity.class, null);
             Activity shown = desktop;
             WebView web = ui(() -> findWeb(shown.getWindow().getDecorView()));
@@ -289,6 +291,9 @@ public final class BlackBoxSmoke extends Instrumentation {
                 SystemClock.sleep(700);
                 assertPass("Late reply cannot revive the cancelled track or its spinner", jsTrue(web,
                         "document.querySelector('#bgTitle').textContent==='Locked out of Heaven' && !document.querySelector('.music-ui-loading-v52')"));
+                tapWeb(web, "#bgClose");
+                await("Closing the original player clears the resume session without deleting Downloads", 7000,
+                        () -> jsTrue(web, "document.querySelector('#bgAudioBar').hidden && !localStorage.getItem(MUSIC_SESSION_KEY) && musicDownloads.length===2"));
                 tapWeb(web, missing);
                 await("An unavailable offline song stops cleanly with no substitute or source dialog", 9000,
                         () -> jsTrue(web, "musicQueue.list[musicQueue.idx]?.track==='NUEVAYoL' && document.querySelector('#bgAudioBar').hidden"
@@ -300,9 +305,8 @@ public final class BlackBoxSmoke extends Instrumentation {
                 checkKeylessHome(offline);
                 tapWeb(offline, "#navMusic");
                 await("Both recordings are in the original offline downloads after reopening", 10000,
-                        () -> jsTrue(offline, "musicDownloads.filter(t=>t.offline).length===2 && document.querySelector('#musicDownloadedList [data-libplay]')"));
-                js(offline, "Array.from(document.querySelectorAll('#musicDownloadedList .music-library-item-v47')).find(row=>row.textContent.includes('Locked out of Heaven')).querySelector('[data-libplay]').id='smokeSaved'");
-                tapWeb(offline, "#smokeSaved");
+                        () -> jsTrue(offline, "musicDownloads.filter(t=>t.offline).length===2 && document.querySelector(" + JSONObject.quote(savedPlay) + ")"));
+                tapWeb(offline, savedPlay);
                 awaitPreparedFixture(offline, "Locked out of Heaven", 1);
                 // The unplayed album track must not lose its album/disc/track identity in a saved playlist.
                 assertPass("The original playlist preserves exact unplayed album rows across reload of its stored data", jsTrue(offline,

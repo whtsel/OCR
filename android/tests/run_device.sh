@@ -37,7 +37,8 @@ if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_C
     device_log=$("$adb" logcat -d -v brief -s AndroidRuntime:E BlackBoxSmoke:I MediaPlayer:E | tail -65 || true)
     printf '%s\n' "$device_log"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
-        diagnostic=$(printf '%s\n%s\n' "$out" "$device_log" | tail -c 4300)
+        # Keep the exception and failed control even when a long list of earlier checks passed.
+        diagnostic=$(printf '%s\n%s\n' "${out:0:1900}" "$(printf '%s' "$device_log" | tail -c 2300)")
         diagnostic=${diagnostic//'%'/'%25'}
         diagnostic=${diagnostic//$'\r'/'%0D'}
         diagnostic=${diagnostic//$'\n'/'%0A'}
