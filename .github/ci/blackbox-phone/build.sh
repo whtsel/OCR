@@ -28,7 +28,7 @@ mkdir "$work/dex"
 grep -q "Class descriptor .*Lorg/apache/commons/compress/archivers/zip/ZipFile;" "$work/dependency.txt"
 
 "$tools/aapt2" link -I "$platform" -I "$original" --manifest "$dir/AndroidManifest.xml" \
-  --min-sdk-version 24 --target-sdk-version 34 --version-code 1 --version-name '0.1-phone-test' -o "$work/manifest.apk"
+  --min-sdk-version 24 --target-sdk-version 34 --version-code 1 --version-name '0.2-helper-search' -o "$work/manifest.apk"
 extra=()
 case "$abi" in
   arm64-v8a) ;;
@@ -44,15 +44,15 @@ python3 -B "$dir/package_apk.py" "$original" "$helper" "$work/dex/classes.dex" \
   "$work/manifest.apk" "$work/base.apk" "${extra[@]}"
 "$tools/zipalign" -P 16 -f 4 "$work/base.apk" "$work/aligned.apk"
 keytool -genkeypair -keystore "$work/diagnostic.p12" -storepass test-only -keypass test-only \
-  -alias diagnostic -keyalg RSA -keysize 2048 -validity 365 -dname 'CN=BlackBox ARM64 Helper Test' >/dev/null
+  -alias diagnostic -keyalg RSA -keysize 2048 -validity 365 -dname 'CN=BlackBox ARM64 Helper Search' >/dev/null
 "$tools/apksigner" sign --ks "$work/diagnostic.p12" --ks-pass pass:test-only --v1-signing-enabled false \
   --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false --out "$output" "$work/aligned.apk"
 "$tools/apksigner" verify --verbose --print-certs "$output"
 "$tools/zipalign" -P 16 -c 4 "$output"
 "$tools/aapt2" dump badging "$output" > "$work/badging.txt"
 cat "$work/badging.txt"
-grep -q "^package: name='com.blackbox.stream.phonetest'" "$work/badging.txt"
-grep -q "^application-label:'BlackBox Helper Test'$" "$work/badging.txt"
+grep -q "^package: name='com.blackbox.stream.helpersearch'" "$work/badging.txt"
+grep -q "^application-label:'BlackBox Helper Search'$" "$work/badging.txt"
 grep -q "^launchable-activity: name='com.blackbox.stream.MainActivity'" "$work/badging.txt"
 if [[ "$abi" == arm64-v8a ]]; then grep -q "^native-code: 'arm64-v8a'$" "$work/badging.txt"; fi
 python3 - "$output" "$work/dex/classes.dex" "$helper" <<'PY'

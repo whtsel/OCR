@@ -1,140 +1,234 @@
 'use strict';
 const el = id => document.getElementById(id);
-const songs = [
-  { key: 'espresso', title: 'Espresso', id: '51zjlMhdSTE', duration: 175 },
-  { key: 'kwaku', title: 'Kwaku the Traveller', id: 'Hb6I7GoTvzI', duration: 185 },
-];
+const api = '/api/music/youtube';
 const audio = el('audio');
+const form = el('search-form');
+const query = el('query');
+const results = el('results');
+const status = text => { el('audio-status').textContent = text; };
+const videoId = /^[A-Za-z0-9_-]{11}$/;
+const audioLimit = 24 * 1024 * 1024;
 let ready = false;
-let loading = false;
+let busy = false;
 let selected = null;
-let audioUrl = '';
-const updateButtons = () => songs.forEach(song => { el(song.key).disabled = !ready || loading; });
-const report = (song, text) => { el(`${song.key}-status`).textContent = text; };
+let movementTimer;
 
-async function request(url, options, timeout) {
+function controls() {
+  query.disabled = el('search').disabled = !ready || busy;
+  form.setAttribute('aria-busy', String(busy));
+  for (const button of results.querySelectorAll('button')) button.disabled = !ready || busy;
+}
+
+async function request(path, timeout, options) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    const response = await fetch(url, {...options, cache: 'no-store', signal: controller.signal});
+    const response = await fetch(path, {...options, cache:'no-store', redirect:'error', signal:controller.signal});
     return [response.status, await response.json()];
-  } finally {
-    clearTimeout(timer);
-  }
+  } finally { clearTimeout(timer); }
 }
 
-// Display a redacted reason, not raw provider pages, URLs, or app-private paths.
+// Show only fixed reasons. Provider error text may contain media URLs or app-private paths.
 function reason(answer) {
-  const text = String(answer?.message ?? '');
-  if (/sign in|not a bot|cookies/i.test(text)) return 'The provider asked for sign-in or a bot check.';
-  if (/429|too many requests/i.test(text)) return 'The provider rate-limited the request.';
-  if (/403|forbidden/i.test(text)) return 'The provider refused the request.';
-  if (/timed? out|no address|resolve|connection/i.test(text)) return 'The phone could not complete the provider connection.';
-  if (/ffmpeg|ffprobe|extract audio/i.test(text)) return 'Audio preparation failed.';
-  return 'The helper did not return this recording.';
+  const text = typeof answer?.message === 'string' ? answer.message : '';
+  if (/429|too many requests/i.test(text)) return 'YouTube rate-limited the request.';
+  if (/sign[ -]?in|not a bot|cookies/i.test(text)) return 'YouTube asked for sign-in or a bot check.';
+  if (/403|forbidden|unavailable|private video/i.test(text)) return 'YouTube did not allow this upload.';
+  if (/timed? out|no address|resolve|connection/i.test(text)) return 'The helper could not complete the connection to YouTube.';
+  if (/ffmpeg|ffprobe|extract audio/i.test(text)) return 'The helper could not finish the audio file.';
+  return 'The helper did not return a usable response.';
 }
 
 async function checkSetup() {
   el('retry').hidden = true;
   el('setup').textContent = 'Starting the bundled helper…';
-  const until = Date.now() + 120000;
-  do {
+  const until = performance.now() + 120000;
+  while (performance.now() < until) {
     try {
-      const [status, answer] = await request('/api/ytdlp/status', {}, 5000);
-      if (status === 200 && answer.cookies === true) {
-        el('setup').textContent = 'Unexpected account session. This no-sign-in test will not run.';
+      const [code, answer] = await request('/api/ytdlp/status', 5000);
+      if (code === 200 && answer.cookies === true) {
+        el('setup').textContent = 'Unexpected account session. This test will not run.';
         return;
       }
-      if (status === 200 && answer.installed === true && answer.state === 'ready' && answer.cookies === false) {
+      if (code === 200 && answer.installed === true && answer.state === 'ready' && answer.cookies === false) {
         ready = true;
         el('setup').textContent = 'Helper ready · no account session';
-        updateButtons();
+        controls();
         return;
       }
-      if (status === 200 && answer.state === 'failed') {
-        el('setup').textContent = 'Helper setup failed on this phone.';
+      if (code === 200 && answer.state === 'failed') {
+        el('setup').textContent = 'The bundled helper could not start.';
         el('retry').hidden = false;
         return;
       }
-    } catch (_) { /* A cold start can briefly leave the local endpoint unavailable. */ }
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  } while (Date.now() < until);
-  el('setup').textContent = 'Helper did not become ready within two minutes.';
+    } catch { /* Runtime startup and the local endpoint can briefly overlap. */ }
+    await new Promise(resolve => setTimeout(resolve, 750));
+  }
+  el('setup').textContent = 'The helper did not become ready within two minutes.';
   el('retry').hidden = false;
 }
 
-async function load(song) {
-  if (!ready || loading) return;
-  loading = true;
-  updateButtons();
+const text = (value, limit) => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, limit) : '';
+const elapsed = start => `${((performance.now() - start) / 1000).toFixed(1)} s`;
+const mmss = seconds => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+
+function renderResults(rows) {
+  const seen = new Set();
+  for (const row of rows.slice(0, 8)) {
+    const id = row?.ytId;
+    const title = text(row?.title, 200);
+    const channel = text(row?.channel, 100);
+    const duration = Number(row?.duration);
+    // Flat search can include upcoming uploads, playlists or results with no known length.
+    if (typeof id !== 'string' || !videoId.test(id) || seen.has(id) || !title || title === 'NA'
+        || !Number.isInteger(duration) || duration < 1 || duration > 1800) continue;
+    seen.add(id);
+    const track = document.createElement('div');
+    track.className = 'track';
+    const copy = document.createElement('div');
+    const name = document.createElement('strong');
+    name.textContent = title;
+    const meta = document.createElement('small');
+    meta.textContent = `${channel && channel !== 'NA' ? channel : 'Channel not returned'} · ${mmss(duration)}`;
+    copy.append(name, meta);
+    const play = document.createElement('button');
+    play.type = 'button';
+    play.id = `play-result-${seen.size}`;
+    play.textContent = 'Play';
+    play.setAttribute('aria-label', `Play ${title}`);
+    play.addEventListener('click', () => load({id, title, duration}));
+    track.append(copy, play);
+    results.append(track);
+  }
+  el('result-panel').hidden = !seen.size;
+  return seen.size;
+}
+
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  const value = text(query.value, 120);
+  if (!ready || busy || !value) return;
+  busy = true;
+  query.blur();
+  controls();
+  results.replaceChildren();
+  el('result-panel').hidden = true;
+  const message = el('search-status');
+  const start = performance.now();
+  message.textContent = 'Searching YouTube…';
+  try {
+    const [code, answer] = await request(`${api}?q=${encodeURIComponent(value)}`, 40000);
+    if (code !== 200 || answer.ok !== true || !Array.isArray(answer.results)) {
+      message.textContent = `Search failed (${elapsed(start)}). ${reason(answer)}`;
+      return;
+    }
+    const count = renderResults(answer.results);
+    message.textContent = count ? `Search returned ${count} YouTube ${count === 1 ? 'result' : 'results'} (${elapsed(start)}).`
+      : `Search returned no usable YouTube results (${elapsed(start)}). No audio was requested.`;
+  } catch (error) {
+    message.textContent = error.name === 'AbortError' ? 'Search timed out (40 s). No audio was requested.'
+      : 'Could not read the helper’s search response.';
+  } finally { busy = false; controls(); }
+});
+
+function resetAudio() {
   selected = null;
-  audioUrl = '';
+  clearTimeout(movementTimer);
   audio.pause();
   audio.removeAttribute('src');
   audio.load();
-  el('player').hidden = true;
-  el('seek').disabled = true;
-  report(song, 'Requesting the exact recording…');
-  try {
-    const [status, answer] = await request('/api/music/youtube/fetch', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({id: song.id, kind: 'audio'}),
-    }, 150000);
-    if (status !== 200 || answer.ok !== true) {
-      report(song, `Could not load (HTTP ${status}). ${reason(answer)}`);
-      return;
-    }
-    if (answer.id !== song.id) {
-      report(song, 'The helper returned a different ID. No audio was opened.');
-      return;
-    }
-    selected = song;
-    // Never follow a returned remote URL. Only play p11's app-private file for this ID.
-    audioUrl = `/api/music/youtube/file/${song.id}?kind=audio`;
-    audio.src = audioUrl;
-    el('player-title').textContent = song.title;
-    el('clock').textContent = 'Reading duration…';
-    el('player').hidden = false;
-    report(song, 'Audio received. Press Play when ready.');
-  } catch (error) {
-    report(song, error.name === 'AbortError' ? 'Request timed out. No playback yet.' : 'Could not read the helper response.');
-  } finally {
-    loading = false;
-    updateButtons();
-  }
+  audio.hidden = true;
+  el('clock').textContent = '';
+  el('seek').hidden = el('seek').disabled = true;
 }
 
-const mmss = time => `${Math.floor(time / 60)}:${String(Math.floor(time % 60)).padStart(2, '0')}`;
-const activeAudio = () => selected && audio.getAttribute('src') === audioUrl &&
-  audio.currentSrc === new URL(audioUrl, location.href).href;
-function updateTime() {
-  if (!activeAudio() || !Number.isFinite(audio.duration)) return;
-  el('clock').textContent = `${mmss(audio.currentTime)} / ${mmss(audio.duration)}`;
+function metadata(url) {
+  return new Promise((resolve, reject) => {
+    const complete = error => {
+      clearTimeout(timer);
+      audio.removeEventListener('loadedmetadata', loaded);
+      audio.removeEventListener('error', failed);
+      if (error) reject(error); else resolve();
+    };
+    const loaded = () => complete();
+    const failed = () => complete(new Error('The phone could not open the prepared audio.'));
+    const timer = setTimeout(() => complete(new Error('Reading the prepared audio timed out.')), 9000);
+    audio.addEventListener('loadedmetadata', loaded);
+    audio.addEventListener('error', failed);
+    audio.src = url;
+  });
 }
-audio.addEventListener('loadedmetadata', () => {
-  if (!activeAudio()) return;
-  if (!Number.isFinite(audio.duration) || Math.abs(audio.duration - selected.duration) > 6) {
-    report(selected, 'Unexpected audio duration. This does not pass the full-track test.');
-    selected = null;
-    audio.removeAttribute('src');
-    audio.load();
-    el('player').hidden = true;
-    return;
+
+async function load(song) {
+  if (!ready || busy) return;
+  busy = true;
+  controls();
+  resetAudio();
+  const start = performance.now();
+  el('player-title').textContent = song.title;
+  el('player-source').textContent = `YouTube · Video ID: ${song.id} · Listed length: ${mmss(song.duration)}`;
+  const player = el('player');
+  player.hidden = false;
+  player.scrollIntoView({block:'nearest'});
+  status('Preparing audio for this exact YouTube result…');
+  try {
+    const [code, answer] = await request(`${api}/fetch`, 90000, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:song.id, kind:'audio'}),
+    });
+    if (code !== 200 || answer.ok !== true) {
+      status(`Audio preparation failed (${elapsed(start)}). ${reason(answer)}`);
+      return;
+    }
+    if (answer.id !== song.id || !Number.isInteger(answer.bytes) || answer.bytes <= 0 || answer.bytes > audioLimit) {
+      status('The helper did not confirm the exact selected audio file. Nothing played.');
+      return;
+    }
+    status('Audio prepared. Checking the full length…');
+    // Construct the private URL from the selected ID. Never follow a returned remote URL.
+    await metadata(`${api}/file/${song.id}?kind=audio`);
+    if (!Number.isFinite(audio.duration) || Math.abs(audio.duration - song.duration) > Math.min(6, Math.max(1, song.duration * .04))) {
+      resetAudio();
+      status('The audio length did not match the selected upload. Nothing played.');
+      return;
+    }
+    selected = {...song, preparation:elapsed(start), advanced:false};
+    audio.hidden = false;
+    el('clock').textContent = `0:00 / ${mmss(audio.duration)}`;
+    el('seek').hidden = el('seek').disabled = false;
+    status(`Audio ready (${selected.preparation}). Starting playback…`);
+    movementTimer = setTimeout(() => {
+      if (selected?.id === song.id && !selected.advanced) status('Audio is ready, but the player has not advanced. Try the audio Play control.');
+    }, 9000);
+    audio.play().catch(() => {
+      if (selected?.id !== song.id || selected.advanced) return;
+      clearTimeout(movementTimer);
+      status('Audio is ready. Tap Play in the audio controls to test playback.');
+    });
+  } catch (error) {
+    resetAudio();
+    status(error.name === 'AbortError' ? 'Audio preparation timed out (90 s). Nothing played.'
+      : 'Could not open the selected audio. Nothing played.');
+  } finally { busy = false; controls(); }
+}
+
+audio.addEventListener('timeupdate', () => {
+  if (!selected || !Number.isFinite(audio.duration)) return;
+  el('clock').textContent = `${mmss(audio.currentTime)} / ${mmss(audio.duration)}`;
+  if (!selected.advanced && audio.currentTime > 0 && !audio.paused && !audio.seeking && !audio.muted && audio.volume > 0) {
+    selected.advanced = true;
+    clearTimeout(movementTimer);
+    status(`Audio playing · Full length ${mmss(audio.duration)} · Prepared in ${selected.preparation}`);
   }
-  el('seek').disabled = false;
-  updateTime();
 });
-audio.addEventListener('timeupdate', updateTime);
 audio.addEventListener('error', () => {
-  if (!selected || audio.getAttribute('src') !== audioUrl) return;
-  el('seek').disabled = true;
-  report(selected, 'The phone could not play the prepared audio.');
+  if (!selected) return;
+  resetAudio();
+  status('The phone could not play the prepared audio.');
 });
 el('seek').addEventListener('click', () => {
-  if (!activeAudio() || el('seek').disabled) return;
-  audio.currentTime = Math.floor(selected.duration * 2 / 3);
-  audio.play().catch(() => {});
+  if (!selected || el('seek').disabled) return;
+  audio.currentTime = audio.duration * 2 / 3;
+  audio.play().catch(() => status('Audio is ready. Tap Play to continue after seeking.'));
 });
-for (const song of songs) el(song.key).addEventListener('click', () => load(song));
 el('retry').addEventListener('click', checkSetup);
 checkSetup();

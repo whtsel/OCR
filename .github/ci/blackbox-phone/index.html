@@ -3,43 +3,44 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BlackBox Helper Test</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>BlackBox Helper Search</title>
   <link rel="stylesheet" href="/helper-phone.css">
   <script src="/helper-phone.js" defer></script>
 </head>
 <body>
   <main>
     <header>
-      <p class="tag">BLACKBOX STREAM / TEST BUILD</p>
-      <h1>Music helper test</h1>
-      <p class="lede">Try two exact recordings on this phone. No sign-in, previews, or replacement tracks.</p>
+      <p class="tag">BLACKBOX / HELPER-ONLY TEST</p>
+      <h1>Search &amp; play</h1>
+      <p class="lede">Enter your own search, then play one result. This uses YouTube directly, not the v90 catalogue.</p>
+      <p id="setup" class="setup" role="status">Starting the bundled helper…</p>
+      <button id="retry" class="secondary" type="button" hidden>Check helper again</button>
     </header>
-    <section aria-labelledby="setup-title" class="setup">
-      <h2 id="setup-title">Setup</h2>
-      <p id="setup" role="status">Starting the bundled helper…</p>
-      <button id="retry" class="secondary" hidden>Check setup again</button>
-    </section>
-    <section aria-labelledby="tracks-title">
-      <h2 id="tracks-title">Test recordings</h2>
-      <p class="hint">Tap a track, then press Play when the audio controls appear. Listen, then tap the seek button and check that audio continues.</p>
-      <div class="track">
-        <div><strong>Espresso</strong><small>Sabrina Carpenter · about 2:55</small></div>
-        <button id="espresso" type="button" disabled>Try Espresso</button>
-        <p id="espresso-status" class="hint" role="status">Not tried</p>
-      </div>
-      <div class="track">
-        <div><strong>Kwaku the Traveller</strong><small>Black Sherif · about 3:05</small></div>
-        <button id="kwaku" type="button" disabled>Try Kwaku</button>
-        <p id="kwaku-status" class="hint" role="status">Not tried</p>
-      </div>
+    <section aria-labelledby="search-title">
+      <h2 id="search-title">YouTube search</h2>
+      <form id="search-form">
+        <label for="query" class="hint">Song or artist</label>
+        <div class="search-row">
+          <input id="query" type="search" maxlength="120" placeholder="Enter a song or artist" enterkeyhint="search" autocomplete="off" required disabled>
+          <button id="search" type="submit" disabled>Search</button>
+        </div>
+      </form>
+      <p id="search-status" class="hint" role="status">Nothing searched yet.</p>
     </section>
     <section id="player" hidden aria-labelledby="player-title">
-      <h2 id="player-title">Selected recording</h2>
-      <audio id="audio" controls preload="metadata" aria-label="Recording playback"></audio>
-      <p id="clock" aria-live="off"></p>
-      <button id="seek" type="button" disabled>Seek past halfway</button>
+      <h2 id="player-title">Selected result</h2>
+      <p id="player-source" class="hint"></p>
+      <p id="audio-status" role="status"></p>
+      <audio id="audio" controls preload="metadata" aria-label="Recording playback" hidden></audio>
+      <p id="clock"></p>
+      <button id="seek" type="button" class="secondary" disabled hidden>Seek past halfway</button>
     </section>
-    <footer>Based on p11 · yt-dlp 2026.10.26 · not a v90 update</footer>
+    <section id="result-panel" hidden aria-labelledby="results-title">
+      <h2 id="results-title">YouTube results</h2>
+      <div id="results"></div>
+    </section>
+    <footer>yt-dlp 2026.10.26 · No sign-in · Audio only. Choose uploads you have permission to prepare.</footer>
   </main>
 </body>
 </html>

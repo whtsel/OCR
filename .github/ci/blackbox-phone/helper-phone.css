@@ -8,13 +8,17 @@ h2 { font-size: 1.08rem; }
 .lede, .hint, small, footer { color: #bfcadd; }
 .hint, footer { font-size: .875rem; }
 section { margin: 20px 0; }
-.setup, .track, #player { background: #1b2331; padding: 14px; border: 1px solid #39455d; border-radius: 12px; }
-.track { display: flex; align-items: start; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
-.track > div { flex: 1 1 140px; }
-.track p { margin: 0; width: 100%; }
+.setup, .track, #player { background: #1b2331; padding: 12px; border: 1px solid #39455d; border-radius: 12px; }
+.setup { margin-top: 14px; color: #a0f0d8; }
+.search-row, .track { display: flex; align-items: center; gap: 8px; }
+.search-row { margin: 4px 0 8px; }
+input { flex: 1 1 0; min-width: 0; min-height: 44px; box-sizing: border-box; border: 1px solid #53627c; border-radius: 8px; padding: 8px 12px; background: #171e2a; color: inherit; font: inherit; }
+.track { margin-top: 8px; }
+.track > div { min-width: 0; flex: 1 1 0; overflow-wrap: anywhere; }
 small { display: block; }
-button { border: 0; border-radius: 8px; min-height: 44px; padding: 8px 12px; background: #88e7cd; color: #10251e; font: 700 .87rem/1.15 system-ui, sans-serif; }
+button { border: 0; border-radius: 8px; min-height: 44px; padding: 8px 14px; background: #88e7cd; color: #10251e; font: 700 .87rem/1.15 system-ui, sans-serif; }
 button:disabled, .secondary { background: #34445a; color: #d7dfed; }
-button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+button:focus-visible, input:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+#player-title, #player-source { overflow-wrap: anywhere; }
 audio { display: block; width: 100%; margin: 8px 0; }
 [hidden] { display: none !important; }
