@@ -1,6 +1,11 @@
 name: BlackBox v90 Android audio-only
 on:
   workflow_dispatch:
+    inputs:
+      verify_live_music:
+        description: Also try full recordings over the live provider (separate from fixture acceptance)
+        type: boolean
+        default: false
   push:
     branches: ['arena/**']
     paths:
@@ -97,3 +102,16 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+      - name: Check live full recordings in the actual v90 Android player (not fixtures)
+        if: ${{ inputs.verify_live_music }}
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
+          script: |
+            adb shell wm size 720x1560
+            adb shell wm density 320
+            BBX_TEST_PACKAGE=com.blackboxstream.mobile.helper BBX_VERIFY_MUSIC_ONLY=1 bash android/tests/run_device.sh

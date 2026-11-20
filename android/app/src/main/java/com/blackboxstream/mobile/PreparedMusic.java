@@ -168,10 +168,12 @@ final class PreparedMusic implements AutoCloseable {
         epoch = sequence;
         if (retry) failures.remove(key);
         failures.keySet().removeIf(id -> !next.containsKey(id) && !album.containsKey(id));
-        if (active != null && (!next.containsKey(running) && !album.containsKey(running) || !key.isEmpty() && !requested.equals(key)
-                && !key.equals(running) && readyFile(key) == null)) active.cancel();
         requested = key;
         desired.clear(); desired.putAll(next);
+        if (active != null && readyFile(running) == null) {
+            Track first = nextJob();
+            if (first == null || !first.key.equals(running)) active.cancel();
+        }
         return state();
     }
 

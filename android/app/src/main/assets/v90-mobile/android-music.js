@@ -23,7 +23,8 @@
     ['Burna Boy', 'On the Low', 185, 'UFsskuvj8GQ', ['On the Low', 'African Giant']],
     ['Black Sherif', 'Kwaku the Traveller', 185, 'Hb6I7GoTvzI', ['Kwaku the Traveller', 'The Villain I Never Was']],
   ].map(([a,t,seconds,id,albums]) => ({artist:norm(a), title:norm(t), seconds, id, albums:albums.map(norm)}));
-  function recording(item) {
+  function recording(candidate) {
+    const item = catalogueItem(candidate);
     if (!item) return null;
     if (item._preparedRecording) return item._preparedRecording;
     const track = {ref:clean(identity(item)).slice(0,640), title:clean(title(item)), artist:clean(artist(item)),
@@ -54,11 +55,74 @@
   const attachSpectrum = attachMusicFrequencySource;
   attachMusicFrequencySource = () => musicSpectrumV51.ctx?.state === 'running' ? attachSpectrum() : null;
 
+  // The original playlist stores short row IDs and pending keys, not full album objects.
+  // Give its unsaved catalogue rows a local alias; resolve it only against packaged metadata.
+  const catalogueAlias = ref => /^(?:pick:[0-9]+|album:[0-9]+:[0-9]+:[0-9]+)$/.test(ref || '')
+    ? 'catalog_' + ref.replace(/:/g, '_') : '';
+  const isAlias = id => /^catalog_(?:pick_[0-9]+|album_[0-9]+_[0-9]+_[0-9]+)$/.test(id || '');
+  function catalogueItem(item) {
+    if (item?._preparedRecording || item?.album) return item;
+    const alias = [item?.ytId, item?.id, catalogueAlias(item?.key)].find(isAlias);
+    if (!alias) return item;
+    const [, type, id, disc, number] = alias.split('_');
+    let row;
+    if (type === 'pick') {
+      for (const shelf of MUSIC_GENRES_V50) {
+        const pick = shelf.results.find(entry => String(entry.id) === id);
+        if (pick) { row = {...pick, genre:shelf.title}; break; }
+      }
+    } else {
+      const album = musicAlbumCatalogV63?.byId.get(id);
+      const ref = `${id}:${disc}:${number}`;
+      if (album) row = musicAlbumTracksV63(album).find(entry => entry.catalogTrackId === ref);
+      else {
+        // A restored playlist can be opened before the original album index is built.
+        const raw = globalThis.BBX_MUSIC_CATALOG_V64?.albums.find(entry => String(entry[0]) === id);
+        if (raw) row = musicAlbumTracksV63({id, title:raw[1], artist:raw[2], artwork:raw[3], rawTracks:raw[6], genre:musicAlbumSourceGenreV63(raw[5], raw[2])})
+          .find(entry => entry.catalogTrackId === ref);
+      }
+    }
+    return row ? {...item, ...row, ytId:alias, genre:item.genre || row.genre} : item;
+  }
+
   const originalIdentity = queueIdentity;
-  queueIdentity = item => item?._preparedRecording?.ref || (item?.album && title(item) ? identity(item) : originalIdentity(item));
+  queueIdentity = item => {
+    const track = catalogueItem(item);
+    return track?._preparedRecording?.ref || (track?.album && title(track) ? identity(track) : originalIdentity(track));
+  };
   const originalValidId = validPlaybackId;
-  // A private cache key is a row id only. It is never passed to the extractor as a source id.
-  validPlaybackId = id => keyPattern.test(id || '') || originalValidId(id);
+  // Private cache keys and catalogue aliases are row IDs, never extractor source IDs.
+  validPlaybackId = id => keyPattern.test(id || '') || isAlias(id) || originalValidId(id);
+  const originalYoutubeQueue = youtubeQueue;
+  youtubeQueue = (items, mode, genre) => originalYoutubeQueue(items.map(catalogueItem), mode, genre).map(item => {
+    const alias = catalogueAlias(queueIdentity(item));
+    return alias && !keyPattern.test(item.ytId || '') ? {...item, ytId:alias} : item;
+  });
+  const sanitizeCollection = sanitizeMusicCollection;
+  sanitizeMusicCollection = saved => {
+    const aliases = new Map();
+    const pending = (saved.pending || []).map(row => {
+      const alias = catalogueAlias(row?.key);
+      if (!alias) return row;
+      if (row.id) aliases.set(row.id, alias);
+      return {...row, id:alias};
+    });
+    const ids = (saved.ids || []).map(id => aliases.get(id) || id);
+    for (const row of pending) if (isAlias(row?.id) && !ids.includes(row.id)) ids.push(row.id);
+    return sanitizeCollection({...saved, ids, pending});
+  };
+  const markPlaying = refreshMusicPlayingMarkers;
+  refreshMusicPlayingMarkers = () => {
+    markPlaying();
+    if (!musicNowMeta) return;
+    const key = musicSearchRecordKey(musicNowMeta);
+    const audio = byId('bgAudio'), playing = audio && !audio.paused && !audio.ended;
+    for (const card of document.querySelectorAll('.music-card-v47[data-musicidentity], .music-genre-card-v50[data-musicidentity], .music-result-v47[data-musicidentity]')) {
+      if (card.dataset.musicidentity !== key) continue;
+      card.classList.toggle('music-card-playing-v53', !!playing);
+      card.classList.toggle('music-card-paused-v53', !playing);
+    }
+  };
   const originalOfflineUrl = musicStableOfflineUrl;
   musicStableOfflineUrl = id => keyPattern.test(id || '') ? audioUrl(id) : originalOfflineUrl(id);
   const originalQueueItem = musicQueueItemFromDownload;
@@ -113,7 +177,15 @@
     const row = {...item, id:key, ytId:key, _preparedRecording:track,
       title:track.title, artist:track.artist, duration:track.seconds, video:false, audio:true,
       audioUrl:audioUrl(key), offline:true, offlineState:'ready', offlineStage:''};
+    row.added = musicDownloads.find(old => old.id === key)?.added || Date.now();
     musicDownloads = [row, ...musicDownloads.filter(old => old.id !== key)].slice(0,500);
+    const alias = catalogueAlias(track.ref);
+    for (const list of musicCollections) {
+      if (!alias || !list.ids.includes(alias)) continue;
+      list.ids = [...new Set(list.ids.map(id => id === alias ? key : id))];
+      list.pending = list.pending.filter(entry => entry.key !== track.ref && entry.id !== alias);
+      refreshAutomaticCollectionName(list);
+    }
     resolveCollectionPending(item, key);
     if (collection?.autoAddPlayed && !collection.ids.includes(key)) collection.ids.unshift(key);
   }

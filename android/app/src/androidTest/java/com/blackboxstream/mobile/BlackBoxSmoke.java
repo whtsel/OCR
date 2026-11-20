@@ -68,7 +68,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             else verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
                     + (publicMediaVerified ? "PASS Android imported media: Sintel and The Dull Sword matched public files and both played with networking off\n" : "")
-                    + (originalMusicVerified ? "PASS Original v90 Music: both selected full recordings advanced and sought in the original audio player\n" : ""));
+                    + (originalMusicVerified ? "PASS Original v90 Music: full recordings advanced and sought in the original audio player, including a catalogue-resolved track\n" : ""));
             finish(Activity.RESULT_OK, result);
         } catch (Throwable bad) {
             result.putString("stream", "\nFAIL BlackBox Android smoke: " + android.util.Log.getStackTraceString(bad) + "\n");
@@ -186,8 +186,9 @@ public final class BlackBoxSmoke extends Instrumentation {
             await("Streaming search asks for TMDB and shows no sample card", 8000, () -> jsTrue(web,
                     "!document.querySelector('#viewBrowse').hidden && !document.querySelector('#browseGrid .card') && document.querySelector('#browseGrid').textContent.includes('TMDB key')"));
             tapWeb(web, "[data-nav=anime]");
-            assertPass("Anime uses the same key requirement and never injects an archive shelf", jsTrue(web,
-                    "!document.querySelector('#androidAnimeArchive,#browseGrid .card') && document.querySelector('#browseGrid').textContent.includes('TMDB key')"));
+            await("Anime uses the same key requirement and never injects an archive shelf", 9000, () -> jsTrue(web,
+                    "state.browse.mode==='anime' && !document.querySelector('#androidAnimeArchive,#browseGrid .card')"
+                            + " && document.querySelector('#browseGrid').textContent.includes('TMDB key')"));
         } finally { closeScreen(desktop); }
     }
 
@@ -303,6 +304,14 @@ public final class BlackBoxSmoke extends Instrumentation {
                 js(offline, "Array.from(document.querySelectorAll('#musicDownloadedList .music-library-item-v47')).find(row=>row.textContent.includes('Locked out of Heaven')).querySelector('[data-libplay]').id='smokeSaved'");
                 tapWeb(offline, "#smokeSaved");
                 awaitPreparedFixture(offline, "Locked out of Heaven", 1);
+                // The unplayed album track must not lose its album/disc/track identity in a saved playlist.
+                assertPass("The original playlist preserves exact unplayed album rows across reload of its stored data", jsTrue(offline,
+                        "(()=>{const list=bbxPickV78._create('Smoke catalogue playlist');"
+                                + "const track=globalThis.BBX_MUSIC_CATALOG_V64.albums.find(a=>a[0]==='1752214909');"
+                                + "const album=musicAlbumTracksV63({id:track[0],title:track[1],artist:track[2],rawTracks:track[6]});"
+                                + "bbxPickV78._add(list.id,album[6]);loadMusicCollections();"
+                                + "const id=collectionById(list.id).ids[0];const [saved]=youtubeQueue([{id}], 'audio');"
+                                + "return saved.track==='Espresso' && saved.catalogTrackId===album[6].catalogTrackId && saved.duration===175})()"));
             } finally {
                 shell("cmd connectivity airplane-mode disable"); shell("svc data enable"); shell("svc wifi enable");
             }
@@ -344,6 +353,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         PreparedMusic.Track b = new PreparedMusic.Track(spec("test:B", "B", "Fixture", "Album", 14, ""));
         PreparedMusic.Track c = new PreparedMusic.Track(spec("test:C", "C", "Fixture", "Album", 14, ""));
         PreparedMusic.Track d = new PreparedMusic.Track(spec("test:D", "D", "Fixture", "Album", 14, "ddddddddddd"));
+        PreparedMusic.Track e = new PreparedMusic.Track(spec("test:E", "E", "Fixture", "Album", 14, ""));
         java.util.List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
         java.util.concurrent.atomic.AtomicBoolean unmetered = new java.util.concurrent.atomic.AtomicBoolean(false);
         PreparedMusic.Runtime fixture = (track, work, control) -> {
@@ -366,14 +376,15 @@ public final class BlackBoxSmoke extends Instrumentation {
             unmetered.set(true);
             queue.networkChanged();
             await("First actual upcoming entry starts", 7000, () -> calls.contains("B"));
-            assertPass("Only one job runs at once", calls.equals(Arrays.asList("A", "B")));
+            queue.downloadAlbum(new JSONArray().put(e.json()).put(c.json()));
+            assertPass("An explicit album request does not displace the current two-slot plan", calls.equals(Arrays.asList("A", "B")));
             queue.plan(2, b.json(), new JSONArray().put(c.json()), true); // Promote rather than restart B.
             queue.plan(4, d.json(), new JSONArray().put(c.json()).put(a.json()), true); // Cancel B when no longer wanted.
             queue.plan(3, a.json(), new JSONArray().put(b.json()), true); // Delayed stale bridge message.
-            await("New linked foreground jumps ahead; still-relevant second entry prepares", 9000,
-                    () -> queue.read(d.key) != null && queue.read(c.key) != null);
-            assertPass("Cancelled output never commits; kept files deduplicate",
-                    queue.read(b.key) == null && calls.equals(Arrays.asList("A", "B", "D", "C")));
+            await("Foreground jumps ahead, then actual upcoming, then explicit album", 9000,
+                    () -> queue.read(d.key) != null && queue.read(c.key) != null && queue.read(e.key) != null);
+            assertPass("Cancelled output never commits; kept files deduplicate across plans and album",
+                    queue.read(b.key) == null && calls.equals(Arrays.asList("A", "B", "D", "C", "E")));
             try {
                 queue.plan(5, a.json(), new JSONArray().put(b.json()).put(c.json()).put(d.json()), true);
                 throw new AssertionError("Three upcoming items accepted");
@@ -381,7 +392,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
         try (PreparedMusic reopened = new PreparedMusic(dir, fixture, background -> false)) {
             reopened.plan(1, a.json(), new JSONArray(), true);
-            assertPass("Completed catalogue recording is reused across instances when offline", reopened.read(a.key) != null && calls.size() == 4);
+            assertPass("Completed catalogue recording is reused across instances when offline", reopened.read(a.key) != null && calls.size() == 5);
             PreparedMusic.Track otherRelease = new PreparedMusic.Track(spec("test:A", "A", "Fixture", "Another album", 14, ""));
             assertPass("Another release of the same title cannot read the cached recording", reopened.read(otherRelease.key) == null);
             reopened.forget(a.key);
@@ -490,6 +501,11 @@ public final class BlackBoxSmoke extends Instrumentation {
     }
 
     private void verifyOriginalMusic(WebView web) throws Exception {
+        // Capture only sanitized preparation failures inside the test. The product shows only the ring.
+        js(web, "window.liveMusicResult={}; (()=>{const live=window.fetch;window.fetch=async (url,options)=>{"
+                + "const response=await live(url,options);if (response.ok && typeof url==='string' && url.startsWith('/api/mobile/music-helper')) {"
+                + "const result=await response.clone().json(); const row=result.tracks[result.selected];"
+                + "if(row) liveMusicResult[row.recording.title]={state:row.state,message:row.message,source:row.recording.source};}return response;};})()");
         tapWeb(web, "#navMusic");
         await("Original Music shelves contain 14 genres and the original Trending Now card", 10000,
                 () -> jsTrue(web, "document.querySelectorAll('#musicGenreChips button').length===14 "
@@ -508,19 +524,33 @@ public final class BlackBoxSmoke extends Instrumentation {
                 () -> jsTrue(web, "!document.querySelector('#bgQueuePanel').hidden && "
                         + "document.querySelectorAll('#bgQueueList .bg-queue-title-v49')[6]?.textContent === 'Espresso'"));
         tapWeb(web, "#bgQueueClose");
-        verifyLiveTrack(web, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", 175);
+        java.util.List<String> failures = new java.util.ArrayList<>();
+        tryLiveTrack(web, failures, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", 175, false);
+        tryLiveTrack(web, failures, "Taste", ".music-album-tracklist-v63 .music-catalog-track-v63:first-child [data-track-play-v63]", 157, true);
         tapWeb(web, "#musicClear");
         tapWeb(web, "#musicGenreChips [title='Open 30 Ghana Essentials picks']");
         await("Ghana Essentials shows its original 30 picks", 8000,
                 () -> jsTrue(web, "!document.querySelector('#viewMusicGenre').hidden && document.querySelectorAll('[data-genre-catalog] .music-genre-card-v50').length===30"));
-        verifyLiveTrack(web, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", 185);
+        tryLiveTrack(web, failures, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", 185, false);
+        assertPass("All three real tracks passed live audio: " + failures, failures.isEmpty());
     }
 
-    private void verifyLiveTrack(WebView web, String title, String control, int seconds) throws Exception {
-        tapWeb(web, control);
-        awaitAudio(web, title, seconds, 6, 1, 194000);
-        js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
-        awaitAudio(web, title, seconds, 6, seconds * 0.63, 22000);
+    private void tryLiveTrack(WebView web, List<String> failures, String title, String control, int seconds,
+                              boolean discoveryRequired) throws Exception {
+        String row = "liveMusicResult[" + JSONObject.quote(title) + "]";
+        try {
+            tapWeb(web, control);
+            await(title + " receives a private audio file from the live engine", 178000, () -> {
+                if (jsTrue(web, row + "?.state==='failed'")) {
+                    throw new AssertionError(title + ": " + js(web, row + ".message"));
+                }
+                return jsTrue(web, row + "?.state==='ready'");
+            });
+            if (discoveryRequired) assertPass(title + " used catalogue discovery, not a prelinked source", jsTrue(web, row + ".source===''"));
+            awaitAudio(web, title, seconds, 6, 1, 21000);
+            js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
+            awaitAudio(web, title, seconds, 6, seconds * 0.63, 15000);
+        } catch (AssertionError blocked) { failures.add(blocked.getMessage()); }
     }
 
     private MediaEntry verifyDirect(V90Api api, LibraryStore db, JSONObject records, String key, String title,

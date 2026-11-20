@@ -161,7 +161,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         if (message.contains("sign in") || message.contains("not a bot")) return "The provider requires sign-in. No account session was used.";
         if (message.contains("http error 429")) return "The provider rate-limited this recording. Try again later.";
         if (message.contains("http error 403") || message.contains("unavailable")) return "The provider did not allow this recording.";
-        if (message.contains("bbx_no_exact_recording")) return "No exact full recording could be verified. Link its exact source.";
+        if (message.contains("bbx_no_exact_recording")) return "No exact full recording could be verified.";
         if (message.contains("timed out") || message.contains("resolve") || message.contains("no address")) return "Could not complete the connection to the provider.";
         return "The helper could not prepare this exact recording.";
     }

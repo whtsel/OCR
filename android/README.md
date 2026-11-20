@@ -162,4 +162,5 @@ sample video, audio and song-video activity. TMDB transport tests use controlled
 not a customer key. The optional public-file check supplies the full films as explicit HTTPS
 imports and compares the offline copies with independently collected hashes. It does not put the
 films back in Streaming. A live Music pass requires a moving audio clock, the exact full duration,
-and a successful seek past the preview window in the same v90 player.
+and a successful seek past the preview window in the same v90 player. On GitHub Actions,
+`verify_live_music` is an opt-in dispatch test separate from the normal fixture gate.
