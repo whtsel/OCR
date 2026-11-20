@@ -1,34 +1,37 @@
-# BlackBox Helper Search (Android diagnostic)
+# BlackBox Helper Stream (Android diagnostic)
 
-`BlackBox-Helper-Search-ARM64.apk` installs separately as **BlackBox Helper Search**
-(`com.blackbox.stream.helpersearch`). It does not use the v90 catalogue or change any
-installed BlackBox app. The test shell uses the archived p11 Android helper and the exact
-`android/vendor/ytdlp` zipapp from the bundled 2026.10.26 pin. The zipapp was checked
-byte-for-byte against the helper backup in Drive; it's not an APK by itself. The test
-screen reads the archived wrapper's malformed duration field without altering the helper.
-If Android rejects an update from an earlier test-signed build, uninstall only the old
-**BlackBox Helper Search** and then install this APK.
+`BlackBox-Helper-Stream-ARM64.apk` installs alongside v90 and the older helper-only
+search tester as **BlackBox Helper Stream** (`com.blackbox.stream.helperstream`).
+The adapter uses the archived p11 native runtime and exact Drive-matched yt-dlp
+2026.10.26 pin. It does not change either installed app, use an account, or load
+tracks from the v90 catalogue.
 
-1. Open the tester and wait for **Helper ready · no account session**.
-2. Enter a new song/artist query and tap **Search**. The p11 helper runs `ytsearch8` on
-   YouTube. No titles are preloaded and search alone never prepares audio.
-3. Tap **Play** next to one result. The helper opens only that YouTube video ID and
-   returns a private local audio file. The screen displays the source ID, the search
-   and preparation outcomes, and, on success, the audio clock. Verify it advances and
-   use **Seek past halfway**. Pick an upload you have permission to prepare.
+1. Wait for **Helper ready · no account session**. Enter your own query and tap **Search**.
+2. Tap **Play** next to one result you have permission to stream. Nothing is fetched
+   merely by listing it. The lookup verifies the exact selected video and duration.
+3. Look for **First audio in …**, measured from the Play tap (not from the search).
+   Check that you hear it, the clock advances, and **Seek past halfway** still plays.
+4. A partial buffer is not a download. After **Whole audio buffered for replay in
+   this session**, select the same result again to test local replay (also works
+   with networking off while the tester is still open). The tester keeps at most
+   two session buffers, not a persistent Downloads shelf.
 
-An empty search result is not proof of a provider error or audio playback. If the
-selected file cannot be prepared/decoded, the tester reports that stage and never
-switches recordings. Search is a live request; replaying a prepared selection can
-reuse the helper's private copy. No sign-in, external player or alternate source is used.
+The helper tries an existing audio-only AAC or WebM/Opus HTTPS representation with
+byte-range support. The private loopback shares verified ranges with the decoder as
+bytes arrive and can fetch a range for a seek. It does not wait for a full download
+or transcode, expose signed URLs to the screen, or switch uploads if the provider
+refuses or has no compatible progressive source. In that case the older whole-file
+tester is a separate comparison, not an automatic fallback. A cold start under five
+seconds is a target, not a provider or mobile-network guarantee.
 
 ```sh
 node --test .github/ci/blackbox-phone/helper-phone.test.cjs
+python3 -B .github/ci/blackbox-phone/test_stream.py
 gh workflow run blackbox-phone-test.yml --ref "$(git branch --show-current)" -f verify_live_search=true
 ```
 
-The workflow validates the ARM64 package and boots the x86_64 counterpart on Android.
-Controlled UI tests and startup checks are separate from the live check, which requires
-an actual typed YouTube search, a selected audio result, and advancement after a seek.
-The phone-test APK is retained after the startup checks even if a live request from
-GitHub's emulator fails. No audio is published in the artifact.
+Only the x86_64 emulator sibling includes the slow controlled fixture. CI requires real
+Android playback before all its bytes arrive, under five seconds on that fixture,
+continued audio after seeking, and a completed-buffer replay. The optional cold live
+check is separate; the fixture-verified ARM64 test APK is retained even when GitHub's
+emulator cannot play a live result. No audio is published in the phone APK.

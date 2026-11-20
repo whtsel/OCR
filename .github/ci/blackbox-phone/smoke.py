@@ -1,17 +1,14 @@
-"""Boot the helper-only Android APK; optionally exercise a fresh live search in its own screen."""
-from pathlib import Path
+"""Exercise the same Android screen with a throttled fixture and optionally a fresh YouTube search."""
 import argparse
-import json
 import os
+from pathlib import Path
 import re
-from urllib.parse import urlencode
 
 import check_blackbox_p11 as p11
 
 
-p11.PKG = 'com.blackbox.stream.helpersearch'
-ACTIVITY = 'com.blackbox.stream.MainActivity'
-LIVE_QUERY = 'Kevin MacLeod Carefree'
+p11.PKG = 'com.blackbox.stream.helperstream'
+ACTIVITY = p11.PKG + '.HelperStreamActivity'
 
 
 def visible_text(nodes):
@@ -32,17 +29,23 @@ def clock(nodes):
     return None
 
 
-def query_field(nodes):
-    # Chromium can omit the HTML input's resource ID and placeholder in a UiAutomator dump.
-    direct = p11.find(nodes, 'query', 'Enter a song or artist')
-    if direct is not None:
-        return direct
+def fallback(nodes, kind, label=lambda value: True):
     for node in nodes:
-        if node.get('package') == p11.PKG and node.get('class') == 'android.widget.EditText':
+        if node.get('package') == p11.PKG and node.get('class') == kind and any(map(label, p11.label(node)[:2])):
             left, top, right, bottom = p11.bounds(node)
             if right > left and bottom > top:
                 return node
     return None
+
+
+def query_field(nodes):
+    direct = p11.find(nodes, 'query', 'Enter a song or artist')
+    return direct if direct is not None else fallback(nodes, 'android.widget.EditText')
+
+
+def first_result(nodes):
+    direct = p11.find(nodes, 'play-result-1')
+    return direct if direct is not None else fallback(nodes, 'android.widget.Button', lambda text: text.startswith('Play '))
 
 
 def smoke(apk):
@@ -50,116 +53,115 @@ def smoke(apk):
     p11.adb('shell', 'wm', 'size', '720x1560')
     p11.adb('shell', 'wm', 'density', '320')
     p11.adb('shell', 'input', 'keyevent', '82')
+    return launch()
+
+
+def launch():
     print(p11.adb('shell', 'am', 'start', '-W', '-n', f'{p11.PKG}/{ACTIVITY}'))
     screen = p11.wait_ui(lambda nodes: nodes if p11.find(nodes, 'Helper ready · no account session') is not None else None, 100)
     if screen is None:
         raise RuntimeError('Did not see helper readiness: ' + ' | '.join(visible_text(p11.ui_nodes())))
-    if query_field(screen) is None or any(p11.find(screen, *locators) is None for locators in (
-            ('search', 'Search'), ('Nothing searched yet.',))):
-        nodes = [(node.get('class'), p11.label(node), node.get('bounds')) for node in screen if node.get('package') == p11.PKG]
-        raise RuntimeError(f'Blank search controls missing: {nodes}')
-    if p11.find(screen, 'Try Espresso', 'Try Kwaku', 'play-result-1') is not None:
-        raise RuntimeError('Test screen should not contain any preselected recording')
-    print('::notice::PASS Android startup: the pinned helper is ready with a blank search form and no account session.')
+    if (query_field(screen) is None or p11.find(screen, 'Search') is None
+            or p11.find(screen, 'Nothing searched yet.') is None or first_result(screen) is not None):
+        raise RuntimeError('Expected a blank search with no preselected recording')
     return screen
 
 
-def report_search_boundary():
-    """If WebView cannot read the answer, independently check the app's loopback route."""
-    forwarded = None
-    try:
-        pid = p11.adb('shell', 'pidof', p11.PKG).split()[0]
-        log = p11.adb('logcat', '-d', '--pid', pid, '-v', 'brief', '-s', 'BlackBoxStream:I')
-        ports = re.findall(r'engine on 127\.0\.0\.1:(\d{1,5})\b', log)
-        if not ports:
-            print('::notice::The helper app did not report a live loopback listener.')
-            return
-        forwarded = p11.adb('forward', 'tcp:0', f'tcp:{ports[-1]}')
-        code, raw = p11.request(f'http://127.0.0.1:{forwarded}', '/api/music/youtube?' + urlencode({'q': LIVE_QUERY}), timeout=35)
-        try:
-            data = json.loads(raw)
-        except (UnicodeError, ValueError):
-            print(f'::notice::Helper search endpoint sent HTTP {code} with {len(raw)} bytes of unreadable JSON.')
-            return
-        rows = data.get('results') if isinstance(data, dict) else None
-        if isinstance(rows, list):
-            print(f'::notice::Helper search endpoint sent HTTP {code} and {len(rows)} result rows directly.')
-        else:
-            failure = str(data.get('message', '')).lower() if isinstance(data, dict) else ''
-            reason = ('rate-limited' if '429' in failure else 'sign-in requested' if re.search(r'sign[ -]?in|not a bot', failure)
-                      else 'no result array')
-            print(f'::notice::Helper search endpoint sent HTTP {code} ({reason}).')
-    except Exception as failure:
-        print(f'::notice::Could not read the helper search at the Android loopback boundary ({type(failure).__name__}).')
-    finally:
-        if forwarded:
-            p11.adb('forward', '--remove', f'tcp:{forwarded}', check=False)
-
-
-def live_search(screen):
-    # An independent query for an openly licensed recording, not a baked-in result or ID.
+def submit(screen, query):
     p11.tap(query_field(screen))
-    p11.adb('shell', 'input', 'text', LIVE_QUERY.replace(' ', '%s'))
-    search_button = p11.wait_ui(lambda nodes: p11.find(nodes, 'search', 'Search'), 10)
-    if search_button is None:
+    p11.adb('shell', 'input', 'text', query.replace(' ', '%s'))
+    button = p11.wait_ui(lambda nodes: p11.find(nodes, 'search', 'Search'), 12)
+    if button is None:
         raise RuntimeError('Could not submit the typed search')
-    p11.tap(search_button)
-    searched = p11.wait_ui(lambda nodes: status(nodes, 'Search returned ', 'Search failed ', 'Search timed out ', 'Could not read the helper'), 56)
-    if not searched:
-        raise RuntimeError('No terminal search status: ' + ' | '.join(visible_text(p11.ui_nodes())))
-    print('::notice::' + p11.diagnostic(searched))
-    if not re.match(r'Search returned [1-8] YouTube result', searched):
-        if searched.startswith('Could not read the helper'):
-            report_search_boundary()
-        raise RuntimeError('Live helper search did not return results to try')
-    def first_result(nodes):
-        direct = p11.find(nodes, 'play-result-1')
-        if direct is not None:
-            return direct
-        for node in nodes:
-            if node.get('package') == p11.PKG and node.get('class') == 'android.widget.Button' and any(
-                    value.startswith('Play ') for value in p11.label(node)[:2]):
-                left, top, right, bottom = p11.bounds(node)
-                if right > left and bottom > top:
-                    return node
-        return None
-
+    p11.tap(button)
+    searched = p11.wait_ui(lambda nodes: status(nodes, 'Search returned ', 'Search failed ', 'Search timed out ', 'Could not read the helper'), 45)
+    print('::notice::' + p11.diagnostic(searched or 'No terminal search status.'))
+    if not re.match(r'Search returned [1-8] YouTube result', searched or ''):
+        raise RuntimeError('The helper search did not return results to try')
     first = p11.wait_ui(first_result, 12)
     if first is None:
         raise RuntimeError('Search succeeded but no result Play control was accessible')
-    p11.tap(first)
-    played = p11.wait_ui(lambda nodes: status(nodes, 'Audio playing ·', 'Audio preparation failed ', 'Audio preparation timed out ',
-                                             'The helper did not confirm ', 'The audio length did not match ', 'Could not open the selected audio',
-                                             'The phone could not play ', 'Audio is ready'), 116)
+    return first
+
+
+def first_played(button):
+    p11.tap(button)
+    played = p11.wait_ui(lambda nodes: status(nodes, 'Audio playing ·', 'Audio lookup failed ', 'Audio lookup timed out',
+                                             'The helper did not confirm ', 'The audio length did not match ', 'Could not open',
+                                             'This upload', 'The phone could not ', 'The audio transfer ', 'Audio is ready',
+                                             'Player opened, but ', 'Buffering the start of the audio timed out'), 65)
     if not played or not played.startswith('Audio playing ·'):
-        raise RuntimeError('Live search succeeded; selected result did not play: ' + (played or 'no terminal audio status'))
-    reading = p11.wait_ui(clock, 9)
+        raise RuntimeError('Search succeeded; selected result did not play: ' + (played or ' | '.join(visible_text(p11.ui_nodes()))))
+    print('::notice::' + played)
+    measured = re.search(r'First audio in ([\d.]+) s', played)
+    if not measured:
+        raise RuntimeError('The helper did not measure timing from tap to the advancing clock')
+    return float(measured[1])
+
+
+def check_seek():
+    reading = p11.wait_ui(clock, 12)
     if reading is None:
-        raise RuntimeError('No full media clock appeared')
-    start, duration = reading
-    seek = p11.wait_ui(lambda nodes: p11.find(nodes, 'seek', 'Seek past halfway'), 8)
+        raise RuntimeError('No full playback clock appeared')
+    _, duration = reading
+    seek = p11.wait_ui(lambda nodes: p11.find(nodes, 'seek', 'Seek past halfway'), 9)
     if seek is None:
         raise RuntimeError('No seek control for the played audio')
     p11.tap(seek)
 
-    def past_half(nodes):
-        measured = clock(nodes)
-        if measured is not None and measured[1] == duration and measured[0] > duration * 0.6 and measured[0] > start:
-            return measured[0]
-        return None
-
-    after = p11.wait_ui(past_half, 14)
-    if after is None:
-        raise RuntimeError('Audio clock did not reach the full recording after seeking')
-
-    def advancing(nodes):
-        value = past_half(nodes)
-        return value if value is not None and value > after else None
-
-    later = p11.wait_ui(advancing, 12)
-    if later is None:
+    observation = p11.wait_ui(lambda nodes: status(nodes, 'Seek verified · '), 18)
+    result = re.fullmatch(r'Seek verified · (\d+):(\d{2}) → (\d+):(\d{2})', observation or '')
+    if result is None:
         raise RuntimeError('Audio clock did not advance after seeking')
-    print(f'::notice::PASS live helper search: selected upload played for real ({duration} s), seek advanced {after}s→{later}s.')
+    a, b, c, d = map(int, result.groups())
+    after, later = 60 * a + b, 60 * c + d
+    if after < duration * 0.6 or later <= after:
+        raise RuntimeError('The decoded clock did not advance past the halfway point')
+    return duration, after, later
+
+
+def controlled_progressive(screen):
+    # Available only in CI's x86_64 package. The response takes about 12 s to finish.
+    elapsed = first_played(submit(screen, 'Fixture Orbit'))
+    if elapsed >= 5:
+        raise RuntimeError(f'Throttled fixture was not playing inside the 5 s target ({elapsed} s)')
+    before_full = p11.wait_ui(lambda nodes: p11.find(nodes, 'Started before the full audio was buffered.'), 12)
+    if before_full is None:
+        raise RuntimeError('Did not prove playback before transfer completion')
+    # Wait for complete byte coverage before reusing any local data as a complete file.
+    complete = p11.wait_ui(lambda nodes: p11.find(nodes, 'Whole audio buffered for replay in this session.'), 25)
+    if complete is None:
+        raise RuntimeError('Only a partial buffer arrived in the controlled test')
+    duration, after, later = check_seek()
+    if duration != 24:
+        raise RuntimeError(f'Test recording duration was not 24 s ({duration} s)')
+    try:
+        p11.adb('shell', 'cmd', 'connectivity', 'airplane-mode', 'enable')
+        p11.adb('shell', 'svc', 'wifi', 'disable')
+        p11.adb('shell', 'svc', 'data', 'disable')
+        first = p11.wait_ui(first_result, 10)
+        if first is None:
+            p11.adb('shell', 'input', 'swipe', '300', '1360', '300', '620', '350')
+            first = p11.wait_ui(first_result, 10)
+        if first is None:
+            raise RuntimeError('Could not select the same recording again')
+        replay = first_played(first)
+        if replay >= 5 or p11.wait_ui(lambda nodes: p11.find(nodes, 'Started from a complete buffer.'), 10) is None:
+            raise RuntimeError('The same selected recording did not replay from the complete local buffer')
+    finally:
+        p11.adb('shell', 'cmd', 'connectivity', 'airplane-mode', 'disable')
+        p11.adb('shell', 'svc', 'data', 'enable')
+        p11.adb('shell', 'svc', 'wifi', 'enable')
+    print(f'::notice::PASS Android throttled fixture: first audio {elapsed} s before full transfer, seek {after}s to {later}s, local replay {replay} s.')
+
+
+def live_search():
+    # Start with an empty session so this cannot reuse the fixture's cache or any previous recording.
+    p11.adb('shell', 'am', 'force-stop', p11.PKG)
+    screen = launch()
+    elapsed = first_played(submit(screen, 'Kevin MacLeod Carefree'))
+    duration, after, later = check_seek()
+    print(f'::notice::PASS live YouTube: first audio {elapsed} s, full duration {duration} s, seek {after}s to {later}s.')
 
 
 def main():
@@ -168,18 +170,18 @@ def main():
     parser.add_argument('--live', action='store_true')
     args = parser.parse_args()
     try:
-        screen = smoke(args.apk)
+        controlled_progressive(smoke(args.apk))
         output = os.environ.get('GITHUB_OUTPUT')
         if output:
             with Path(output).open('a', encoding='utf-8') as result:
-                result.write('startup_ok=true\n')
+                result.write('fixtures_ok=true\n')
         if args.live:
-            live_search(screen)
+            live_search()
     except Exception as error:
         print('::error::' + p11.diagnostic(str(error)).replace('%', '%25').replace('\n', ' / '))
         return 1
     finally:
-        log = p11.adb('logcat', '-d', '-s', 'BlackBoxStream', 'AndroidRuntime', check=False)
+        log = p11.adb('logcat', '-d', '-s', 'BlackBoxHelperStream', 'AndroidRuntime', check=False)
         print(p11.diagnostic(log))
     return 0
 

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent
 WEB = 'assets/web/'
 
 
-def package(original, helper, dependency, manifest, output, native_x86):
+def package(original, helper, dependency, manifest, output, native_x86, fixture):
     p11.verify_apk(original)
     helper = helper.read_bytes()
     p11.verify_refreshed_helper(helper)
@@ -23,8 +23,12 @@ def package(original, helper, dependency, manifest, output, native_x86):
     }
     additions = {
         'classes2.dex': dependency.read_bytes(),
-        **{WEB + name: (ROOT / name).read_bytes() for name in ('helper-phone.js', 'helper-phone.css')},
+        **{WEB + name: (ROOT / name).read_bytes() for name in ('helper-phone.js', 'helper-phone.css', 'stream.py')},
     }
+    if fixture:
+        if not native_x86:
+            raise ValueError('Playback fixtures may not be packaged in a phone APK')
+        additions[WEB + 'fixture-orbit.m4a'] = fixture.read_bytes()
     with ZipFile(original) as archive:
         entries = {i.filename: i for i in archive.infolist() if not i.filename.startswith('META-INF/')}
         assert replacements.keys() <= entries.keys()

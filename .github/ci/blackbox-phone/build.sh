@@ -22,13 +22,15 @@ verify_refreshed_helper(Path(sys.argv[2]).read_bytes())
 PY
 curl -fsSL --max-time 45 --max-filesize 500000 -o "$work/commons-compress.jar" \
   https://repo.maven.apache.org/maven2/org/apache/commons/commons-compress/1.12/commons-compress-1.12.jar
-mkdir "$work/dex"
-"$tools/d8" --min-api 24 --lib "$platform" --output "$work/dex" "$work/commons-compress.jar"
+mkdir "$work/dex" "$work/classes"
+"${JAVA_HOME:+$JAVA_HOME/bin/}javac" -source 8 -target 8 -classpath "$platform" -d "$work/classes" "$dir/HelperStreamActivity.java"
+"${JAVA_HOME:+$JAVA_HOME/bin/}jar" cf "$work/adapter.jar" -C "$work/classes" .
+"$tools/d8" --min-api 24 --lib "$platform" --output "$work/dex" "$work/commons-compress.jar" "$work/adapter.jar"
 "$tools/dexdump" "$work/dex/classes.dex" > "$work/dependency.txt"
 grep -q "Class descriptor .*Lorg/apache/commons/compress/archivers/zip/ZipFile;" "$work/dependency.txt"
 
 "$tools/aapt2" link -I "$platform" -I "$original" --manifest "$dir/AndroidManifest.xml" \
-  --min-sdk-version 24 --target-sdk-version 34 --version-code 2 --version-name '0.2.1-helper-search' -o "$work/manifest.apk"
+  --min-sdk-version 24 --target-sdk-version 34 --version-code 1 --version-name '0.3-progressive' -o "$work/manifest.apk"
 extra=()
 case "$abi" in
   arm64-v8a) ;;
@@ -36,7 +38,7 @@ case "$abi" in
     curl -fsSL --max-time 120 --max-filesize 70500000 -o "$work/x86.apk" \
       https://github.com/yausername/youtubedl-android/releases/download/0.18.1/app-x86_64-debug.apk
     echo "c6c8ece57600fe9022b91c026ddb3489fef80496b5627586e3e0fc46e0dcd866  $work/x86.apk" | sha256sum -c
-    extra+=(--native-x86 "$work/x86.apk")
+    extra+=(--native-x86 "$work/x86.apk" --fixture "$dir/../../../android/app/src/androidTest/assets/fixtures/orbit.m4a")
     ;;
   *) echo 'Choose arm64-v8a (phone) or x86_64 (emulator smoke only)' >&2; exit 2 ;;
 esac
@@ -44,16 +46,16 @@ python3 -B "$dir/package_apk.py" "$original" "$helper" "$work/dex/classes.dex" \
   "$work/manifest.apk" "$work/base.apk" "${extra[@]}"
 "$tools/zipalign" -P 16 -f 4 "$work/base.apk" "$work/aligned.apk"
 keytool -genkeypair -keystore "$work/diagnostic.p12" -storepass test-only -keypass test-only \
-  -alias diagnostic -keyalg RSA -keysize 2048 -validity 365 -dname 'CN=BlackBox ARM64 Helper Search' >/dev/null
+  -alias diagnostic -keyalg RSA -keysize 2048 -validity 365 -dname 'CN=BlackBox ARM64 Helper Stream' >/dev/null
 "$tools/apksigner" sign --ks "$work/diagnostic.p12" --ks-pass pass:test-only --v1-signing-enabled false \
   --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false --out "$output" "$work/aligned.apk"
 "$tools/apksigner" verify --verbose --print-certs "$output"
 "$tools/zipalign" -P 16 -c 4 "$output"
 "$tools/aapt2" dump badging "$output" > "$work/badging.txt"
 cat "$work/badging.txt"
-grep -q "^package: name='com.blackbox.stream.helpersearch'" "$work/badging.txt"
-grep -q "^application-label:'BlackBox Helper Search'$" "$work/badging.txt"
-grep -q "^launchable-activity: name='com.blackbox.stream.MainActivity'" "$work/badging.txt"
+grep -q "^package: name='com.blackbox.stream.helperstream'" "$work/badging.txt"
+grep -q "^application-label:'BlackBox Helper Stream'$" "$work/badging.txt"
+grep -q "^launchable-activity: name='com.blackbox.stream.helperstream.HelperStreamActivity'" "$work/badging.txt"
 if [[ "$abi" == arm64-v8a ]]; then grep -q "^native-code: 'arm64-v8a'$" "$work/badging.txt"; fi
 python3 - "$output" "$work/dex/classes.dex" "$helper" <<'PY'
 from zipfile import ZipFile

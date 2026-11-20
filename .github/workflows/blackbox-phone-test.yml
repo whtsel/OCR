@@ -1,4 +1,4 @@
-name: BlackBox helper-only search APK
+name: BlackBox progressive helper-only APK
 on:
   workflow_dispatch:
     inputs:
@@ -34,23 +34,24 @@ jobs:
         run: |
           (cd android/vendor && sha256sum -c ytdlp.sha256)
           node --test .github/ci/blackbox-phone/helper-phone.test.cjs
+          python3 -B .github/ci/blackbox-phone/test_stream.py
           python3 -u .github/ci/check_blackbox_p11.py download "$RUNNER_TEMP/p11.apk"
       - name: Package and verify the test-signed ARM64 APK
         run: |
-          apk="$RUNNER_TEMP/BlackBox-Helper-Search-ARM64.apk"
+          apk="$RUNNER_TEMP/BlackBox-Helper-Stream-ARM64.apk"
           bash .github/ci/blackbox-phone/build.sh "$RUNNER_TEMP/p11.apk" android/vendor/ytdlp "$apk"
           hash=$(sha256sum "$apk")
-          echo "::notice::BlackBox-Helper-Search-ARM64.apk SHA-256 ${hash%% *} ($(stat -c %s "$apk") bytes)"
+          echo "::notice::BlackBox-Helper-Stream-ARM64.apk SHA-256 ${hash%% *} ($(stat -c %s "$apk") bytes)"
       - name: Build the x86_64 companion with the same search UI
         run: >-
           bash .github/ci/blackbox-phone/build.sh "$RUNNER_TEMP/p11.apk" android/vendor/ytdlp
-          "$RUNNER_TEMP/x86-helper-search.apk" x86_64
+          "$RUNNER_TEMP/x86-helper-stream.apk" x86_64
       - name: Enable hardware acceleration for the disposable smoke emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Boot the tester and optionally run a live search on the same emulator
+      - name: Prove progressive start and local replay, then optionally test live YouTube
         id: android
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
@@ -60,14 +61,14 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
           script: >-
-            PYTHONPATH=.github/ci python3 -B -u .github/ci/blackbox-phone/smoke.py "$RUNNER_TEMP/x86-helper-search.apk"
+            PYTHONPATH=.github/ci python3 -B -u .github/ci/blackbox-phone/smoke.py "$RUNNER_TEMP/x86-helper-stream.apk"
             ${{ inputs.verify_live_search && '--live' || '' }}
-      - name: Retain the startup-verified ARM64 tester even when live access fails
-        if: ${{ !cancelled() && steps.android.outputs.startup_ok == 'true' }}
+      - name: Retain the fixture-verified ARM64 tester even when live access fails
+        if: ${{ !cancelled() && steps.android.outputs.fixtures_ok == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: BlackBox-Helper-Search-ARM64
-          path: ${{ runner.temp }}/BlackBox-Helper-Search-ARM64.apk
+          name: BlackBox-Helper-Stream-ARM64
+          path: ${{ runner.temp }}/BlackBox-Helper-Stream-ARM64.apk
           compression-level: 0
           if-no-files-found: error
           retention-days: 7

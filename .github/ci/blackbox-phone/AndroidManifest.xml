@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.blackbox.stream.helpersearch">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.blackbox.stream.helperstream">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- IDs resolve against the untouched p11 resource table. This is a separate install. -->
-    <application android:label="BlackBox Helper Search" android:icon="@*com.blackbox.stream:drawable/ic_launcher"
+    <application android:label="BlackBox Helper Stream" android:icon="@*com.blackbox.stream:drawable/ic_launcher"
         android:theme="@*com.blackbox.stream:style/AppTheme" android:allowBackup="false"
         android:hardwareAccelerated="true" android:extractNativeLibs="true" android:usesCleartextTraffic="false"
         android:networkSecurityConfig="@*com.blackbox.stream:xml/network_security_config">
-        <activity android:name="com.blackbox.stream.MainActivity" android:exported="true" android:launchMode="singleTop"
+        <activity android:name="com.blackbox.stream.helperstream.HelperStreamActivity" android:exported="true" android:launchMode="singleTop"
             android:configChanges="keyboardHidden|orientation|screenLayout|uiMode|screenSize|smallestScreenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
