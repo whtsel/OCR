@@ -28,6 +28,19 @@ def clock(nodes):
     return None
 
 
+def query_field(nodes):
+    # Chromium can omit the HTML input's resource ID and placeholder in a UiAutomator dump.
+    direct = p11.find(nodes, 'query', 'Enter a song or artist')
+    if direct is not None:
+        return direct
+    for node in nodes:
+        if node.get('package') == p11.PKG and node.get('class') == 'android.widget.EditText':
+            left, top, right, bottom = p11.bounds(node)
+            if right > left and bottom > top:
+                return node
+    return None
+
+
 def smoke(apk):
     print(p11.adb('install', '--abi', 'x86_64', apk, timeout=65))
     p11.adb('shell', 'wm', 'size', '720x1560')
@@ -37,9 +50,10 @@ def smoke(apk):
     screen = p11.wait_ui(lambda nodes: nodes if p11.find(nodes, 'Helper ready · no account session') is not None else None, 100)
     if screen is None:
         raise RuntimeError('Did not see helper readiness: ' + ' | '.join(visible_text(p11.ui_nodes())))
-    if any(p11.find(screen, *locators) is None for locators in (
-            ('query', 'Enter a song or artist'), ('search', 'Search'), ('Nothing searched yet.',))):
-        raise RuntimeError('Blank search controls missing: ' + ' | '.join(visible_text(screen)))
+    if query_field(screen) is None or any(p11.find(screen, *locators) is None for locators in (
+            ('search', 'Search'), ('Nothing searched yet.',))):
+        nodes = [(node.get('class'), p11.label(node), node.get('bounds')) for node in screen if node.get('package') == p11.PKG]
+        raise RuntimeError(f'Blank search controls missing: {nodes}')
     if p11.find(screen, 'Try Espresso', 'Try Kwaku', 'play-result-1') is not None:
         raise RuntimeError('Test screen should not contain any preselected recording')
     print('::notice::PASS Android startup: the pinned helper is ready with a blank search form and no account session.')
@@ -48,7 +62,7 @@ def smoke(apk):
 
 def live_search(screen):
     # An independent query for an openly licensed recording, not a baked-in result or ID.
-    p11.tap(p11.find(screen, 'query', 'Enter a song or artist'))
+    p11.tap(query_field(screen))
     p11.adb('shell', 'input', 'text', 'Kevin%sMacLeod%sCarefree')
     search_button = p11.wait_ui(lambda nodes: p11.find(nodes, 'search', 'Search'), 10)
     if search_button is None:
