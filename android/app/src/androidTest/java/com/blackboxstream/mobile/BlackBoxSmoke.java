@@ -144,6 +144,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 verifyServicesOnAndroid();
             }
             if (fixtures != null && fixtures.containsKey("public_media")) verifyPublicMedia(app, db);
+            SmokeMediaProvider.available = true;
             Activity audio = launch(PlayerActivity.class, audioFixture.id);
             try {
                 await("audio plays through foreground media session", 16000, () -> ui(() -> engine.ready() && engine.playing()
@@ -233,8 +234,10 @@ public final class BlackBoxSmoke extends Instrumentation {
             WebView web = ui(() -> findWeb(shown.getWindow().getDecorView()));
             checkKeylessHome(web);
             tapWeb(web, "#navMusic");
+            String ophelia = "#music-shelf-trending-now [title='Play The Fate of Ophelia']";
             await("Original Music has fourteen genres and its original downloads, not a preparation shelf", 10000,
-                    () -> jsTrue(web, "document.querySelectorAll('#musicGenreChips button').length===14 && document.querySelector('#musicDownloadedList')"
+                    () -> jsTrue(web, "!document.querySelector('#viewMusic').hidden && !!document.querySelector(" + JSONObject.quote(ophelia) + ")"
+                            + " && document.querySelectorAll('#musicGenreChips button').length===14 && document.querySelector('#musicDownloadedList')"
                             + " && !document.querySelector('#androidMusicHelper,#androidAudioLibrary,#androidPreparedMusic')"));
             // Hold the actual bridge reply long past a transient user gesture, while keeping the
             // production transport, spinner and audio decoder. No second tap is permitted.
@@ -248,7 +251,6 @@ public final class BlackBoxSmoke extends Instrumentation {
             try {
                 android.net.ConnectivityManager network = app.getSystemService(android.net.ConnectivityManager.class);
                 await("Test device is offline", 14000, () -> network.getActiveNetwork() == null);
-                String ophelia = "#music-shelf-trending-now [title='Play The Fate of Ophelia']";
                 String locked = "#music-shelf-trending-now [title='Play Locked out of Heaven']";
                 String missing = "#music-shelf-trending-now [title='Play NUEVAYoL']";
                 js(web, "window.musicMessageBeforePlay=document.querySelector('#musicMsg').textContent");
@@ -572,11 +574,18 @@ public final class BlackBoxSmoke extends Instrumentation {
 
     private void tapWebAt(WebView web, String selector, int left, int top) throws Exception {
         String node = "document.querySelector(" + JSONObject.quote(selector) + ")";
-        js(web, "(()=>{const e=" + node + ";e?.scrollIntoView({block:'center',inline:'center',behavior:'instant'});return !!e})()");
-        JSONArray hit = new JSONArray(js(web, "(()=>{const e=" + node + ";if(!e)return [];const r=e.getBoundingClientRect();"
+        String locate = "(()=>{const e=" + node + ";if(!e)return [state.view,'missing'];const r=e.getBoundingClientRect();"
                 + "const x=r.left+" + (left < 0 ? "r.width/2" : left) + ",y=r.top+" + (top < 0 ? "r.height/2" : top)
-                + ";return [x,y,innerWidth,!!document.elementFromPoint(x,y)&&e.contains(document.elementFromPoint(x,y))]})()"));
-        assertPass("Touchable WebView control: " + selector, hit.length() == 4 && hit.getBoolean(3));
+                + ";const target=document.elementFromPoint(x,y);return [x,y,innerWidth,!!target&&e.contains(target),state.view,r.width,r.height,target?.tagName,target?.id,target?.className]})()";
+        JSONArray hit = new JSONArray();
+        // Let scroll/layout and the WebView's frame after navigation settle, but inject exactly one tap.
+        for (int i = 0; i < 12; i++) {
+            js(web, "(()=>{const e=" + node + ";e?.scrollIntoView({block:'center',inline:'center',behavior:'instant'});return !!e})()");
+            hit = new JSONArray(js(web, locate));
+            if (hit.optBoolean(3)) break;
+            SystemClock.sleep(120);
+        }
+        assertPass("Touchable WebView control: " + selector + (hit.optBoolean(3) ? "" : "; hit=" + hit), hit.optBoolean(3));
         int[] window = ui(() -> { int[] where = new int[3]; web.getLocationOnScreen(where); where[2] = web.getWidth(); return where; });
         float scale = (float) (window[2] / hit.getDouble(2));
         long when = SystemClock.uptimeMillis();
@@ -763,6 +772,9 @@ public final class BlackBoxSmoke extends Instrumentation {
                     Catalogue.Shelf.TRENDING, "A + B", "aabbccddeeff1100aabbccddeeff1100", 1);
             assertPass("Android parses catalogue metadata from HTTPS", movies.size() == 1
                     && "A + B".equals(movies.get(0).title) && movies.get(0).entry() == null);
+            JSONObject japanese = Catalogue.anime(URI.create(relay + "/3"), "header64.payload64.signature64", false, 2);
+            assertPass("Android Anime uses only TMDB title metadata, not a sample provider", japanese.getJSONArray("items").length() == 1
+                    && japanese.getJSONArray("items").getJSONObject(0).getInt("id") == 102);
             List<Catalogue.Card> music = Catalogue.music(URI.create(relay + "/ws/2"), Catalogue.Music.TRACKS, "Low Orbit");
             assertPass("Android parses MusicBrainz-shaped search results", music.size() == 1 && music.get(0).musicBrainz());
 

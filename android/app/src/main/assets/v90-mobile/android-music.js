@@ -49,6 +49,11 @@
   autoAddPlayedMusicToActiveCollection = () => 0;
   setMusicPlaybackStatus = () => {};
 
+  // On WebViews that suspend Web Audio, leave the element on Android's normal audio output.
+  // A visualizer must not capture the song into a silent, suspended graph.
+  const attachSpectrum = attachMusicFrequencySource;
+  attachMusicFrequencySource = () => musicSpectrumV51.ctx?.state === 'running' ? attachSpectrum() : null;
+
   const originalIdentity = queueIdentity;
   queueIdentity = item => item?._preparedRecording?.ref || (item?.album && title(item) ? identity(item) : originalIdentity(item));
   const originalValidId = validPlaybackId;
@@ -262,6 +267,7 @@
     if (session?.item === item && !session.started) return session.playing;
     const player = ensureBgAudio();
     if (!player) return;
+    if (!options.intent || options.intent === 'user' || options.intent === 'resume') primeMusicFrequencyAnalyser();
     const control = options.control;
     const fromQueue = control?.matches('.bg-queue-row-v49');
     if (session) release(session, false);

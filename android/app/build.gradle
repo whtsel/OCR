@@ -4,7 +4,7 @@ plugins {
 
 // The helper-enabled v90 build includes an official, byte-pinned zipapp and the tested Android runtime.
 // The dependency-free baseline/standalone build remains available.
-def musicHelper = providers.gradleProperty('bbxMusicHelper').getOrElse('false') == 'true'
+def musicHelper = providers.gradleProperty('bbxMusicHelper').getOrElse('true') == 'true'
 def helperAbi = providers.gradleProperty('bbxHelperAbi').getOrElse('arm64-v8a')
 def preview = providers.gradleProperty('bbxHelperPreview').getOrElse('false') == 'true'
 def helperRaw = layout.buildDirectory.dir('generated/musicHelper/res')

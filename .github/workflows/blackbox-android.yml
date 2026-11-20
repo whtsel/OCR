@@ -38,7 +38,7 @@ jobs:
         working-directory: android
         run: |
           log=$(mktemp)
-          if ! gradle :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console=plain > "$log" 2>&1; then
+          if ! gradle :app:assembleDebug :app:assembleDebugAndroidTest -PbbxMusicHelper=false --no-daemon --console=plain > "$log" 2>&1; then
             tail -80 "$log"
             detail=$(grep -A5 -E 'error:|What went wrong:' "$log" | head -c 2800 || true)
             detail=${detail//'%'/'%25'}
