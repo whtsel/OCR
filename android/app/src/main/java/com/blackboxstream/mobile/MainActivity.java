@@ -691,10 +691,6 @@ public final class MainActivity extends Activity implements PlaybackService.List
 
     private void open(MediaEntry item, boolean fromLink) {
         if (item == null || TorrentActivity.openSource(this, item)) return;
-        if (item.torrent() && item.transfer < 0 && !store.isOffline(item)) {
-            Cinema.Film film = Cinema.fromTorrent(item.source);
-            if (film != null) { watchFilm(film, null); return; }
-        }
         if (store.get(item.id) == null || fromLink) store.save(item, true);
         startActivity(new Intent(this, PlayerActivity.class).putExtra(PlaybackService.EXTRA_ID, item.id));
     }

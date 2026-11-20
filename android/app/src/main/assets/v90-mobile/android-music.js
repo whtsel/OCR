@@ -191,20 +191,9 @@
   const persist = persistMusicPlaybackSession;
   persistMusicPlaybackSession = () => { if (session?.started && stillSelected(session)) persist(); };
 
-  async function play(live, options) {
+  async function play(live) {
     try {
       if (!live.track) { stop(live); return; }
-      // Restoring the UI may reuse a saved file, but must not start a provider request on launch.
-      if (options.intent === 'restore') {
-        const snapshot = await read('', undefined, live.controller.signal);
-        if (!stillSelected(live)) return;
-        if (!Object.values(snapshot.tracks).some(row => row.state === 'ready' && recordingKey(row.recording) === recordingKey(live.track))) {
-          clearMusicPlaybackFeedback('cancel', live.feedbackId);
-          clearTimeout(live.deadline);
-          session = null;
-          return;
-        }
-      }
       let snapshot = await planQueue(live, true), key;
       while (stillSelected(live)) {
         key = snapshot.selected;
@@ -254,9 +243,22 @@
     if (musicPlaybackActionElement) delete musicPlaybackActionElement.dataset.loadingLabel;
     return id;
   }
+  async function restoreCached(item) {
+    const revision = sequence;
+    try {
+      const snapshot = await read();
+      const track = recording(item);
+      // Don't block a real Play tap while checking a previous session's private cache.
+      if (sequence === revision && !session && musicQueue.list[musicQueue.idx] === item && track
+          && Object.values(snapshot.tracks).some(row => row.state === 'ready' && recordingKey(row.recording) === recordingKey(track))) {
+        return queuePlayCurrent({intent:'cached-restore'});
+      }
+    } catch { /* The normal Play control stays ready. */ }
+  }
   queuePlayCurrent = (options = {}) => {
     const item = musicQueue.list[musicQueue.idx];
     if (!item) return;
+    if (options.intent === 'restore') return restoreCached(item);
     if (session?.item === item && !session.started) return session.playing;
     const player = ensureBgAudio();
     if (!player) return;
@@ -266,7 +268,7 @@
     const live = session = {...player, item, track:recording(item), fromQueue, started:false, controller:new AbortController()};
     live.feedbackId = attachSpinner(fromQueue ? document.querySelector('#bgQueueList .playing') : control);
     live.deadline = setTimeout(() => stop(live), 195000);
-    live.playing = play(live, options);
+    live.playing = play(live);
     return live.playing;
   };
   queueItemStatus = (_item, idx) => idx === musicQueue.idx ? (session?.started && !session.audio.paused ? 'Playing now' : 'Current') : 'Up next';

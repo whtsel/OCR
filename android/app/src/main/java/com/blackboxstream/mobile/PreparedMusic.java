@@ -187,7 +187,7 @@ final class PreparedMusic implements AutoCloseable {
         if (active != null && !desired.containsKey(running) && !next.containsKey(running)) active.cancel();
         album.clear(); album.putAll(next);
         albumCompleted.clear();
-        failures.keySet().removeIf(key -> !desired.containsKey(key));
+        failures.keySet().removeIf(key -> !desired.containsKey(key) || album.containsKey(key) && !requested.equals(key));
         for (String key : album.keySet()) if (readyFile(key) != null) albumCompleted.add(key);
         return state();
     }
@@ -205,7 +205,7 @@ final class PreparedMusic implements AutoCloseable {
                 String key = track.key;
                 boolean prepared = readyFile(key) != null;
                 String state = prepared ? "ready" : key.equals(running) && !active.cancelled ? "working"
-                        : failures.containsKey(key) || albumCompleted.contains(key) ? "failed" : "queued";
+                        : failures.containsKey(key) || albumCompleted.contains(key) && !desired.containsKey(key) ? "failed" : "queued";
                 rows.put(key, new JSONObject().put("state", state).put("recording", track.json())
                         .put("message", "failed".equals(state) ? failures.get(key) : ""));
             }

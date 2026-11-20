@@ -48,7 +48,7 @@ jobs:
           log=$(mktemp)
           if ! (cd android && gradle :app:assembleDebug --no-daemon --console=plain -PbbxMusicHelper=true -PbbxHelperPreview=true) > "$log" 2>&1; then
             tail -75 "$log"
-            message=$(grep -A10 -E 'What went wrong:|^e: ' "$log" | head -c 2700 || true)
+            message=$(grep -A5 -E 'error:|What went wrong:|^e: ' "$log" | head -c 2700 || true)
             printf '::error::%s\n' "${message//$'\n'/' / '}"
             exit 1
           fi
@@ -63,9 +63,15 @@ jobs:
           cp "$apk" "$RUNNER_TEMP/BlackBox-Stream-v90-ARM64.apk"
       - name: Assemble the x86_64 counterpart and fixture instrumentation
         working-directory: android
-        run: >-
-          gradle :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console=plain
-          -PbbxMusicHelper=true -PbbxHelperPreview=true -PbbxHelperAbi=x86_64
+        run: |
+          log=$(mktemp)
+          if ! gradle :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console=plain \
+            -PbbxMusicHelper=true -PbbxHelperPreview=true -PbbxHelperAbi=x86_64 > "$log" 2>&1; then
+            tail -75 "$log"
+            message=$(grep -A5 -E 'error:|What went wrong:|^e: ' "$log" | head -c 2700 || true)
+            printf '::error::%s\n' "${message//$'\n'/' / '}"
+            exit 1
+          fi
       - name: Enable emulator acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules

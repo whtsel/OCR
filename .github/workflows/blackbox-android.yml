@@ -40,7 +40,7 @@ jobs:
           log=$(mktemp)
           if ! gradle :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console=plain > "$log" 2>&1; then
             tail -80 "$log"
-            detail=$(grep -A4 -F 'What went wrong:' "$log" | tail -4 | head -c 900)
+            detail=$(grep -A5 -E 'error:|What went wrong:' "$log" | head -c 2800 || true)
             detail=${detail//'%'/'%25'}
             detail=${detail//$'\n'/'%0A'}
             printf '::error::Android Gradle build failed. %s\n' "${detail:-$(tail -1 "$log")}"
