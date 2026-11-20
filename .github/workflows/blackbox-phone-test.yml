@@ -39,7 +39,14 @@ jobs:
       - name: Package and verify the test-signed ARM64 APK
         run: |
           apk="$RUNNER_TEMP/BlackBox-Helper-Stream-ARM64.apk"
-          bash .github/ci/blackbox-phone/build.sh "$RUNNER_TEMP/p11.apk" android/vendor/ytdlp "$apk"
+          log=$(mktemp)
+          if ! bash -x .github/ci/blackbox-phone/build.sh "$RUNNER_TEMP/p11.apk" android/vendor/ytdlp "$apk" > "$log" 2>&1; then
+            tail -65 "$log"
+            detail=$(tail -c 2200 "$log")
+            printf '::error::ARM64 build: %s\n' "${detail//$'\n'/' / '}"
+            exit 1
+          fi
+          tail -20 "$log"
           hash=$(sha256sum "$apk")
           echo "::notice::BlackBox-Helper-Stream-ARM64.apk SHA-256 ${hash%% *} ($(stat -c %s "$apk") bytes)"
       - name: Build the x86_64 companion with the same search UI
