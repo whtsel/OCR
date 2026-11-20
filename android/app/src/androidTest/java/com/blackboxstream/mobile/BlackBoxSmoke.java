@@ -63,7 +63,8 @@ public final class BlackBoxSmoke extends Instrumentation {
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
-            if (fixtures != null && "yes".equals(fixtures.getString("music_only"))) verifyMusicCandidate();
+            if (fixtures != null && "yes".equals(fixtures.getString("helper_fixture"))) verifyHelperFixtures();
+            else if (fixtures != null && "yes".equals(fixtures.getString("music_only"))) verifyMusicCandidate();
             else if (fixtures != null && "yes".equals(fixtures.getString("public_only"))) verifyCandidate();
             else verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
@@ -241,6 +242,158 @@ public final class BlackBoxSmoke extends Instrumentation {
                 TorrentJobs.descriptor(app, film.hash).delete();
             }
             waitForIdleSync();
+        }
+    }
+
+    /** Tests the real helper loader, isolated queue worker, and actual v90 WebView using only built-in fixture media. */
+    private void verifyHelperFixtures() throws Exception {
+        Context app = getTargetContext();
+        assertPass("Helper fixtures run only on the disposable preview package", app.getPackageName().endsWith(".helper"));
+        Class<?> runtime = Class.forName("com.blackboxstream.mobile.BundledMusicRuntime");
+        Object instance = runtime.getDeclaredConstructor(Context.class).newInstance(app);
+        java.lang.reflect.Method run = runtime.getDeclaredMethod("run", PreparedMusic.Control.class, File.class, String[].class);
+        run.setAccessible(true);
+        File root = app.getNoBackupFilesDir();
+        File scratch = new File(root, "helper-smoke");
+        File cache = new File(root, "prepared-music-" + PreparedMusic.VERSION);
+        android.content.SharedPreferences prefs = app.getSharedPreferences("music-preparation", Context.MODE_PRIVATE);
+        assertPass("Prepare a fresh test directory", scratch.mkdir());
+        Activity desktop = null;
+        try {
+            String installed = (String) run.invoke(instance, new PreparedMusic.Control(), scratch, new String[] {"--version"});
+            assertPass("Pinned Android Python runtime executes yt-dlp 2026.10.26", PreparedMusic.VERSION.equals(installed.trim()));
+            File video = new File(scratch, "fixture.mp4");
+            copyRaw(app, R.raw.dawn, video);
+            run.invoke(instance, new PreparedMusic.Control(), scratch, new String[] {"--enable-file-urls", "-x", "--audio-format", "m4a",
+                    "-o", new File(scratch, "audio.%(ext)s").getPath(), video.toURI().toString()});
+            File audio = new File(scratch, "audio.m4a");
+            PreparedMusic.verifyAudio(audio, 14);
+            assertPass("Bundled FFmpeg extracts complete audio on Android", audio.isFile());
+            try {
+                PreparedMusic.verifyAudio(audio, 175);
+                throw new AssertionError("Short fixture accepted as a 175-second recording");
+            } catch (java.io.IOException expected) { checks++; }
+            verifyPreparationQueue(app, scratch, audio);
+
+            // Seed only the disposable test package. These files prove local playback, NOT live recording availability.
+            assertPass("Preview cache starts empty", cache.mkdir());
+            copyRaw(app, R.raw.orbit, new File(cache, "51zjlMhdSTE.m4a"));
+            copyRaw(app, R.raw.orbit, new File(cache, "Hb6I7GoTvzI.m4a"));
+            desktop = launch(V90Activity.class, null);
+            Activity shown = desktop;
+            WebView web = ui(() -> findWeb(shown.getWindow().getDecorView()));
+            await("v90 preview opens the original library and genres", 18000,
+                    () -> jsTrue(web, "window.bbxAndroidOpen && document.querySelector('#rows .card')"));
+            tapWeb(web, "#navMusic");
+            await("The Music opt-in is present, with the original fourteen genres", 8000,
+                    () -> jsTrue(web, "document.querySelector('#androidMusicHelper')?.hidden===false && document.querySelectorAll('#musicGenreChips button').length===14"));
+            tapWeb(web, "#androidMusicHelperToggle");
+            tapWeb(web, "#androidMusicHelperConsent .primary");
+            await("Two opted-in cached fixtures are ready", 8000, () -> jsTrue(web, "document.querySelectorAll('#androidPreparedMusic button').length===2"));
+            shell("cmd connectivity airplane-mode enable");
+            shell("svc wifi disable"); shell("svc data disable");
+            try {
+                android.net.ConnectivityManager network = app.getSystemService(android.net.ConnectivityManager.class);
+                await("Test device is offline", 14000, () -> network.getActiveNetwork() == null);
+                tapWeb(web, "#music-shelf-trending-now [title='Play Espresso']");
+                awaitPreparedFixture(web, "Espresso", 1);
+                js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
+                awaitPreparedFixture(web, "Espresso", 16.3);
+                tapWeb(web, "#bgPlayBtn");
+                await("Pause is available in the visible original player", 6000, () -> jsTrue(web, "document.querySelector('#bgAudio').paused"));
+                tapWeb(web, "#bgPlayBtn");
+                awaitPreparedFixture(web, "Espresso", 17);
+                // Queue the two canonical rows without any online search, and let playback completion advance.
+                js(web, "queueSet([musicQueue.list[musicQueue.idx],{title:'Kwaku the Traveller',artist:'Black Sherif',album:'The Villain I Never Was',duration:185}],0,'Fixture only')");
+                js(web, "document.querySelector('#bgAudio').currentTime = document.querySelector('#bgAudio').duration - 0.25");
+                awaitPreparedFixture(web, "Kwaku the Traveller", 1);
+                closeScreen(desktop);
+                desktop = launch(V90Activity.class, null);
+                Activity reopened = desktop;
+                WebView offline = ui(() -> findWeb(reopened.getWindow().getDecorView()));
+                await("Preview relaunches with networking still off", 18000,
+                        () -> jsTrue(offline, "window.bbxAndroidOpen && document.querySelector('#rows .card')"));
+                tapWeb(offline, "#navMusic");
+                await("Kwaku fixture is still available from the committed cache", 10000,
+                        () -> jsTrue(offline, "document.querySelectorAll('#androidPreparedMusic button').length===2"));
+                tapWeb(offline, "#androidPreparedMusic button:last-child");
+                awaitPreparedFixture(offline, "Kwaku the Traveller", 1);
+            } finally {
+                shell("cmd connectivity airplane-mode disable"); shell("svc data enable"); shell("svc wifi enable");
+            }
+        } finally {
+            closeScreen(desktop);
+            prefs.edit().clear().commit();
+            PreparedMusic.deleteScratch(cache);
+            PreparedMusic.deleteScratch(scratch);
+        }
+    }
+
+    private void awaitPreparedFixture(WebView web, String title, double from) throws Exception {
+        String playable = "(()=>{const a=document.querySelector('#bgAudio'), b=document.querySelector('#bgAudioBar');return a?.src.startsWith('blob:https://blackbox.invalid/') && !b.hidden && getComputedStyle(b).display!=='none' && document.querySelector('#bgTitle').textContent==="
+                + JSONObject.quote(title) + " && a.duration > 23 && a.duration < 25 && !a.paused && a.currentTime > " + from + "})()";
+        try {
+            await(title + " fixture loads into the v90 audio player", 12000,
+                    () -> jsTrue(web, "document.querySelector('#bgAudio').readyState>=2 && document.querySelector('#bgTitle').textContent===" + JSONObject.quote(title)));
+            if (jsTrue(web, "document.querySelector('#bgAudio').paused")) tapWeb(web, "#bgPlayBtn");
+            await(title + " fixture decodes and advances from " + from, 10000, () -> jsTrue(web, playable));
+        } catch (AssertionError error) {
+            throw new AssertionError(error.getMessage() + ": " + js(web, "JSON.stringify({blob:document.querySelector('#bgAudio').src.startsWith('blob:'),error:document.querySelector('#bgAudio').error?.code,duration:document.querySelector('#bgAudio').duration,time:document.querySelector('#bgAudio').currentTime,status:document.querySelector('#musicMsg').textContent})"),error);
+        }
+    }
+
+    private void verifyPreparationQueue(Context app, File scratch, File audio) throws Exception {
+        String a = "aaaaaaaaaaa", b = "bbbbbbbbbbb", c = "ccccccccccc", d = "ddddddddddd";
+        PreparedMusic.Track[] tracks = {new PreparedMusic.Track(a, "A", "Fixture", 14), new PreparedMusic.Track(b, "B", "Fixture", 14),
+                new PreparedMusic.Track(c, "C", "Fixture", 14), new PreparedMusic.Track(d, "D", "Fixture", 14)};
+        java.util.List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.concurrent.atomic.AtomicBoolean unmetered = new java.util.concurrent.atomic.AtomicBoolean(false);
+        PreparedMusic.Runtime fixture = (track, work, control) -> {
+            calls.add(track.id);
+            if (track.id.equals(b)) while (!control.cancelled) Thread.sleep(10);
+            File local = new File(work, "audio.m4a");
+            try (InputStream in = new FileInputStream(audio); FileOutputStream out = new FileOutputStream(local)) {
+                byte[] bytes = new byte[8192];
+                for (int n; (n = in.read(bytes)) != -1;) out.write(bytes, 0, n);
+            }
+            return local;
+        };
+        File dir = new File(scratch, "queue");
+        android.content.SharedPreferences prefs = app.getSharedPreferences("helper-fixture-unit", Context.MODE_PRIVATE);
+        try (PreparedMusic queue = new PreparedMusic(dir, prefs, fixture, background -> !background || unmetered.get(), tracks)) {
+            queue.plan(1, a, new JSONArray().put(b).put(c), true);
+            assertPass("Opt-out prevents queueing and access", calls.isEmpty() && queue.read(a) == null);
+            queue.options(true, false);
+            queue.plan(1, a, new JSONArray().put(b).put(c), true);
+            await("Selected audio prepares on a metered connection", 7000, () -> queue.read(a) != null);
+            assertPass("Metered prefetch waits for an unmetered connection", calls.equals(Arrays.asList(a))
+                    && "queued".equals(queue.state().getJSONObject("tracks").getJSONObject(b).getString("state")));
+            unmetered.set(true);
+            queue.state();
+            await("First actual upcoming entry starts", 7000, () -> calls.contains(b));
+            assertPass("Only one job runs at once", calls.equals(Arrays.asList(a,b)));
+            queue.plan(2, b, new JSONArray().put(c), true); // Promote rather than restart B.
+            queue.plan(4, d, new JSONArray().put(c).put(a), true); // Cancel B when it's no longer wanted.
+            queue.plan(3, a, new JSONArray().put(b), true); // Delayed stale bridge message.
+            await("New foreground jumps ahead; still-relevant second entry prepares", 9000, () -> queue.read(d) != null && queue.read(c) != null);
+            assertPass("Cancelled output never commits; kept files deduplicate", queue.read(b) == null && calls.equals(Arrays.asList(a,b,d,c)));
+            try {
+                queue.plan(5, a, new JSONArray().put(b).put(c).put(d), true);
+                throw new AssertionError("Three upcoming items accepted");
+            } catch (IllegalArgumentException expected) { checks++; }
+        }
+        try (PreparedMusic reopened = new PreparedMusic(dir, prefs, fixture, background -> false, tracks)) {
+            reopened.plan(1, a, new JSONArray(), true);
+            assertPass("Completed file is reused across instances when offline", reopened.read(a) != null && calls.size() == 4);
+            reopened.options(false, true);
+            assertPass("Clearing the cache leaves no ready file", reopened.read(a) == null && !new File(dir, a + ".m4a").exists());
+        } finally { prefs.edit().clear().commit(); }
+    }
+
+    private static void copyRaw(Context app, int resource, File target) throws Exception {
+        try (InputStream in = app.getResources().openRawResource(resource); FileOutputStream out = new FileOutputStream(target)) {
+            byte[] bytes = new byte[8192];
+            for (int n; (n = in.read(bytes)) != -1;) out.write(bytes, 0, n);
         }
     }
 

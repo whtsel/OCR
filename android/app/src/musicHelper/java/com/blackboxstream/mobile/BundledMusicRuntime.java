@@ -67,7 +67,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         if (control.cancelled) return null;
         // URL comes from a validated ID in the native recording table, never a search or shell argument supplied by a page.
         run(control, scratch, "--no-playlist", "--no-progress", "--socket-timeout", "12", "--retries", "1",
-                "--fragment-retries", "1", "--max-filesize", "24M", "-f", "bestaudio[ext=m4a]/bestaudio/best",
+                "--fragment-retries", "1", "--max-filesize", "24M", "--match-filters", "id = " + track.id,
+                "-f", "bestaudio[ext=m4a]/bestaudio",
                 "-x", "--audio-format", "m4a", "--audio-quality", "0", "-o", new File(scratch, "audio.%(ext)s").getAbsolutePath(),
                 "https://www.youtube.com/watch?v=" + track.id);
         return new File(scratch, "audio.m4a");

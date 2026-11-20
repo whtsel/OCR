@@ -9,7 +9,11 @@ on:
       - 'android/app/build.gradle'
       - 'android/app/src/musicHelper/**'
       - 'android/app/src/main/java/**/PreparedMusic.java'
-      - 'android/app/src/main/assets/v90-mobile/android-music.js'
+      - 'android/app/src/main/java/**/V90*.java'
+      - 'android/app/src/main/assets/v90-mobile/**'
+      - 'android/app/src/androidTest/**'
+      - 'android/tests/run_device.sh'
+      - 'android/vendor/**'
 permissions:
   contents: read
 concurrency:
@@ -56,6 +60,28 @@ jobs:
           hash=$(sha256sum "$apk")
           echo "::notice::ARM64 v90 candidate SHA-256 ${hash%% *} ($(stat -c %s "$apk") bytes)"
           cp "$apk" "$RUNNER_TEMP/BlackBox-Stream-v90-Helper-Preview-ARM64.apk"
+      - name: Assemble the x86_64 counterpart and fixture instrumentation
+        working-directory: android
+        run: >-
+          gradle :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console=plain
+          -PbbxMusicHelper=true -PbbxHelperPreview=true -PbbxHelperAbi=x86_64
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Exercise the bundled helper, queue and offline playback (fixtures, not provider access)
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
+          script: |
+            adb shell wm size 720x1560
+            adb shell wm density 320
+            BBX_TEST_PACKAGE=com.blackboxstream.mobile.helper BBX_VERIFY_HELPER_FIXTURE=1 bash android/tests/run_device.sh
       - name: Retain the side-by-side candidate (not a release)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

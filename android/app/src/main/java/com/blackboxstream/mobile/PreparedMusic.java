@@ -122,13 +122,11 @@ final class PreparedMusic implements AutoCloseable {
                 && !selected.equals(running) && readyFile(selected) == null)) active.cancel();
         requested = selected;
         desired.clear(); desired.addAll(next);
-        if (!dispatching && !desired.isEmpty()) {
-            dispatching = true;
-            worker.execute(this::drain);
-        }
+        dispatch();
     }
 
     synchronized JSONObject state() throws JSONException {
+        dispatch(); // Resume still-relevant queued work when the connection becomes eligible.
         JSONObject rows = new JSONObject();
         boolean on = enabled();
         if (runtime != null) for (Track track : tracks.values()) {
@@ -164,6 +162,13 @@ final class PreparedMusic implements AutoCloseable {
             return id;
         }
         return null;
+    }
+
+    private void dispatch() {
+        if (!dispatching && nextJob() != null) {
+            dispatching = true;
+            worker.execute(this::drain);
+        }
     }
 
     private void drain() {
