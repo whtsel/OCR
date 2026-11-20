@@ -1,6 +1,7 @@
 package com.blackboxstream.mobile;
 
 import android.content.Context;
+import android.os.SystemClock;
 import android.util.AtomicFile;
 import com.yausername.ffmpeg.FFmpeg;
 import com.yausername.youtubedl_android.YoutubeDL;
@@ -18,7 +19,6 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONException;
 
@@ -80,11 +80,13 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
 
     @Override public PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control) throws Exception {
         if (control.cancelled) return null;
-        // Retain p11's audio extraction, preferring AAC to skip a re-encode when available.
-        // No video format fallback or retries after a refused connection.
-        ArrayList<String> options = new ArrayList<>(Arrays.asList("--no-playlist", "--no-progress", "--socket-timeout", "9",
+        // Match the phone-tested whole-file path, preferring AAC to avoid re-encoding where possible.
+        // An ordinary slow connection gets time to respond; provider refusals are not retried.
+        ArrayList<String> options = new ArrayList<>(Arrays.asList("--no-playlist", "--socket-timeout", "20",
                 "--retries", "0", "--extractor-retries", "0", "--fragment-retries", "0", "--abort-on-unavailable-fragments",
-                "--no-simulate", "--print", "before_dl:BBX_AUDIO_SELECTED", "--print", "post_process:BBX_AUDIO_DOWNLOADED",
+                "--no-simulate", "--quiet", "--progress", "--newline", "--progress-delta", "1",
+                "--progress-template", "download:BBX_MEDIA:%(progress.status)s",
+                "--print", "before_dl:BBX_DOWNLOAD_START %(ext)s",
                 "--max-filesize", "24M", "-f", "bestaudio[ext=m4a]/bestaudio",
                 "-x", "--audio-format", "m4a", "--audio-quality", "0", "-o", new File(scratch, "audio.%(ext)s").getAbsolutePath()));
         File audio = new File(scratch, "audio.m4a");
@@ -147,11 +149,11 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
     }
 
     private String execute(PreparedMusic.Control control, File scratch, boolean discover, String... args) throws Exception {
-        final long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(PreparedMusic.PREPARE_TIMEOUT_SECONDS);
+        MusicPreparationBudget budget = new MusicPreparationBudget(SystemClock.elapsedRealtime());
         try { start(); }
         catch (Exception | LinkageError failed) { throw new IOException("The bundled music helper could not start on this device."); }
         if (control.cancelled) return "";
-        if (System.nanoTime() >= until) throw new IOException("The helper took too long to start.");
+        if (budget.timeout(SystemClock.elapsedRealtime()) != null) throw new IOException("The helper took too long to start.");
         File python = new File(root, "packages/python/usr"), ffmpeg = new File(root, "packages/ffmpeg/usr");
         ArrayList<String> command = new ArrayList<>();
         command.add(new File(nativeDir, "libpython.so").getAbsolutePath());
@@ -171,6 +173,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         env.put("HOME", scratch.getAbsolutePath());
         env.put("PYTHONDONTWRITEBYTECODE", "1");
         env.put("PYTHONUTF8", "1");
+        env.put("PYTHONUNBUFFERED", "1");
         env.put("TMPDIR", scratch.getAbsolutePath());
         env.put("PATH", "/system/bin:" + nativeDir.getAbsolutePath());
         control.stage(discover ? "helper ready, search" : "helper ready, resolve");
@@ -181,8 +184,12 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         Thread reader = new Thread(() -> {
             try (BufferedReader lines = new BufferedReader(new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8))) {
                 for (String line; (line = lines.readLine()) != null;) {
-                    if ("BBX_AUDIO_SELECTED".equals(line)) control.stage("resolved, transfer audio");
-                    else if ("BBX_AUDIO_DOWNLOADED".equals(line)) control.stage("downloaded, finalize audio");
+                    MusicPreparationBudget.Phase phase = budget.marker(line, SystemClock.elapsedRealtime());
+                    if (phase == MusicPreparationBudget.Phase.TRANSFER) control.stage("resolved, transfer audio");
+                    else if (phase == MusicPreparationBudget.Phase.FINALIZE) control.stage("downloaded, finalize audio");
+                    else if ("BBX_CATALOGUE_QUERY".equals(line)) control.stage("search catalogue");
+                    else if ("BBX_CATALOGUE_ALTERNATE".equals(line)) control.stage("search alternate wording");
+                    else if ("BBX_CATALOGUE_VERIFY".equals(line)) control.stage("verify source metadata");
                     // Capture bounded output for diagnostics; never impose a line reading limit on the child.
                     int keep = Math.min(line.length(), 65536 - captured.length());
                     if (keep > 0) captured.append(line, 0, keep).append('\n');
@@ -196,10 +203,17 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                 try { child.exitValue(); break; }
                 catch (IllegalThreadStateException stillRunning) { Thread.sleep(200); }
                 if (control.cancelled) return "";
-                if (System.nanoTime() >= until) throw new IOException("The recording took too long to prepare.");
+                long bytes = 0;
                 File[] files = scratch.listFiles();
-                if (files != null) for (File f : files) if (f.length() > PreparedMusic.MAX_AUDIO)
-                    throw new IOException("This recording is above the preparation size limit.");
+                if (files != null) for (File f : files) if (f.isFile() && f.getName().startsWith("audio.")) {
+                    long length = f.length();
+                    if (length > PreparedMusic.MAX_AUDIO) throw new IOException("This recording is above the preparation size limit.");
+                    bytes += length;
+                }
+                long now = SystemClock.elapsedRealtime();
+                budget.sawBytes(bytes, now);
+                String timeout = budget.timeout(now);
+                if (timeout != null) throw new IOException(timeout);
             }
             reader.join(2000);
             if (control.cancelled) return "";
@@ -214,11 +228,11 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
 
     private static IOException providerFailure(String output) {
         String message = output.toLowerCase(Locale.ROOT);
-        if (message.contains("http error 429") || message.contains("bbx_provider_limited")) return new PreparedMusic.ProviderRateLimited();
+        if (message.contains("http error 429") || message.contains("too many requests") || message.contains("bbx_provider_limited")) return new PreparedMusic.ProviderRateLimited();
         String reason;
-        if (message.contains("sign in") || message.contains("not a bot")) reason = "The provider requires sign-in. No account session was used.";
-        else if (message.contains("http error 403") || message.contains("unavailable")) reason = "The provider did not allow this recording.";
-        else if (message.contains("bbx_no_exact_recording")) reason = "No exact full recording could be verified.";
+        if (message.contains("bbx_no_exact_recording")) reason = "No exact full recording could be verified. Nothing else was played.";
+        else if (message.contains("sign in") || message.contains("not a bot")) reason = "The provider requires sign-in. No account session was used.";
+        else if (message.contains("http error 403") || message.contains("video unavailable")) reason = "The provider did not allow this recording.";
         else if (message.contains("timed out") || message.contains("resolve") || message.contains("no address")) reason = "Could not complete the connection to the provider.";
         else reason = "The helper could not prepare this exact recording.";
         return new IOException(reason);

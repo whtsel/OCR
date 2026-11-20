@@ -22,8 +22,8 @@ android {
         versionName '1.4.4-transport'
         testInstrumentationRunner 'com.blackboxstream.mobile.BlackBoxSmoke'
         if (musicHelper) {
-            versionCode 10
-            versionName(preview ? '1.4.5-music' : '1.4.5')
+            versionCode 11
+            versionName(preview ? '1.4.6-music' : '1.4.6')
             if (!(helperAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException('Unsupported helper ABI: ' + helperAbi)
             ndk { abiFilters += [helperAbi] }
         }

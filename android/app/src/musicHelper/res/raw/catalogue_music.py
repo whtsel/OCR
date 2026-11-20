@@ -111,7 +111,7 @@ def provider_refused(problem):
     return any(reason in text for reason in ('http error 429', 'http error 403', 'too many requests', 'not a bot', 'sign in'))
 
 
-def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembered=''):
+def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembered='', stage=lambda _: None):
     checked = set()
     rejected = None
     inspected = False
@@ -119,6 +119,7 @@ def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembere
     def verify(video):
         nonlocal rejected, inspected
         checked.add(video)
+        stage('BBX_CATALOGUE_VERIFY')
         try:
             info = engine.extract_info(f'https://www.youtube.com/watch?v={video}', download=False, process=False)
         except lookup_error as problem:
@@ -139,6 +140,7 @@ def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembere
     # Search only after a tap/preparation request. Reserve a candidate check for the
     # edition-aware alternate wording; both searches share the same overall deadline.
     for index, query in enumerate((f'{artist} {title}', f'{title} {artist} {album} official audio')):
+        stage('BBX_CATALOGUE_ALTERNATE' if index else 'BBX_CATALOGUE_QUERY')
         rows = engine.extract_info(f'ytsearch{SEARCH_COUNT}:{query}', download=False, process=False)
         limit = INSPECTIONS - len(checked) - (1 if index == 0 else 0)
         for video in candidates((rows or {}).get('entries'), title, artist, seconds, checked)[:limit]:
@@ -160,7 +162,7 @@ def main():
         with YoutubeDL(params) as engine:
             found = prepare(engine, title, artist, album, int(seconds),
                             lambda video: Path('source-id').write_text(video, encoding='ascii'),
-                            (DownloadError, ExtractorError), remembered)
+                            (DownloadError, ExtractorError), remembered, lambda marker: print(marker, flush=True))
     except (DownloadError, ExtractorError) as problem:
         # The Android adapter maps this output to small, sanitized failure reasons.
         print(str(problem), file=sys.stderr)

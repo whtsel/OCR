@@ -3,7 +3,10 @@
   'use strict';
   if (!window.bbxAndroidOpen) return;
   const engine = '/api/mobile/music-helper';
-  const selectionTimeout = 45_000;
+  const planTimeout = 15_000, localOpenTimeout = 12_000;
+  const mobileLookaheadKey = 'bbxAndroidMusicMobileLookahead';
+  let mobileLookahead = false, helperAvailable = false, mobileSetting;
+  try { mobileLookahead = localStorage.getItem(mobileLookaheadKey) === '1'; } catch { /* Keep opt-in off. */ }
   const byId = id => document.getElementById(id);
   const keyPattern = /^[a-f0-9]{64}$/;
   const audioUrl = key => `/prepared-audio/${key}.m4a`;
@@ -157,6 +160,8 @@
     const result = await response.json();
     if (id > lastSnapshot && result.sequence >= sequence) {
       lastSnapshot = id;
+      helperAvailable = result.available === true;
+      if (mobileSetting) mobileSetting.hidden = !helperAvailable;
       cached = new Set(Object.keys(result.tracks || {}).filter(key => result.tracks[key].state === 'ready'));
       refreshSaved();
     }
@@ -241,8 +246,8 @@
     }
   };
 
-  function plan(selected, upcoming = [], retry = false, signal) {
-    return read('/plan', {sequence:++sequence, selected, upcoming, retry}, signal);
+  function plan(selected, upcoming = [], retry = false, signal, playing = false) {
+    return read('/plan', {sequence:++sequence, selected, upcoming, retry, playing, mobileLookahead}, signal);
   }
   function stillSelected(live) {
     if (session !== live) return false;
@@ -257,10 +262,10 @@
   function planQueue(live, retry = false) {
     // Use exactly these slots. An unresolved or duplicate slot cannot pull in a later song.
     const upcoming = musicQueue.list.slice(musicQueue.idx + 1, musicQueue.idx + 3).map(recording);
-    const windowKey = JSON.stringify(upcoming);
+    const windowKey = JSON.stringify([live.started, mobileLookahead, upcoming]);
     if (!retry && live.windowKey === windowKey) return;
     live.windowKey = windowKey;
-    return plan(live.track, upcoming, retry, live.controller.signal);
+    return plan(live.track, upcoming, retry, live.controller.signal, live.started);
   }
   preloadNextTwo = () => { if (session?.track && stillSelected(session)) planQueue(session)?.catch(() => {}); };
 
@@ -290,10 +295,22 @@
   const persist = persistMusicPlaybackSession;
   persistMusicPlaybackSession = () => { if (session?.started && stillSelected(session)) persist(); };
 
+  function deadline(live, ms, message) {
+    clearTimeout(live.deadline);
+    live.deadline = setTimeout(() => fail(live, message), ms);
+  }
+
   async function play(live) {
     try {
       if (!live.track) { fail(live, 'This catalogue entry does not identify a full recording.'); return; }
-      let snapshot = await planQueue(live, true), key;
+      // An automatic handoff may continue a running next job, but never repeats a known provider failure.
+      let snapshot = await planQueue(live, live.intent !== 'auto-ended'), key;
+      if (!stillSelected(live)) return;
+      const budget = snapshot.selectionWaitMs;
+      if (Number.isFinite(budget) && budget >= planTimeout && budget <= 300_000) {
+        deadline(live, Math.max(1, budget - (performance.now() - live.tapped)),
+          'The full recording was not prepared in time. Tap Play to retry.');
+      }
       while (stillSelected(live)) {
         key = snapshot.selected;
         const row = snapshot.tracks?.[key];
@@ -306,6 +323,7 @@
         snapshot = await read(`/await?key=${key}`, undefined, live.controller.signal);
       }
       if (!stillSelected(live)) return;
+      deadline(live, localOpenTimeout, 'The saved audio could not start. Tap Play to retry.');
       const response = await fetch(audioUrl(key), {cache:'no-store', signal:live.controller.signal});
       if (!response.ok || !response.headers.get('Content-Type')?.startsWith('audio/mp4')) throw new Error('Missing cached audio');
       const blob = await response.blob();
@@ -318,6 +336,7 @@
       if (!stillSelected(live)) return;
       live.started = true;
       musicAutoAdvanceBlocked = false;
+      preloadNextTwo(); // Only after the current track actually starts, on its existing queue plan.
       byId('bgTitle').textContent = title(live.item);
       byId('bgArtist').textContent = artist(live.item);
       const art = byId('bgArt'), picture = live.item.artwork || live.item.thumbnail;
@@ -372,9 +391,9 @@
     if (session) release(session, false);
     const track = recording(item);
     const live = session = {...player, item, track, recordingKey:track ? recordingKey(track) : '',
-      fromQueue, intent:options.intent, started:false, controller:new AbortController()};
+      fromQueue, intent:options.intent, started:false, tapped:performance.now(), controller:new AbortController()};
     live.feedbackId = attachSpinner(fromQueue ? document.querySelector('#bgQueueList .playing') : control);
-    live.deadline = setTimeout(() => fail(live, 'Audio took too long to start. Tap Play to retry.'), selectionTimeout);
+    deadline(live, planTimeout, 'The Music helper did not respond. Tap Play to retry.');
     live.playing = play(live);
     return live.playing;
   };
@@ -412,6 +431,22 @@
     byId('bgSeek').setAttribute('aria-label', 'Track position');
     byId('bgClose').addEventListener('click', () => { if (session) stop(session); });
     const note = document.querySelector('.bg-queue-note-v49');
-    if (note) note.textContent = 'Play or remove a track without changing the order of the others.';
+    if (note) {
+      note.textContent = 'The next two queued tracks can prepare on Wi-Fi after playback starts.';
+      mobileSetting = document.createElement('label');
+      mobileSetting.className = 'bbx-mobile-lookahead';
+      mobileSetting.hidden = !helperAvailable;
+      const toggle = document.createElement('input');
+      toggle.type = 'checkbox';
+      toggle.checked = mobileLookahead;
+      toggle.id = 'bbxMusicMobileLookahead';
+      toggle.addEventListener('change', () => {
+        mobileLookahead = toggle.checked;
+        try { localStorage.setItem(mobileLookaheadKey, mobileLookahead ? '1' : '0'); } catch { /* Session only. */ }
+        preloadNextTwo();
+      });
+      mobileSetting.append(toggle, document.createTextNode('Prepare one next song on mobile data (up to 6 minutes)'));
+      note.after(mobileSetting);
+    }
   }, {once:true});
 })();

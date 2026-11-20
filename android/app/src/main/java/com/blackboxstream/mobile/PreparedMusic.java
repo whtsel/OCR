@@ -29,7 +29,9 @@ import org.json.JSONObject;
 final class PreparedMusic implements AutoCloseable {
     static final String VERSION = "2026.10.26";
     static final long MAX_AUDIO = 24L * 1024 * 1024;
-    static final int PREPARE_TIMEOUT_SECONDS = 40;
+    // Absolute UI guard, with room for the native stage budgets and queue promotion.
+    static final long SELECTION_WAIT_MS = 270_000;
+    static final int MOBILE_LOOKAHEAD_SECONDS = 360;
     private static final long PROVIDER_COOLDOWN_MS = 60_000;
     private static final long WAIT_SLICE_MS = 4_000;
     private static final String RATE_LIMITED = "The audio provider is rate-limiting requests. Try again shortly.";
@@ -88,7 +90,8 @@ final class PreparedMusic implements AutoCloseable {
     static final class ProviderRateLimited extends IOException {
         ProviderRateLimited() { super(RATE_LIMITED); }
     }
-    interface Network { boolean allowed(boolean background); }
+    enum Link { OFFLINE, RESTRICTED, METERED, UNMETERED }
+    interface Network { Link current(); }
 
     static final class Control {
         volatile boolean cancelled;
@@ -113,10 +116,10 @@ final class PreparedMusic implements AutoCloseable {
     private final Set<String> albumCompleted = new HashSet<>();
     private final Map<String, String> failures = new LinkedHashMap<>();
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private boolean dispatching, closed, loaded, warming;
+    private boolean dispatching, closed, loaded, warming, started, mobileLookahead;
     private long retryProviderAt;
     private int epoch;
-    private String requested = "", running;
+    private String requested = "", firstUpcoming = "", running;
     private Control active;
 
     static PreparedMusic builtIn(Context app) {
@@ -126,13 +129,18 @@ final class PreparedMusic implements AutoCloseable {
             runtime = (Runtime) type.getDeclaredConstructor(Context.class).newInstance(app);
         } catch (ReflectiveOperationException | LinkageError absent) { /* The dependency-free baseline build. */ }
         ConnectivityManager manager = (ConnectivityManager) app.getSystemService(Context.CONNECTIVITY_SERVICE);
-        Network network = background -> manager != null && manager.getActiveNetwork() != null
-                && (!background || !manager.isActiveNetworkMetered());
+        Network network = () -> {
+            if (manager == null || manager.getActiveNetwork() == null) return Link.OFFLINE;
+            if (!manager.isActiveNetworkMetered()) return Link.UNMETERED;
+            return manager.getRestrictBackgroundStatus() == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED
+                    ? Link.METERED : Link.RESTRICTED;
+        };
         PreparedMusic engine = new PreparedMusic(cacheDirectory(app), runtime, network);
         if (runtime != null && manager != null) {
             ConnectivityManager.NetworkCallback callback = new ConnectivityManager.NetworkCallback() {
                 @Override public void onCapabilitiesChanged(android.net.Network net, NetworkCapabilities caps) { engine.networkChanged(); }
                 @Override public void onLost(android.net.Network net) { engine.networkChanged(); }
+                @Override public void onBlockedStatusChanged(android.net.Network net, boolean blocked) { engine.networkChanged(); }
             };
             manager.registerDefaultNetworkCallback(callback);
             engine.unregisterNetwork = () -> manager.unregisterNetworkCallback(callback);
@@ -170,7 +178,8 @@ final class PreparedMusic implements AutoCloseable {
 
     synchronized void networkChanged() {
         if (!available()) return;
-        if (active != null && !requested.equals(running) && !network.allowed(true)) active.cancel();
+        if (active != null && !requested.equals(running)) reconsiderActive();
+        notifyAll();
         dispatch();
     }
 
@@ -187,17 +196,19 @@ final class PreparedMusic implements AutoCloseable {
         notifyAll();
     }
 
-    synchronized JSONObject plan(int sequence, JSONObject selected, JSONArray upcoming, boolean retry) throws JSONException {
+    synchronized JSONObject plan(int sequence, JSONObject selected, JSONArray upcoming, boolean retry,
+                                 boolean playing, boolean allowMobile) throws JSONException {
         if (!available() || sequence <= epoch) return state();
         if (upcoming.length() > 2) throw new IllegalArgumentException("Only the next two queue entries may be prepared.");
         Map<String, Track> next = new LinkedHashMap<>();
-        String key = "";
+        String key = "", firstKey = "";
         if (selected != null) {
             Track first = new Track(selected);
             key = first.key;
             next.put(key, first);
             for (int i = 0; i < upcoming.length(); i++) if (!upcoming.isNull(i)) {
                 Track track = new Track(upcoming.getJSONObject(i));
+                if (i == 0 && !key.equals(track.key)) firstKey = track.key;
                 next.putIfAbsent(track.key, track);
             }
         }
@@ -206,13 +217,19 @@ final class PreparedMusic implements AutoCloseable {
         if (retry) failures.remove(key);
         failures.keySet().removeIf(id -> !next.containsKey(id) && !album.containsKey(id));
         requested = key;
+        firstUpcoming = firstKey;
+        started = playing && !key.isEmpty() && readyFile(key) != null;
+        mobileLookahead = allowMobile;
         desired.clear(); desired.putAll(next);
-        if (active != null && readyFile(running) == null) {
-            Track first = nextJob();
-            if (first == null || !first.key.equals(running)) active.cancel();
-        }
+        reconsiderActive();
         notifyAll();
         return state();
+    }
+
+    private void reconsiderActive() {
+        if (active == null || readyFile(running) != null) return;
+        Track first = nextJob();
+        if (first == null || !first.key.equals(running)) active.cancel();
     }
 
     /** Return as soon as this selected job publishes audio, fails or is replaced. */
@@ -263,7 +280,8 @@ final class PreparedMusic implements AutoCloseable {
                         .put("message", "failed".equals(state) ? failures.get(key) : ""));
             }
         }
-        return new JSONObject().put("available", on).put("selected", requested).put("sequence", epoch).put("tracks", rows);
+        return new JSONObject().put("available", on).put("selected", requested).put("sequence", epoch)
+                .put("selectionWaitMs", SELECTION_WAIT_MS).put("tracks", rows);
     }
 
     synchronized File read(String key) {
@@ -309,16 +327,20 @@ final class PreparedMusic implements AutoCloseable {
             for (String key : album.keySet()) if (readyFile(key) == null) failures.putIfAbsent(key, RATE_LIMITED);
             return null;
         }
-        if (!failures.containsKey(requested)) for (Track track : desired.values()) {
-            if (readyFile(track.key) != null || failures.containsKey(track.key)) continue;
-            boolean background = !track.key.equals(requested);
-            if (network.allowed(background)) return track;
-            if (!background) {
-                failures.put(track.key, "Not prepared yet. Connect to the internet to prepare this recording.");
-                break;
-            }
+        Link link = network.current();
+        Track selected = desired.get(requested);
+        if (selected != null && readyFile(requested) == null && !failures.containsKey(requested)) {
+            if (link != Link.OFFLINE) return selected;
+            failures.put(requested, "Not prepared yet. Connect to the internet to prepare this recording.");
         }
-        if (network.allowed(true)) for (Track track : album.values())
+        // A play tap alone does not start lookahead. The original player confirms that it started.
+        // On metered networks require opt-in, and never fill a missing/duplicate first slot with a later track.
+        if (started && selected != null && readyFile(requested) != null) for (Track track : desired.values()) {
+            if (readyFile(track.key) != null || failures.containsKey(track.key)) continue;
+            if (link == Link.UNMETERED || link == Link.METERED && mobileLookahead && track.key.equals(firstUpcoming)
+                    && track.seconds > 0 && track.seconds <= MOBILE_LOOKAHEAD_SECONDS) return track;
+        }
+        if (link == Link.UNMETERED && (selected == null || started || failures.containsKey(requested))) for (Track track : album.values())
             if (!albumCompleted.contains(track.key) && !failures.containsKey(track.key) && readyFile(track.key) == null) return track;
         return null;
     }
@@ -446,7 +468,9 @@ final class PreparedMusic implements AutoCloseable {
     }
 
     private void clearPlan() {
-        desired.clear(); album.clear(); albumCompleted.clear(); failures.clear(); requested = "";
+        desired.clear(); album.clear(); albumCompleted.clear(); failures.clear();
+        requested = firstUpcoming = "";
+        started = false;
         if (active != null) active.cancel();
     }
     @Override public synchronized void close() {

@@ -38,7 +38,7 @@ if [[ "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 ]]; then
     trace=$("$adb" logcat -d -v raw -s BlackBoxMusic:I BlackBoxSmoke:I | grep -e '^v90 provider ' -e ' +[0-9][0-9]*ms$' | tail -100 || true)
     printf '%s\n' "$trace"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
-        printf '%s\n' "$trace" | sed -n 's/^v90 provider /::notice::v90 provider /p'
+        printf '%s\n' "$trace" | sed -n -e 's/^v90 provider /::notice::v90 provider /p' -e '/^[a-zA-Z0-9 ,()]* +[0-9][0-9]*ms$/s/^/::notice::Music stage: /p'
         if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
             printf '### Cold v90 Music on Android\n\n```text\n%s\n```\n' "$trace" >> "$GITHUB_STEP_SUMMARY"
         fi

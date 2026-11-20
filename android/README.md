@@ -40,13 +40,20 @@ metadata if audio has to be fetched again. Card, queue and Downloads keys do not
 browser session, remote helper updates or alternate editions are used. Provider availability and exact metadata vary by track
 and network; not every catalogue entry can be verified. If the provider rate-limits this device,
 BlackBox pauses new requests to it for one minute. Offline copies still play in that time.
-Only fetch recordings you may download. The separately installed Helper Stream tester measures
-progressive startup; this v90 candidate keeps its existing complete-audio/offline path.
+Only fetch recordings you may download. Music v90 waits for a complete, verified file. It does not
+use the experimental fast-start tester. Finding a recording has up to 80 seconds; a matched source
+gets a separate download budget (up to 145 seconds, or 40 seconds without new bytes) and up to
+25 seconds to finish the file. Provider refusal and no-match errors still end the request without
+trying another recording. The existing Play ring clears with a stage-specific message on failure.
 
-The selected track takes priority. On unmetered connections, a single worker prepares the next
-**two actual queue slots** without moving them or substituting other songs. An empty, duplicate,
-or unresolved slot does not pull in a later item. Switching tracks cancels irrelevant work.
-The existing **Download album** action is separate and runs at lower priority when explicitly used.
+The selected track takes priority. Once it starts, a single worker prepares the next **two actual
+queue slots** on unmetered connections. In the player’s queue, **Prepare one next song on mobile data**
+is off by default. Turning it on allows just the immediate next track (up to six minutes) on a
+metered connection; Android Data Saver still takes precedence. An empty, long, or duplicate first
+slot does not pull a later song into that mobile slot. A complete queued file plays locally, and
+an in-flight file is promoted without restarting when it becomes current. If the next track isn't
+ready, the app waits for that same track, not a replacement. Closing or changing the queue cancels
+irrelevant work. **Download album** remains a separate, lower-priority action on unmetered connections.
 
 Completed files are reused when you play the same recording again, including in airplane mode.
 Previously played songs appear in the existing Music downloads, not in a new preparation shelf.
@@ -175,6 +182,7 @@ imports and compares the offline copies with independently collected hashes. It 
 films back in Streaming. A live Music pass requires five cold plays from original album and shelf
 controls (three unpinned), full duration, audio progression, seeking past the preview window, and
 Downloads replay after reopening with all networking off. The GitHub Actions `verify_live_music`
-input runs this independent gate. Provider refusals fail the gate, even if the separate fixture
+input runs this independent gate; `verify_live_unpinned=true` tests one cold, unpinned card.
+Provider refusals fail the gate, even if the separate fixture
 job and APK verification pass. The run summary records sanitized preparation stages and timings;
 no audio, account data, or provider links are saved as test results.

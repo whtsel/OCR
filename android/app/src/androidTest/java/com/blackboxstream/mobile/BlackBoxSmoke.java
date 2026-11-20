@@ -216,8 +216,14 @@ public final class BlackBoxSmoke extends Instrumentation {
             assertPass("Pinned Android Python runtime executes yt-dlp 2026.10.26", PreparedMusic.VERSION.equals(installed.trim()));
             File video = new File(scratch, "fixture.mp4");
             copyFixture("dawn.mp4", video);
-            run.invoke(instance, new PreparedMusic.Control(), scratch, new String[] {"--enable-file-urls", "-x", "--audio-format", "m4a",
-                    "-o", new File(scratch, "audio.%(ext)s").getPath(), video.toURI().toString()});
+            String phases = (String) run.invoke(instance, new PreparedMusic.Control(), scratch,
+                    new String[] {"--enable-file-urls", "--no-simulate", "--quiet", "--progress", "--newline",
+                            "--progress-template", "download:BBX_MEDIA:%(progress.status)s",
+                            "--print", "before_dl:BBX_DOWNLOAD_START %(ext)s", "-x", "--audio-format", "m4a",
+                            "-o", new File(scratch, "audio.%(ext)s").getPath(), video.toURI().toString()});
+            assertPass("The real extractor marks format selection and transfer end before conversion",
+                    phases.indexOf("BBX_DOWNLOAD_START ") >= 0 && phases.indexOf("BBX_MEDIA:finished") > phases.indexOf("BBX_DOWNLOAD_START "));
+            verifyMusicBudget();
             File audio = new File(scratch, "audio.m4a");
             PreparedMusic.verifyAudio(audio, 14);
             assertPass("Bundled FFmpeg extracts complete audio on Android", audio.isFile());
@@ -226,6 +232,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 throw new AssertionError("Short fixture accepted as a 175-second recording");
             } catch (java.io.IOException expected) { checks++; }
             verifyPreparationQueue(scratch, audio);
+            verifyMobileLookahead(scratch, audio);
             verifyProviderCooldown(scratch);
             verifySourceHints(app, instance, runtime);
 
@@ -247,11 +254,16 @@ public final class BlackBoxSmoke extends Instrumentation {
                             + " && !document.querySelector('#androidMusicHelper,#androidAudioLibrary,#androidPreparedMusic')"));
             // Hold the actual bridge reply long past a transient user gesture, while keeping the
             // production transport, spinner and audio decoder. No second tap is permitted.
-            js(web, "window.planLog=[];window.holdNextPlan=true;window.releasePlan=null;"
+            js(web, "window.planLog=[];window.holdNextPlan=true;window.releasePlan=null;window.delayFixtureWait=false;window.releaseFile=null;"
                     + "(()=>{const fetchLive=window.fetch;window.fetch=(url,options)=>{const result=fetchLive(url,options);"
+                    + "if (typeof url==='string' && url.startsWith('/api/mobile/music-helper/await?') && window.delayFixtureWait) {"
+                    + "return result.then(reply=>new Promise(resolve=>{window.releaseFile=()=>resolve(reply)}));}"
                     + "if (url!=='/api/mobile/music-helper/plan') return result;"
                     + "const plan=JSON.parse(options.body);planLog.push(plan);"
-                    + "if (plan.selected && window.holdNextPlan) {window.holdNextPlan=false;return result.then(reply=>new Promise(resolve=>{window.releasePlan=()=>resolve(reply)}))}return result}})()");
+                    + "if (plan.selected && window.holdNextPlan) {window.holdNextPlan=false;return result.then(reply=>new Promise(resolve=>{"
+                    + "window.releasePlan=async()=>{if(!window.delayFixtureWait){resolve(reply);return}"
+                    + "const data=await reply.json();data.tracks[data.selected].state='working';"
+                    + "resolve(new Response(JSON.stringify(data),{status:reply.status}));};}));}return result}})()");
             shell("cmd connectivity airplane-mode enable");
             shell("svc wifi disable"); shell("svc data disable");
             try {
@@ -267,16 +279,29 @@ public final class BlackBoxSmoke extends Instrumentation {
                 assertPass("The wait does not open a video, panel, or progress message", jsTrue(web, spinnerOnly(ophelia)
                         + " && document.querySelector('#bgAudioBar').hidden && document.querySelector('#bgAudio').paused"));
                 assertPass("One plan preserves the next two queue slots and does not contact a later entry", jsTrue(web,
-                        "planLog.length===1 && planLog[0].selected.title==='The Fate of Ophelia' && planLog[0].upcoming.map(x=>x?.title).join('|')==='Locked out of Heaven|NUEVAYoL'"));
+                        "planLog.length===1 && !planLog[0].playing && !planLog[0].mobileLookahead && planLog[0].selected.title==='The Fate of Ophelia' && planLog[0].upcoming.map(x=>x?.title).join('|')==='Locked out of Heaven|NUEVAYoL'"));
                 js(web, "musicQueue.list[musicQueue.idx]={...musicQueue.list[musicQueue.idx]};renderMusicQueue();"
-                        + "window.releasePlan();window.releasePlan=null");
+                        + "window.delayFixtureWait=true;window.releasePlan();window.releasePlan=null");
+                await("The original Play is waiting for the selected full file", 7000, () -> jsTrue(web, "!!window.releaseFile"));
+                SystemClock.sleep(46000); // Exceed the old 45 s total guard; no live provider call.
+                assertPass("A slow first recording can still finish without a retry after the former cutoff",
+                        jsTrue(web, spinnerOnly(ophelia) + " && document.querySelector('#bgAudioBar').hidden && planLog.length===1"));
+                js(web, "window.delayFixtureWait=false;window.releaseFile();window.releaseFile=null");
                 awaitPreparedFixture(web, "The Fate of Ophelia", 1); // Same exact row, new JS object.
-                assertPass("Rebuilding a pending queue row does not abandon its one-tap play", jsTrue(web, "planLog.length===1"));
+                assertPass("One tap survives a queue rebuild and starts lookahead only after playing", jsTrue(web,
+                        "planLog.length===2 && planLog[1].playing && !planLog[1].retry && planLog[1].selected.title===planLog[0].selected.title"
+                                + " && JSON.stringify(planLog[1].upcoming)===JSON.stringify(planLog[0].upcoming)"));
                 assertPass("The spinner clears and original artwork, player and queue controls remain visible", jsTrue(web,
                         "!document.querySelector('.music-ui-loading-v52') && document.querySelector('#bgArt').getAttribute('src')?.startsWith('/api/cover?')"
                                 + " && document.querySelector('#bgQueueToggle').offsetWidth>0 && document.querySelector('#bgSeek').offsetWidth>0"));
                 assertPass("The original queue is still in order and includes previously unlisted v90 tracks", jsTrue(web,
                         "musicQueue.list[musicQueue.idx+1].track==='Locked out of Heaven' && musicQueue.list[musicQueue.idx+2].track==='NUEVAYoL'"));
+                js(web, "document.querySelector('#bbxMusicMobileLookahead').click()");
+                assertPass("The queue's mobile opt-in updates the same active plan, not the track order", jsTrue(web,
+                        "planLog.at(-1)?.playing && planLog.at(-1)?.mobileLookahead"
+                                + " && localStorage.getItem('bbxAndroidMusicMobileLookahead')==='1'"
+                                + " && planLog.at(-1).upcoming[0].title==='Locked out of Heaven'"));
+                js(web, "document.querySelector('#bbxMusicMobileLookahead').click()");
                 js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
                 awaitPreparedFixture(web, "The Fate of Ophelia", 16.3);
                 tapWeb(web, "#bgPlayBtn");
@@ -285,6 +310,8 @@ public final class BlackBoxSmoke extends Instrumentation {
                 awaitPreparedFixture(web, "The Fate of Ophelia", 17);
                 js(web, "document.querySelector('#bgAudio').currentTime = document.querySelector('#bgAudio').duration - 0.25");
                 awaitPreparedFixture(web, "Locked out of Heaven", 1);
+                assertPass("The automatic handoff uses the saved next recording without retrying the provider", jsTrue(web,
+                        "planLog.some(p=>p.selected?.title==='Locked out of Heaven' && !p.playing && !p.retry)"));
 
                 js(web, "window.holdNextPlan=true");
                 tapWeb(web, ophelia);
@@ -365,7 +392,8 @@ public final class BlackBoxSmoke extends Instrumentation {
         PreparedMusic.Track d = new PreparedMusic.Track(spec("test:D", "D", "Fixture", "Album", 14, "ddddddddddd"));
         PreparedMusic.Track e = new PreparedMusic.Track(spec("test:E", "E", "Fixture", "Album", 14, ""));
         java.util.List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
-        java.util.concurrent.atomic.AtomicBoolean unmetered = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicReference<PreparedMusic.Link> link =
+                new java.util.concurrent.atomic.AtomicReference<>(PreparedMusic.Link.METERED);
         PreparedMusic.Runtime fixture = (track, work, control) -> {
             calls.add(track.title);
             if (track.key.equals(b.key)) while (!control.cancelled) Thread.sleep(10);
@@ -377,37 +405,115 @@ public final class BlackBoxSmoke extends Instrumentation {
             return new PreparedMusic.Result(local, track.key.equals(d.key) ? "ddddddddddd" : "aaaaaaaaaaa");
         };
         File dir = new File(scratch, "queue");
-        try (PreparedMusic queue = new PreparedMusic(dir, fixture, background -> !background || unmetered.get())) {
+        try (PreparedMusic queue = new PreparedMusic(dir, fixture, link::get)) {
             assertPass("Bundled engine is ready without opt-in and browsing alone does no work", queue.state().getBoolean("available") && calls.isEmpty());
-            queue.plan(1, a.json(), new JSONArray().put(b.json()).put(c.json()), true);
+            JSONArray next = new JSONArray().put(b.json()).put(c.json());
+            queue.plan(1, a.json(), next, true, false, false);
             await("Any catalogue row can prepare, without a fixed ID table", 7000, () -> queue.read(a.key) != null);
             assertPass("Metered prefetch waits for an unmetered connection", calls.equals(Arrays.asList("A"))
                     && "queued".equals(queue.state().getJSONObject("tracks").getJSONObject(b.key).getString("state")));
-            unmetered.set(true);
+            link.set(PreparedMusic.Link.UNMETERED);
             queue.networkChanged();
+            assertPass("Even on Wi-Fi, nothing is prepared ahead until the current player starts", calls.equals(Arrays.asList("A"))
+                    && "queued".equals(queue.state().getJSONObject("tracks").getJSONObject(b.key).getString("state")));
+            queue.plan(2, a.json(), next, false, true, false);
             await("First actual upcoming entry starts", 7000, () -> calls.contains("B"));
             queue.downloadAlbum(new JSONArray().put(e.json()).put(c.json()));
             assertPass("An explicit album request does not displace the current two-slot plan", calls.equals(Arrays.asList("A", "B")));
-            queue.plan(2, b.json(), new JSONArray().put(c.json()), true); // Promote rather than restart B.
-            queue.plan(4, d.json(), new JSONArray().put(c.json()).put(a.json()), true); // Cancel B when no longer wanted.
-            queue.plan(3, a.json(), new JSONArray().put(b.json()), true); // Delayed stale bridge message.
-            await("Foreground jumps ahead, then actual upcoming, then explicit album", 9000,
-                    () -> queue.read(d.key) != null && queue.read(c.key) != null && queue.read(e.key) != null);
+            queue.plan(3, b.json(), new JSONArray().put(c.json()), true, false, false); // Promote rather than restart B.
+            queue.plan(5, d.json(), new JSONArray().put(c.json()).put(a.json()), true, false, false); // Cancel B when no longer wanted.
+            queue.plan(4, a.json(), new JSONArray().put(b.json()), true, true, false); // Delayed stale bridge message.
+            await("Foreground jumps ahead of lookahead and album work", 9000, () -> queue.read(d.key) != null);
+            assertPass("Album work does not fill the gap before the new track starts", calls.equals(Arrays.asList("A", "B", "D")));
+            queue.plan(6, d.json(), new JSONArray().put(c.json()).put(a.json()), false, true, false);
+            await("The actual next slots run before the explicit album", 9000, () -> queue.read(c.key) != null && queue.read(e.key) != null);
             assertPass("Cancelled output never commits; kept files deduplicate across plans and album",
                     queue.read(b.key) == null && calls.equals(Arrays.asList("A", "B", "D", "C", "E")));
             try {
-                queue.plan(5, a.json(), new JSONArray().put(b.json()).put(c.json()).put(d.json()), true);
+                queue.plan(7, a.json(), new JSONArray().put(b.json()).put(c.json()).put(d.json()), true, false, false);
                 throw new AssertionError("Three upcoming items accepted");
             } catch (IllegalArgumentException expected) { checks++; }
         }
-        try (PreparedMusic reopened = new PreparedMusic(dir, fixture, background -> false)) {
-            reopened.plan(1, a.json(), new JSONArray(), true);
+        try (PreparedMusic reopened = new PreparedMusic(dir, fixture, () -> PreparedMusic.Link.OFFLINE)) {
+            reopened.plan(1, a.json(), new JSONArray(), true, false, false);
             assertPass("Completed catalogue recording is reused across instances when offline", reopened.read(a.key) != null && calls.size() == 5);
             PreparedMusic.Track otherRelease = new PreparedMusic.Track(spec("test:A", "A", "Fixture", "Another album", 14, ""));
             assertPass("Another release of the same title cannot read the cached recording", reopened.read(otherRelease.key) == null);
             reopened.forget(a.key);
             assertPass("Clearing the cache leaves no ready file", reopened.read(a.key) == null && !new File(dir, a.key).exists());
         }
+    }
+
+    private void verifyMusicBudget() throws Exception {
+        MusicPreparationBudget tracker = new MusicPreparationBudget(1000);
+        assertPass("Lookup can run past the progressive tester cutoff, but cannot run forever",
+                tracker.timeout(24_000) == null && tracker.timeout(81_000).startsWith("Finding the exact recording"));
+        assertPass("A resolved format gets its own transfer budget, separate from lookup",
+                tracker.marker("BBX_DOWNLOAD_START m4a", 79_000) == MusicPreparationBudget.Phase.TRANSFER
+                        && tracker.timeout(100_000) == null);
+        tracker.sawBytes(2048, 110_000);
+        tracker.sawBytes(2048, 149_000);
+        tracker.marker("BBX_MEDIA:downloading", 149_000);
+        assertPass("Only new file bytes extend the idle guard, not duplicate progress text",
+                tracker.timeout(149_999) == null && tracker.timeout(150_000).contains("stopped receiving data"));
+        tracker.sawBytes(4096, 223_000);
+        assertPass("Even a growing transfer has a hard end", tracker.timeout(224_000).startsWith("Downloading the full audio"));
+        assertPass("Conversion has a separate hard end and the UI is not the first deadline",
+                tracker.marker("BBX_MEDIA:finished", 223_000) == MusicPreparationBudget.Phase.FINALIZE
+                        && tracker.timeout(247_999) == null && tracker.timeout(248_000).startsWith("Finishing")
+                        && PreparedMusic.SELECTION_WAIT_MS > MusicPreparationBudget.LOOKUP_MS
+                                + MusicPreparationBudget.TRANSFER_MS + MusicPreparationBudget.FINALIZE_MS);
+    }
+
+    private void verifyMobileLookahead(File scratch, File fixture) throws Exception {
+        PreparedMusic.Track a = new PreparedMusic.Track(spec("mobile:A", "A", "Fixture", "Album", 14, ""));
+        PreparedMusic.Track b = new PreparedMusic.Track(spec("mobile:B", "B", "Fixture", "Album", 14, ""));
+        PreparedMusic.Track c = new PreparedMusic.Track(spec("mobile:C", "C", "Fixture", "Album", 14, ""));
+        PreparedMusic.Track longTrack = new PreparedMusic.Track(spec("mobile:long", "Long mix", "Fixture", "Album", 420, ""));
+        java.util.List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.concurrent.atomic.AtomicReference<PreparedMusic.Link> link =
+                new java.util.concurrent.atomic.AtomicReference<>(PreparedMusic.Link.METERED);
+        java.util.concurrent.atomic.AtomicReference<PreparedMusic.Control> underway = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.CountDownLatch completeNext = new java.util.concurrent.CountDownLatch(1);
+        try (PreparedMusic queue = new PreparedMusic(new File(scratch, "mobile"), (track, work, control) -> {
+            calls.add(track.title);
+            if (track.key.equals(b.key)) {
+                underway.set(control);
+                completeNext.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            }
+            File audio = new File(work, "audio.m4a");
+            try (InputStream in = new FileInputStream(fixture); FileOutputStream out = new FileOutputStream(audio)) {
+                byte[] bytes = new byte[8192];
+                for (int n; (n = in.read(bytes)) != -1;) out.write(bytes, 0, n);
+            }
+            return new PreparedMusic.Result(audio, "aaaaaaaaaaa");
+        }, link::get)) {
+            JSONArray window = new JSONArray().put(b.json()).put(c.json());
+            queue.plan(1, a.json(), window, true, false, true);
+            await("The current recording prepares on mobile data", 7000, () -> queue.read(a.key) != null);
+            queue.plan(2, a.json(), window, false, true, false);
+            assertPass("Only explicit consent opens metered lookahead, not just a Play tap", calls.equals(Arrays.asList("A")));
+            queue.plan(3, a.json(), new JSONArray().put(JSONObject.NULL).put(c.json()), false, true, true);
+            queue.plan(4, a.json(), new JSONArray().put(a.json()).put(c.json()), false, true, true);
+            queue.plan(5, a.json(), new JSONArray().put(longTrack.json()).put(c.json()), false, true, true);
+            assertPass("An absent, duplicate or long mobile next slot does not fetch a later song", calls.equals(Arrays.asList("A")));
+            queue.plan(6, a.json(), window, false, true, true);
+            await("Metered opt-in prepares the exact next slot", 7000, () -> underway.get() != null);
+            assertPass("Second lookahead slot does not start on mobile", calls.equals(Arrays.asList("A", "B"))
+                    && "queued".equals(queue.state().getJSONObject("tracks").getJSONObject(c.key).getString("state")));
+            queue.plan(7, b.json(), new JSONArray().put(c.json()), false, false, true);
+            assertPass("Auto-next promotes the in-flight file without cancelling or restarting it", !underway.get().cancelled);
+            completeNext.countDown();
+            await("The promoted file commits completely under the same selection key", 7000, () -> queue.read(b.key) != null);
+            link.set(PreparedMusic.Link.RESTRICTED);
+            queue.plan(8, b.json(), new JSONArray().put(c.json()), false, true, true);
+            queue.networkChanged();
+            assertPass("Android Data Saver still blocks metered preparation after opt-in", calls.equals(Arrays.asList("A", "B")));
+            link.set(PreparedMusic.Link.METERED);
+            queue.networkChanged();
+            await("The queue then prepares its new next track, once", 7000, () -> queue.read(c.key) != null);
+            assertPass("Mobile preparation follows the actual handoff and never duplicates it", calls.equals(Arrays.asList("A", "B", "C")));
+        } finally { completeNext.countDown(); }
     }
 
     private void verifyProviderCooldown(File scratch) throws Exception {
@@ -417,13 +523,13 @@ public final class BlackBoxSmoke extends Instrumentation {
         try (PreparedMusic limited = new PreparedMusic(new File(scratch, "limited"), (track, work, control) -> {
             attempts.incrementAndGet();
             throw new PreparedMusic.ProviderRateLimited();
-        }, background -> true)) {
-            JSONObject selected = limited.plan(1, a, new JSONArray().put(b), true);
+        }, () -> PreparedMusic.Link.UNMETERED)) {
+            JSONObject selected = limited.plan(1, a, new JSONArray().put(b), true, false, false);
             String key = selected.getString("selected");
             JSONObject result = limited.awaitSelection(key).getJSONObject("tracks").getJSONObject(key);
             assertPass("A provider refusal wakes the selection waiter with a clear failure", "failed".equals(result.getString("state"))
                     && result.getString("message").contains("rate-limiting"));
-            String next = limited.plan(2, b, new JSONArray(), true).getString("selected");
+            String next = limited.plan(2, b, new JSONArray(), true, false, false).getString("selected");
             // The first waiter can return while the worker is still draining. Observe the terminal
             // state, not the immediate plan reply, in both worker schedules.
             JSONObject blocked = limited.awaitSelection(next).getJSONObject("tracks").getJSONObject(next);
@@ -575,6 +681,9 @@ public final class BlackBoxSmoke extends Instrumentation {
                 + "if(row){const t=row.recording.title,old=liveMusicResult[t];"
                 + "liveMusicResult[t]={key,state:row.state,message:row.message,source:row.recording.source,"
                 + "initialState:plan?.selected && plan.retry ? row.state : old?.initialState};}} return response;};})()");
+        js(web, "window.liveMusicToast='';const musicToast=document.querySelector('#toast');"
+                + "new MutationObserver(()=>{if(musicToast.classList.contains('on'))window.liveMusicToast=musicToast.textContent})"
+                + ".observe(musicToast,{attributes:true,childList:true,subtree:true,characterData:true});");
         tapWeb(web, "#navMusic");
         await("Original Music shelves contain 14 genres and the original Trending Now card", 10000,
                 () -> jsTrue(web, "document.querySelectorAll('#musicGenreChips button').length===14 "
@@ -615,11 +724,12 @@ public final class BlackBoxSmoke extends Instrumentation {
         String row = "liveMusicResult[" + JSONObject.quote(title) + "]";
         long tapped = SystemClock.elapsedRealtime();
         try {
+            js(web, "window.liveMusicToast=''");
             tapWeb(web, control);
             await(title + " reaches the live helper on one tap", 7000, () -> jsTrue(web, row + "?.initialState!=null"));
             assertPass(title + " began with no prepared audio and chose the expected lookup path",
                     jsTrue(web, row + ".initialState!=='ready' && " + row + ".source" + (discoveryRequired ? "===''" : "!==''")));
-            await(title + " receives a private full recording", 46000, () -> {
+            await(title + " receives a private full recording", (int) PreparedMusic.SELECTION_WAIT_MS + 5000, () -> {
                 if (jsTrue(web, row + "?.state==='failed'")) {
                     String reason = jsText(web, row + ".message");
                     await(title + " shows a failure reason and its Play ring clears", 4500,
@@ -627,12 +737,16 @@ public final class BlackBoxSmoke extends Instrumentation {
                                     + " && !document.querySelector('.music-ui-loading-v52') && document.querySelector('#bgAudioBar').hidden"));
                     throw new AssertionError(title + ": " + reason);
                 }
-                return jsTrue(web, row + "?.state==='ready'");
+                if (jsTrue(web, row + "?.state==='ready'")) return true;
+                if (jsTrue(web, "!!window.liveMusicToast && !document.querySelector('.music-ui-loading-v52') && document.querySelector('#bgAudioBar').hidden")) {
+                    throw new AssertionError(title + ": " + jsText(web, "window.liveMusicToast"));
+                }
+                return false;
             });
             long ready = SystemClock.elapsedRealtime();
-            awaitAudio(web, title, seconds, 6, 1, 7500);
+            awaitAudio(web, title, seconds, 6, 1, 13000);
             long advancing = SystemClock.elapsedRealtime() - tapped;
-            assertPass(title + " advances by the startup deadline", advancing <= 47000);
+            assertPass(title + " advances within the bounded preparation and local player time", advancing <= PreparedMusic.SELECTION_WAIT_MS + 15000);
             js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
             awaitAudio(web, title, seconds, 6, seconds * 0.63, 10000);
             String key = jsText(web, row + ".key");
