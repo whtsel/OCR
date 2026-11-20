@@ -1,4 +1,4 @@
-name: BlackBox legacy Music helper diagnostic
+name: BlackBox pinned Music helper diagnostic
 on:
   workflow_dispatch:
   push:
@@ -16,61 +16,58 @@ concurrency:
 
 jobs:
   bundled-script:
-    name: Original downloader bytes on host
+    name: p19-pinned zipapp on host (no sign-in)
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Install a host audio decoder
         run: bash .github/ci/install_audio_probe.sh
-      - name: Control audio and exact original recordings
-        run: python3 -u .github/ci/check_blackbox_p11.py host
-  old-app:
-    name: p11 on API ${{ matrix.api }} (${{ matrix.variant }})
+      - name: Verify p19's release bytes and test exact recordings
+        run: |
+          python3 -u .github/ci/check_blackbox_p11.py download-refreshed "$RUNNER_TEMP/p19-ytdlp"
+          python3 -u .github/ci/check_blackbox_p11.py host --refreshed "$RUNNER_TEMP/p19-ytdlp"
+  android-probe:
+    name: p19-pinned zipapp in repaired p11 on Android (no sign-in)
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - api: 34
-            variant: archived
-          - api: 35
-            variant: zip-dependency
-          - api: 35
-            variant: native-x86
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Download and verify the archived APK
-        run: python3 -u .github/ci/check_blackbox_p11.py download "$RUNNER_TEMP/blackbox-p11.apk"
+      - name: Verify the archived app and the refreshed release
+        run: |
+          python3 -u .github/ci/check_blackbox_p11.py download "$RUNNER_TEMP/blackbox-p11.apk"
+          python3 -u .github/ci/check_blackbox_p11.py download-refreshed "$RUNNER_TEMP/p19-ytdlp"
       - name: Install a host audio decoder
         run: bash .github/ci/install_audio_probe.sh
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
-        if: matrix.variant != 'archived'
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-      - name: Make a temporary diagnostic APK
-        if: matrix.variant != 'archived'
-        run: bash .github/ci/prepare_blackbox_p11_repair.sh "$RUNNER_TEMP/blackbox-p11.apk" "$RUNNER_TEMP/blackbox-probe.apk" "${{ matrix.variant }}"
-      - name: Enable emulator acceleration
+      - name: Build a test-only x86_64 probe with the verified zipapp
+        run: >-
+          bash .github/ci/prepare_blackbox_p11_repair.sh "$RUNNER_TEMP/blackbox-p11.apk"
+          "$RUNNER_TEMP/blackbox-probe.apk" native-x86 "$RUNNER_TEMP/p19-ytdlp"
+      - name: Enable emulator acceleration and use the runner's DNS resolver
+        id: emulator-network
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Test helper startup and real Music playback
+          dns=$(awk '/^nameserver [0-9]+\./ && $2 !~ /^127\./ {print $2}' /etc/resolv.conf /run/systemd/resolve/resolv.conf 2>/dev/null | head -n 1 || true)
+          if [[ "$dns" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+            echo "options=-dns-server $dns" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Decode audio and test original recordings on Android
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
-          api-level: ${{ matrix.api }}
+          api-level: 35
           target: google_apis
           arch: x86_64
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio ${{ steps.emulator-network.outputs.options }}
           script: >-
-            if [ '${{ matrix.variant }}' = 'archived' ]; then
-            python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-p11.apk";
-            else python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-probe.apk" --original "$RUNNER_TEMP/blackbox-p11.apk"
-            ${{ matrix.variant == 'native-x86' && '--native-x86' || '' }}; fi
+            python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-probe.apk"
+            --original "$RUNNER_TEMP/blackbox-p11.apk" --native-x86 --refreshed

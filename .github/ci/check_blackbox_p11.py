@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check archived p11 or its CI-only ZIP dependency probe. Publish no APKs or audio."""
+"""Check archived p11 or its CI-only helper probes. Publish no APKs or audio."""
 
 import argparse
 from functools import partial
@@ -23,6 +23,9 @@ import zipfile
 
 APK_SHA = '3e4b8d54f0aa11b8c5c2b193af9a52fbfe5051b6c187c55bdc4d50dd2c873a38'
 HELPER_SHA = '89a0d9058ea9018e380b7771898ff46e393a1986dcd13fef331693c87ce1fca4'
+P19_VERSION = '2026.10.26'
+P19_BYTES = 3_073_072
+P19_SHA = 'e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3'
 DRIVE_ID = '1ROpCFQXoRk6T8mOomPEyRQcZkGwxgsqy'
 PKG = 'com.blackbox.stream'
 # Known official album audio IDs and catalogue durations, not search substitutes.
@@ -65,6 +68,18 @@ def download(path):
     raise RuntimeError('Could not obtain the unmodified p11 artifact on this runner')
 
 
+def verify_refreshed_helper(data):
+    if len(data) != P19_BYTES or digest(data) != P19_SHA:
+        raise RuntimeError(f'helper bytes do not match the supplied p19 pin ({P19_VERSION})')
+
+
+def download_refreshed_helper(path):
+    url = f'https://github.com/yt-dlp/yt-dlp/releases/download/{P19_VERSION}/yt-dlp'
+    run('curl', '-fsSL', '--max-time', '60', '--max-filesize', str(P19_BYTES), '-o', path, url, timeout=65)
+    verify_refreshed_helper(path.read_bytes())
+    print(f'::notice::Verified the p19 yt-dlp pin: {P19_VERSION}, {P19_BYTES:,} bytes, SHA-256 {P19_SHA}')
+
+
 def verify_audio(path, duration, seek):
     data = json.loads(run('ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type:format=duration', '-of', 'json', path))
     measured = float(data.get('format', {}).get('duration', 0))
@@ -78,23 +93,30 @@ def verify_audio(path, duration, seek):
     return measured
 
 
-def host(work, apk=None):
-    if apk is None:
-        apk = work / 'p11.apk'
-        download(apk)
+def host(work, apk=None, refreshed_helper=None):
+    if refreshed_helper is not None:
+        helper = refreshed_helper
+        verify_refreshed_helper(helper.read_bytes())
     else:
-        verify_apk(apk)
-    helper = work / 'yt-dlp'
-    with zipfile.ZipFile(apk) as archive:
-        helper.write_bytes(archive.read('res/raw/ytdlp'))
-    if digest(helper.read_bytes()) != HELPER_SHA:
-        raise RuntimeError('APK resource does not match the bundled helper checksum')
+        if apk is None:
+            apk = work / 'p11.apk'
+            download(apk)
+        else:
+            verify_apk(apk)
+        helper = work / 'yt-dlp'
+        with zipfile.ZipFile(apk) as archive:
+            helper.write_bytes(archive.read('res/raw/ytdlp'))
+        if digest(helper.read_bytes()) != HELPER_SHA:
+            raise RuntimeError('APK resource does not match the bundled helper checksum')
     command = (sys.executable, str(helper), '--ignore-config', '--no-update', '--no-cache-dir', '--socket-timeout', '12',
                '--retries', '0', '--fragment-retries', '0', '--no-playlist', '--no-progress')
     node = shutil.which('node')
     if node:
         command += ('--js-runtimes', f'node:{node}')
-    print(f'Exact bundled helper on host Python: {run(*command, "--version")}')
+    version = run(*command, '--version')
+    if refreshed_helper is not None and version != P19_VERSION:
+        raise RuntimeError(f'unexpected helper version: {version}')
+    print(f'::notice::Helper version on host Python: {version} (no account session)')
     originals = work / 'fixture'
     originals.mkdir()
     fixture = originals / 'tone.m4a'
@@ -311,7 +333,7 @@ def native_runner():
     return execute
 
 
-def check_native_control(work, execute):
+def check_native_control(work, execute, refreshed=False):
     # Execute the installed helper in the isolated emulator shell. This is not a UI result.
     source = work / 'fixture'
     source.mkdir()
@@ -325,6 +347,8 @@ def check_native_control(work, execute):
         try:
             adb('reverse', port, port)
             version = execute('--version')
+            if refreshed and version != P19_VERSION:
+                raise RuntimeError(f'Android executed {version}, expected {P19_VERSION}')
             execute('-x', '--audio-format', 'm4a', '-o', f'{NATIVE_TMP}/control.%(ext)s',
                     f'http://127.0.0.1:{server.server_port}/tone.wav')
             output = work / 'android-control.m4a'
@@ -348,7 +372,7 @@ def diagnose_native_recording(execute, work, video_id, duration):
     return verify_audio(output, duration, duration * 2 // 3)
 
 
-def verify_repair(original, probe, native_x86):
+def verify_repair(original, probe, native_x86, refreshed=False):
     verify_apk(original)
     with zipfile.ZipFile(original) as before, zipfile.ZipFile(probe) as after:
         original_names = {name for name in before.namelist() if not name.startswith('META-INF/')}
@@ -360,17 +384,21 @@ def verify_repair(original, probe, native_x86):
         if len(probe_names) != len(expected) or set(probe_names) != expected:
             raise RuntimeError('unexpected entries in test repaired APK')
         for name in sorted(original_names):
-            if before.read(name) != after.read(name):
+            if refreshed and name == 'res/raw/ytdlp':
+                verify_refreshed_helper(after.read(name))
+            elif before.read(name) != after.read(name):
                 raise RuntimeError(f'test repaired APK modified app bytes in {name}')
     description = 'ZIP dependency plus x86_64 runtime siblings' if native_x86 else 'ZIP dependency alone'
-    print(f'Diagnostic APK: original app bytes match; added {description} and a test signature')
+    if refreshed:
+        description += f' and hash-verified {P19_VERSION} zipapp overlay'
+    print(f'Diagnostic APK: preserved p11 app code and catalogue; applied {description}; test-signed only')
 
 
-def android(apk, work, original=None, native_x86=False):
+def android(apk, work, original=None, native_x86=False, refreshed=False):
     if original is None:
         verify_apk(apk)
     else:
-        verify_repair(original, apk, native_x86)
+        verify_repair(original, apk, native_x86, refreshed)
     adb('root')  # Isolated, disposable emulator only; needed for process-owned socket diagnostics.
     adb('wait-for-device')
     props = {prop: adb('shell', 'getprop', prop) for prop in
@@ -404,7 +432,7 @@ def android(apk, work, original=None, native_x86=False):
                 adb('shell', 'mkdir', '-p', NATIVE_TMP)
                 execute = native_runner()
                 try:
-                    check_native_control(work, execute)
+                    check_native_control(work, execute, refreshed)
                 except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
                     control_ok = False
                     print(f'::warning::Android x86_64 fixture: {diagnostic(str(error)).replace(chr(10), " / ")}')
@@ -451,7 +479,7 @@ def android(apk, work, original=None, native_x86=False):
                     backend_failures.append(title)
                     print(f'::warning::Android backend {title} ({video_id}): '
                           f'{diagnostic(str(error)).replace(chr(10), " / ")}')
-                    if native_x86 and 'older than 90 days' in str(error):
+                    if native_x86 and (refreshed or 'older than 90 days' in str(error)):
                         try:
                             seconds = diagnose_native_recording(execute, work, video_id, duration)
                             print(f'::notice::PASS Android shell helper only: {title}, {seconds:.2f}s, decoded after seek')
@@ -477,24 +505,30 @@ def android(apk, work, original=None, native_x86=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('download', 'host', 'android'))
+    parser.add_argument('mode', choices=('download', 'download-refreshed', 'host', 'android'))
     parser.add_argument('apk', type=Path, nargs='?')
     parser.add_argument('--original', type=Path, help='verified original for comparison with a test repair')
     parser.add_argument('--native-x86', action='store_true',
                         help='backend-only probe with the x86_64 sibling of the ARM helper')
+    parser.add_argument('--refreshed', action='store_true',
+                        help='check the supplied p19 pin; host mode takes the zipapp as its path')
     args = parser.parse_args()
-    if args.mode != 'host' and args.apk is None:
-        parser.error('APK path required')
+    if (args.mode != 'host' or args.refreshed) and args.apk is None:
+        parser.error('artifact path required')
+    if args.refreshed and not (args.mode == 'host' or args.mode == 'android' and args.native_x86):
+        parser.error('--refreshed needs host mode or the native x86_64 Android probe')
     if args.native_x86 and (args.mode != 'android' or not args.original):
         parser.error('--native-x86 requires android mode and --original')
     try:
         with tempfile.TemporaryDirectory(prefix='bbx-p11-') as work:
             if args.mode == 'download':
                 download(args.apk)
+            elif args.mode == 'download-refreshed':
+                download_refreshed_helper(args.apk)
             elif args.mode == 'host':
-                host(Path(work), args.apk)
+                host(Path(work), None if args.refreshed else args.apk, args.apk if args.refreshed else None)
             else:
-                android(args.apk, Path(work), args.original, args.native_x86)
+                android(args.apk, Path(work), args.original, args.native_x86, args.refreshed)
     except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
         print(f'::error::{diagnostic(str(error)).replace(chr(10), " ")}')
         sys.exit(1)
