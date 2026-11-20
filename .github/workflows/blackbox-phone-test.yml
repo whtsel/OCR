@@ -1,0 +1,63 @@
+name: BlackBox ARM64 phone test APK
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - '.github/workflows/blackbox-phone-test.yml'
+      - '.github/ci/blackbox-phone/**'
+permissions:
+  contents: read
+concurrency:
+  group: blackbox-phone-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - name: Obtain only the verified p11 and p19-pinned bytes
+        run: |
+          python3 -u .github/ci/check_blackbox_p11.py download "$RUNNER_TEMP/p11.apk"
+          python3 -u .github/ci/check_blackbox_p11.py download-refreshed "$RUNNER_TEMP/p19-ytdlp"
+          node --check .github/ci/blackbox-phone/helper-phone.js
+      - name: Package and verify the test-signed ARM64 APK
+        run: |
+          apk="$RUNNER_TEMP/BlackBox-Helper-Test-ARM64.apk"
+          bash .github/ci/blackbox-phone/build.sh "$RUNNER_TEMP/p11.apk" "$RUNNER_TEMP/p19-ytdlp" "$apk"
+          hash=$(sha256sum "$apk")
+          echo "::notice::BlackBox-Helper-Test-ARM64.apk SHA-256 ${hash%% *} ($(stat -c %s "$apk") bytes)"
+      - name: Build the x86_64 companion for startup smoke only
+        run: >-
+          bash .github/ci/blackbox-phone/build.sh "$RUNNER_TEMP/p11.apk" "$RUNNER_TEMP/p19-ytdlp"
+          "$RUNNER_TEMP/x86-smoke-only.apk" x86_64
+      - name: Enable hardware acceleration for the disposable smoke emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Check the test screen opens without a provider account
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
+          script: >-
+            PYTHONPATH=.github/ci python3 -B -u .github/ci/blackbox-phone/smoke.py "$RUNNER_TEMP/x86-smoke-only.apk"
+      - name: Retain only the ARM64 phone test package for the requester
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: BlackBox-Helper-Test-ARM64
+          path: ${{ runner.temp }}/BlackBox-Helper-Test-ARM64.apk
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

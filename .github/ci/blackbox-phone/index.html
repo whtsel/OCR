@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BlackBox Helper Test</title>
+  <link rel="stylesheet" href="/helper-phone.css">
+  <script src="/helper-phone.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="tag">BLACKBOX STREAM / TEST BUILD</p>
+      <h1>Music helper test</h1>
+      <p class="lede">Try two exact recordings on this phone. No sign-in, previews, or replacement tracks.</p>
+    </header>
+    <section aria-labelledby="setup-title" class="setup">
+      <h2 id="setup-title">Setup</h2>
+      <p id="setup" role="status">Starting the bundled helper…</p>
+      <button id="retry" class="secondary" hidden>Check setup again</button>
+    </section>
+    <section aria-labelledby="tracks-title">
+      <h2 id="tracks-title">Test recordings</h2>
+      <p class="hint">Tap a track, then press Play when the audio controls appear. Listen, then tap the seek button and check that audio continues.</p>
+      <div class="track">
+        <div><strong>Espresso</strong><small>Sabrina Carpenter · about 2:55</small></div>
+        <button id="espresso" type="button" disabled>Try Espresso</button>
+        <p id="espresso-status" class="hint" role="status">Not tried</p>
+      </div>
+      <div class="track">
+        <div><strong>Kwaku the Traveller</strong><small>Black Sherif · about 3:05</small></div>
+        <button id="kwaku" type="button" disabled>Try Kwaku</button>
+        <p id="kwaku-status" class="hint" role="status">Not tried</p>
+      </div>
+    </section>
+    <section id="player" hidden aria-labelledby="player-title">
+      <h2 id="player-title">Selected recording</h2>
+      <audio id="audio" controls preload="metadata" aria-label="Recording playback"></audio>
+      <p id="clock" aria-live="off"></p>
+      <button id="seek" type="button" disabled>Seek past halfway</button>
+    </section>
+    <footer>Based on p11 · yt-dlp 2026.10.26 · not a v90 update</footer>
+  </main>
+</body>
+</html>
