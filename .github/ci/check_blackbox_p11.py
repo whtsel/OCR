@@ -8,6 +8,7 @@ import http.server
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -76,9 +77,12 @@ def verify_audio(path, duration, seek):
     return measured
 
 
-def host(work):
-    apk = work / 'p11.apk'
-    download(apk)
+def host(work, apk=None):
+    if apk is None:
+        apk = work / 'p11.apk'
+        download(apk)
+    else:
+        verify_apk(apk)
     helper = work / 'yt-dlp'
     with zipfile.ZipFile(apk) as archive:
         helper.write_bytes(archive.read('res/raw/ytdlp'))
@@ -86,6 +90,9 @@ def host(work):
         raise RuntimeError('APK resource does not match the bundled helper checksum')
     command = (sys.executable, str(helper), '--ignore-config', '--no-cache-dir', '--socket-timeout', '12',
                '--retries', '0', '--fragment-retries', '0', '--no-playlist', '--no-progress')
+    node = shutil.which('node')
+    if node:
+        command += ('--js-runtimes', f'node:{node}')
     print(f'Exact bundled helper on host Python: {run(*command, "--version")}')
     originals = work / 'fixture'
     originals.mkdir()
@@ -118,7 +125,7 @@ def host(work):
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
             reason = f'{title} ({video_id}): {diagnostic(str(error))}'
             failures.append(reason)
-            print(f'FAIL host live: {reason}')
+            print(f'::warning::{reason.replace(chr(10), " / ")}')
     if failures:
         raise RuntimeError('Bundled script did not supply both original recordings on this network')
 
@@ -212,8 +219,12 @@ def try_player(track, duration):
     second = wait_ui(moving_after(first), 12)
     if second is None:
         raise RuntimeError(f'{track}: clock stalled at {first}s')
-    slider = wait_ui(lambda nodes: find(nodes, 'bgSeek') or next(
-        (n for n in nodes if n.get('package') == PKG and n.get('class') == 'android.widget.SeekBar'), None), 8)
+    def slider_node(nodes):
+        by_id = find(nodes, 'bgSeek')
+        return by_id if by_id is not None else next(
+            (n for n in nodes if n.get('package') == PKG and n.get('class') == 'android.widget.SeekBar'), None)
+
+    slider = wait_ui(slider_node, 8)
     if slider is None:
         raise RuntimeError('player started but the seek slider was not accessible')
     tap(slider, 0.67)
@@ -257,8 +268,9 @@ def android(apk, work):
     verify_apk(apk)
     adb('root')  # Isolated, disposable emulator only; needed for process-owned socket diagnostics.
     adb('wait-for-device')
-    for prop in ('ro.product.cpu.abilist', 'ro.dalvik.vm.native.bridge'):
-        print(f'{prop}={adb("shell", "getprop", prop)}')
+    props = {prop: adb('shell', 'getprop', prop) for prop in
+             ('ro.build.version.sdk', 'ro.product.cpu.abilist', 'ro.dalvik.vm.native.bridge')}
+    print(f'Android test environment: {props}')
     print(adb('install', '-g', apk, timeout=65))
     adb('shell', 'wm', 'size', '1080x2100')
     adb('shell', 'wm', 'density', '320')
@@ -277,7 +289,8 @@ def android(apk, work):
                 time.sleep(2)
             print(f'Android helper status: {diagnostic(json.dumps(status, ensure_ascii=False))}')
             if not status.get('installed'):
-                raise RuntimeError('helper did not become ready in this Android environment')
+                raise RuntimeError(f'Android API {props["ro.build.version.sdk"]} helper startup did not pass: '
+                                   f'{status.get("state")} — {status.get("message")}')
 
             ui_failures = []
             for title, video_id, duration in SONGS:
@@ -297,7 +310,7 @@ def android(apk, work):
                         raise RuntimeError(f'{title} played but expected recording ID {video_id} was not verified')
                 except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
                     ui_failures.append(title)
-                    print(f'FAIL Android UI: {diagnostic(str(error))}')
+                    print(f'::warning::Android UI {title}: {diagnostic(str(error)).replace(chr(10), " / ")}')
 
             # When the UI test fails, distinguish provider failure from UI/selection issues.
             for title, video_id, duration in SONGS:
@@ -318,7 +331,8 @@ def android(apk, work):
                     seconds = verify_audio(output, duration, duration * 2 // 3)
                     print(f'PASS Android backend only: {title} ({video_id}), {seconds:.2f}s, decoded after seek')
                 except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
-                    print(f'FAIL Android backend: {title} ({video_id}): {diagnostic(str(error))}')
+                    print(f'::warning::Android backend {title} ({video_id}): '
+                          f'{diagnostic(str(error)).replace(chr(10), " / ")}')
             if ui_failures:
                 raise RuntimeError('Android in-app playback not verified: ' + ', '.join(ui_failures))
         finally:
@@ -326,6 +340,10 @@ def android(apk, work):
     finally:
         log = adb('logcat', '-d', '-s', 'BlackBoxStream', 'AndroidRuntime', check=False)
         print(f'Android helper startup diagnostics:\n{diagnostic(log)}')
+        useful = [line for line in log.splitlines()
+                  if any(key in line for key in ('failed to start', 'Caused by:', 'media helper ready'))]
+        if useful:
+            print('::notice::' + diagnostic(' | '.join(useful[-6:])))
 
 
 def main():
@@ -340,7 +358,7 @@ def main():
             if args.mode == 'download':
                 download(args.apk)
             elif args.mode == 'host':
-                host(Path(work))
+                host(Path(work), args.apk)
             else:
                 android(args.apk, Path(work))
     except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:

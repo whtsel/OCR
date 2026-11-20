@@ -15,17 +15,25 @@ concurrency:
 jobs:
   bundled-script:
     name: Original downloader bytes on host
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Install a host audio decoder
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg
       - name: Control audio and exact original recordings
         run: python3 -u .github/ci/check_blackbox_p11.py host
   old-app:
-    name: Unmodified p11 on Android
-    runs-on: ubuntu-latest
+    name: Unmodified p11 on Android API ${{ matrix.api }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [34, 35]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -33,6 +41,10 @@ jobs:
           persist-credentials: false
       - name: Download and verify the archived APK
         run: python3 -u .github/ci/check_blackbox_p11.py download "$RUNNER_TEMP/blackbox-p11.apk"
+      - name: Install a host audio decoder
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg
       - name: Enable emulator acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -41,7 +53,7 @@ jobs:
       - name: Test helper startup and real Music playback
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
-          api-level: 35
+          api-level: ${{ matrix.api }}
           target: google_apis
           arch: x86_64
           disable-animations: true
