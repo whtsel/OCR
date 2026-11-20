@@ -89,7 +89,7 @@ def host(work, apk=None):
         helper.write_bytes(archive.read('res/raw/ytdlp'))
     if digest(helper.read_bytes()) != HELPER_SHA:
         raise RuntimeError('APK resource does not match the bundled helper checksum')
-    command = (sys.executable, str(helper), '--ignore-config', '--no-cache-dir', '--socket-timeout', '12',
+    command = (sys.executable, str(helper), '--ignore-config', '--no-update', '--no-cache-dir', '--socket-timeout', '12',
                '--retries', '0', '--fragment-retries', '0', '--no-playlist', '--no-progress')
     node = shutil.which('node')
     if node:
@@ -287,45 +287,65 @@ def find_server(pid):
     raise RuntimeError('could not reach p11’s own loopback helper status endpoint')
 
 
-def check_native_control(work):
-    # This executes the installed fixture helper in the disposable emulator's shell.
-    # The real recording probes below separately exercise the app's own backend.
+NATIVE_TMP = '/data/local/tmp/bbx-helper-control'
+
+
+def native_runner():
     root = '/data/user/0/' + PKG + '/no_backup/youtubedl-android'
     prefix = root + '/packages'
     apk_path = adb('shell', 'pm', 'path', PKG).splitlines()[0].removeprefix('package:')
     native = str(Path(apk_path).parent / 'lib/x86_64')
-    tmp = '/data/local/tmp/bbx-helper-control'
-    adc = work / 'fixture'
-    adc.mkdir()
+    env = dict(LD_LIBRARY_PATH=f'{prefix}/python/usr/lib:{prefix}/ffmpeg/usr/lib',
+               PYTHONHOME=f'{prefix}/python/usr', HOME=NATIVE_TMP, TMPDIR=NATIVE_TMP,
+               SSL_CERT_FILE=f'{prefix}/python/usr/etc/tls/cert.pem')
+    # App install paths can contain '='. `env` would treat that path as another assignment.
+    export = 'export ' + ' '.join(f'{name}={shlex.quote(value)}' for name, value in env.items())
+    command = [f'{native}/libpython.so', f'{root}/yt-dlp/yt-dlp', '--ignore-config', '--no-update',
+               '--no-cache-dir', '--no-progress', '--socket-timeout', '8', '--retries', '0',
+               '--no-playlist', '--js-runtimes', f'quickjs:{native}/libqjs.so',
+               '--ffmpeg-location', f'{native}/libffmpeg.so']
+
+    def execute(*opts, timeout=45):
+        return adb('shell', export + ' && exec ' + shlex.join(command + list(opts)), timeout=timeout)
+
+    return execute
+
+
+def check_native_control(work, execute):
+    # Execute the installed helper in the isolated emulator shell. This is not a UI result.
+    source = work / 'fixture'
+    source.mkdir()
     run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=4',
-        '-c:a', 'pcm_s16le', adc / 'tone.wav')
-    handler = partial(http.server.SimpleHTTPRequestHandler, directory=adc)
+        '-c:a', 'pcm_s16le', source / 'tone.wav')
+    handler = partial(http.server.SimpleHTTPRequestHandler, directory=source)
     with http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         port = f'tcp:{server.server_port}'
         try:
             adb('reverse', port, port)
-            adb('shell', 'mkdir', '-p', tmp)
-            runtime = ['env', f'LD_LIBRARY_PATH={prefix}/python/usr/lib:{prefix}/ffmpeg/usr/lib',
-                       f'PYTHONHOME={prefix}/python/usr', f'HOME={tmp}', f'TMPDIR={tmp}',
-                       f'SSL_CERT_FILE={prefix}/python/usr/etc/tls/cert.pem',
-                       f'{native}/libpython.so', f'{root}/yt-dlp/yt-dlp']
-            version = adb('shell', shlex.join(runtime + ['--ignore-config', '--version']))
-            opts = ['--ignore-config', '--no-cache-dir', '--no-progress', '--socket-timeout', '6',
-                    '--retries', '0', '--ffmpeg-location', f'{native}/libffmpeg.so',
-                    '-x', '--audio-format', 'm4a', '-o', f'{tmp}/control.%(ext)s',
-                    f'http://127.0.0.1:{server.server_port}/tone.wav']
-            adb('shell', shlex.join(runtime + opts), timeout=45)
+            version = execute('--version')
+            execute('-x', '--audio-format', 'm4a', '-o', f'{NATIVE_TMP}/control.%(ext)s',
+                    f'http://127.0.0.1:{server.server_port}/tone.wav')
             output = work / 'android-control.m4a'
-            adb('pull', f'{tmp}/control.m4a', output)
+            adb('pull', f'{NATIVE_TMP}/control.m4a', output)
             seconds = verify_audio(output, 4, 2)
             print(f'::notice::PASS Android x86_64 control: yt-dlp {version} and bundled FFmpeg '
                   f'converted and decoded {seconds:.2f}s of fixture audio (not a catalogue track)')
         finally:
             adb('reverse', '--remove', port, check=False)
-            adb('shell', 'rm', '-rf', tmp, check=False)
             server.shutdown()
+
+
+def diagnose_native_recording(execute, work, video_id, duration):
+    # The legacy app limits its error response to 240 characters. When it reports nothing
+    # but the version warning, run the exact recording through the same installed bytes
+    # with that warning disabled to obtain the real failure, without changing app data.
+    execute('-x', '--audio-format', 'm4a', '--audio-quality', '0', '--max-filesize', '24M',
+            '-o', f'{NATIVE_TMP}/{video_id}.%(ext)s', f'https://www.youtube.com/watch?v={video_id}', timeout=60)
+    output = work / f'native-{video_id}.m4a'
+    adb('pull', f'{NATIVE_TMP}/{video_id}.m4a', output)
+    return verify_audio(output, duration, duration * 2 // 3)
 
 
 def verify_repair(original, probe, native_x86):
@@ -381,8 +401,10 @@ def android(apk, work, original=None, native_x86=False):
 
             control_ok = True
             if native_x86:
+                adb('shell', 'mkdir', '-p', NATIVE_TMP)
+                execute = native_runner()
                 try:
-                    check_native_control(work)
+                    check_native_control(work, execute)
                 except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
                     control_ok = False
                     print(f'::warning::Android x86_64 fixture: {diagnostic(str(error)).replace(chr(10), " / ")}')
@@ -429,11 +451,20 @@ def android(apk, work, original=None, native_x86=False):
                     backend_failures.append(title)
                     print(f'::warning::Android backend {title} ({video_id}): '
                           f'{diagnostic(str(error)).replace(chr(10), " / ")}')
+                    if native_x86 and 'older than 90 days' in str(error):
+                        try:
+                            seconds = diagnose_native_recording(execute, work, video_id, duration)
+                            print(f'::notice::PASS Android shell helper only: {title}, {seconds:.2f}s, decoded after seek')
+                        except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as detail:
+                            print(f'::warning::Android shell helper {title} ({video_id}): '
+                                  f'{diagnostic(str(detail)).replace(chr(10), " / ")}')
             if ui_failures:
                 raise RuntimeError('Android in-app playback not verified: ' + ', '.join(ui_failures))
             if native_x86 and (backend_failures or not control_ok):
                 raise RuntimeError('Android x86_64 diagnostic did not pass the fixture and both exact recordings')
         finally:
+            if native_x86:
+                adb('shell', 'rm', '-rf', NATIVE_TMP, check=False)
             adb('forward', '--remove', f'tcp:{port}', check=False)
     finally:
         log = adb('logcat', '-d', '-s', 'BlackBoxStream', 'AndroidRuntime', check=False)
