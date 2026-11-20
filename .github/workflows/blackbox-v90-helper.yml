@@ -1,9 +1,9 @@
-name: BlackBox v90 Android audio-only
+name: BlackBox Music v90 Android
 on:
   workflow_dispatch:
     inputs:
       verify_live_music:
-        description: Also try full recordings over the live provider (separate from fixture acceptance)
+        description: Require cold live playback and offline replay in the v90 player (separate from fixtures)
         type: boolean
         default: false
   push:
@@ -61,11 +61,11 @@ jobs:
           python3 .github/ci/verify_blackbox_v90_helper.py "$apk"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
-          grep -q "^package: name='com.blackboxstream.mobile.helper'" "$RUNNER_TEMP/badging.txt"
+          grep -q "^package: name='com.blackboxstream.mobile.music' versionCode='10' versionName='1.4.5-music'" "$RUNNER_TEMP/badging.txt"
           grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
           hash=$(sha256sum "$apk")
           echo "::notice::ARM64 v90 candidate SHA-256 ${hash%% *} ($(stat -c %s "$apk") bytes)"
-          cp "$apk" "$RUNNER_TEMP/BlackBox-Stream-v90-ARM64.apk"
+          cp "$apk" "$RUNNER_TEMP/BlackBox-Music-v90-ARM64-candidate.apk"
       - name: Assemble the x86_64 counterpart and fixture instrumentation
         working-directory: android
         run: |
@@ -93,16 +93,16 @@ jobs:
           script: |
             adb shell wm size 720x1560
             adb shell wm density 320
-            BBX_TEST_PACKAGE=com.blackboxstream.mobile.helper BBX_VERIFY_HELPER_FIXTURE=1 bash android/tests/run_device.sh
-      - name: Retain the side-by-side candidate (not a release)
+            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_HELPER_FIXTURE=1 bash android/tests/run_device.sh
+      - name: Retain the fixture-checked candidate (not a live playback pass)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: BlackBox-Stream-v90-ARM64
-          path: ${{ runner.temp }}/BlackBox-Stream-v90-ARM64.apk
+          name: BlackBox-Music-v90-ARM64-candidate
+          path: ${{ runner.temp }}/BlackBox-Music-v90-ARM64-candidate.apk
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
-      - name: Check live full recordings in the actual v90 Android player (not fixtures)
+      - name: Require live full recordings in the actual v90 Android player (not fixtures)
         if: ${{ inputs.verify_live_music }}
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
@@ -114,4 +114,4 @@ jobs:
           script: |
             adb shell wm size 720x1560
             adb shell wm density 320
-            BBX_TEST_PACKAGE=com.blackboxstream.mobile.helper BBX_VERIFY_MUSIC_ONLY=1 bash android/tests/run_device.sh
+            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_MUSIC_ONLY=1 bash android/tests/run_device.sh

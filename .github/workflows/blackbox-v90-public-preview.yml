@@ -38,7 +38,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - name: Play, seek, download and reopen the two explicitly imported files offline
         env:
-          BBX_TEST_PACKAGE: com.blackboxstream.mobile.helper
+          BBX_TEST_PACKAGE: com.blackboxstream.mobile.music
           BBX_VERIFY_PUBLIC_PREVIEW: '1'
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:

@@ -4,6 +4,8 @@ import android.content.Context;
 import android.media.MediaMetadataRetriever;
 import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
+import android.os.SystemClock;
+import android.util.Log;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -27,7 +29,10 @@ import org.json.JSONObject;
 final class PreparedMusic implements AutoCloseable {
     static final String VERSION = "2026.10.26";
     static final long MAX_AUDIO = 24L * 1024 * 1024;
-    static final int PREPARE_TIMEOUT_SECONDS = 155;
+    static final int PREPARE_TIMEOUT_SECONDS = 40;
+    private static final long PROVIDER_COOLDOWN_MS = 60_000;
+    private static final long WAIT_SLICE_MS = 4_000;
+    private static final String RATE_LIMITED = "The audio provider is rate-limiting requests. Try again shortly.";
     static final int MAX_SECONDS = 1800;
     private static final long CACHE_BYTES = 256L * 1024 * 1024;
     private static final int CACHE_TRACKS = 64;
@@ -75,12 +80,23 @@ final class PreparedMusic implements AutoCloseable {
         Result(File audio, String source) { this.audio = audio; this.source = source; }
     }
 
-    interface Runtime { Result fetch(Track track, File scratch, Control control) throws Exception; }
+    interface Runtime {
+        default void warm() throws Exception { }
+        Result fetch(Track track, File scratch, Control control) throws Exception;
+    }
+    static final class ProviderRateLimited extends IOException {
+        ProviderRateLimited() { super(RATE_LIMITED); }
+    }
     interface Network { boolean allowed(boolean background); }
 
     static final class Control {
         volatile boolean cancelled;
+        private final long started = SystemClock.elapsedRealtime();
         private Process process;
+        void stage(String stage) {
+            // Internal stage names and elapsed times only. Never publish provider output or track metadata.
+            Log.i("BlackBoxMusic", stage + " +" + (SystemClock.elapsedRealtime() - started) + "ms");
+        }
         synchronized void attach(Process p) { if (cancelled) p.destroy(); else process = p; }
         synchronized void detach() { process = null; }
         synchronized void cancel() { cancelled = true; if (process != null) process.destroy(); }
@@ -96,7 +112,8 @@ final class PreparedMusic implements AutoCloseable {
     private final Set<String> albumCompleted = new HashSet<>();
     private final Map<String, String> failures = new LinkedHashMap<>();
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private boolean dispatching, closed, loaded;
+    private boolean dispatching, closed, loaded, warming;
+    private long retryProviderAt;
     private int epoch;
     private String requested = "", running;
     private Control active;
@@ -132,6 +149,24 @@ final class PreparedMusic implements AutoCloseable {
 
     private boolean available() { return !closed && runtime != null; }
 
+    // Only unpack/verify the bundled code; a Music view never starts a source lookup by itself.
+    synchronized void warm() {
+        if (!available() || warming) return;
+        warming = true;
+        worker.execute(() -> {
+            long started = SystemClock.elapsedRealtime();
+            try {
+                runtime.warm();
+                Log.i("BlackBoxMusic", "helper warm +" + (SystemClock.elapsedRealtime() - started) + "ms");
+            }
+            catch (Exception | LinkageError problem) {
+                Log.i("BlackBoxMusic", "helper warm failed +" + (SystemClock.elapsedRealtime() - started) + "ms");
+                // A selected track can retry the local initialization and get a real failure result.
+                synchronized (this) { warming = false; }
+            }
+        });
+    }
+
     synchronized void networkChanged() {
         if (!available()) return;
         if (active != null && !requested.equals(running) && !network.allowed(true)) active.cancel();
@@ -148,6 +183,7 @@ final class PreparedMusic implements AutoCloseable {
         if (active != null && key.equals(running)) active.cancel();
         deleteScratch(entry(key));
         cached.remove(key);
+        notifyAll();
     }
 
     synchronized JSONObject plan(int sequence, JSONObject selected, JSONArray upcoming, boolean retry) throws JSONException {
@@ -173,6 +209,20 @@ final class PreparedMusic implements AutoCloseable {
         if (active != null && readyFile(running) == null) {
             Track first = nextJob();
             if (first == null || !first.key.equals(running)) active.cancel();
+        }
+        notifyAll();
+        return state();
+    }
+
+    /** Return as soon as this selected job publishes audio, fails or is replaced. */
+    synchronized JSONObject awaitSelection(String key) throws JSONException {
+        if (!key.matches("[a-f0-9]{64}")) throw new IllegalArgumentException("Invalid recording key.");
+        long until = SystemClock.elapsedRealtime() + WAIT_SLICE_MS;
+        while (available() && requested.equals(key) && desired.containsKey(key) && readyFile(key) == null && !failures.containsKey(key)) {
+            long waitMs = until - SystemClock.elapsedRealtime();
+            if (waitMs <= 0) break;
+            try { wait(waitMs); }
+            catch (InterruptedException closing) { Thread.currentThread().interrupt(); break; }
         }
         return state();
     }
@@ -253,6 +303,11 @@ final class PreparedMusic implements AutoCloseable {
 
     private Track nextJob() {
         if (!available()) return null;
+        if (SystemClock.elapsedRealtime() < retryProviderAt) {
+            if (desired.containsKey(requested) && readyFile(requested) == null) failures.put(requested, RATE_LIMITED);
+            for (String key : album.keySet()) if (readyFile(key) == null) failures.putIfAbsent(key, RATE_LIMITED);
+            return null;
+        }
         if (!failures.containsKey(requested)) for (Track track : desired.values()) {
             if (readyFile(track.key) != null || failures.containsKey(track.key)) continue;
             boolean background = !track.key.equals(requested);
@@ -286,7 +341,9 @@ final class PreparedMusic implements AutoCloseable {
             }
             File scratch = null;
             String failure = null;
+            boolean rateLimited = false;
             try {
+                control.stage(track.source.isEmpty() ? "prepare catalogue" : "prepare pinned");
                 if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Unable to open prepared music storage.");
                 if (directory.getUsableSpace() < 3 * MAX_AUDIO) throw new IOException("Not enough space to prepare this recording.");
                 scratch = new File(directory, "work-" + java.util.UUID.randomUUID());
@@ -295,6 +352,7 @@ final class PreparedMusic implements AutoCloseable {
                 if (control.cancelled) continue;
                 if (out == null || !videoId(out.source) || !track.source.isEmpty() && !track.source.equals(out.source))
                     throw new IOException("No verified full recording was prepared.");
+                control.stage("validate audio");
                 verifyAudio(out.audio, track.seconds);
                 // Publish the audio plus its exact recording identity together, never a partial download.
                 File complete = new File(scratch, "complete");
@@ -311,16 +369,23 @@ final class PreparedMusic implements AutoCloseable {
                         cached.put(track.key, track);
                         if (album.containsKey(track.key)) albumCompleted.add(track.key);
                         trimCache();
+                        notifyAll();
                     }
                 }
             } catch (Exception | LinkageError error) {
+                rateLimited = error instanceof ProviderRateLimited;
                 failure = error instanceof IOException ? safeReason(error.getMessage()) : "The bundled music helper could not start.";
             } finally {
                 deleteScratch(scratch);
+                control.stage(control.cancelled ? "cancelled" : rateLimited ? "provider refused (429)" : failure != null ? "failed" : "committed");
                 synchronized (this) {
-                    if (failure != null && !control.cancelled && wanted(track.key)) failures.put(track.key, failure);
+                    if (failure != null && !control.cancelled && wanted(track.key)) {
+                        failures.put(track.key, failure);
+                        if (rateLimited) retryProviderAt = SystemClock.elapsedRealtime() + PROVIDER_COOLDOWN_MS;
+                    }
                     running = null;
                     active = null;
+                    notifyAll();
                 }
             }
         }
@@ -379,6 +444,7 @@ final class PreparedMusic implements AutoCloseable {
     @Override public synchronized void close() {
         closed = true;
         clearPlan();
+        notifyAll();
         worker.shutdownNow();
         if (unregisterNetwork != null) { unregisterNetwork.run(); unregisterNetwork = null; }
     }

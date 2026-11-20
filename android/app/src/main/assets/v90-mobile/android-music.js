@@ -3,6 +3,7 @@
   'use strict';
   if (!window.bbxAndroidOpen) return;
   const engine = '/api/mobile/music-helper';
+  const selectionTimeout = 45_000;
   const byId = id => document.getElementById(id);
   const keyPattern = /^[a-f0-9]{64}$/;
   const audioUrl = key => `/prepared-audio/${key}.m4a`;
@@ -140,6 +141,13 @@
   };
 
   let session = null, sequence = 0, requestId = 0, lastSnapshot = 0;
+  let primed = false;
+  function primeHelper() {
+    if (primed) return;
+    primed = true;
+    fetch(engine + '/warm', {method:'POST', body:'{}', cache:'no-store'})
+      .then(response => { if (!response.ok) primed = false; }, () => { primed = false; });
+  }
   let cached = new Set(), albumJob = null;
   async function read(path = '', data, signal) {
     const id = ++requestId;
@@ -236,7 +244,16 @@
   function plan(selected, upcoming = [], retry = false, signal) {
     return read('/plan', {sequence:++sequence, selected, upcoming, retry}, signal);
   }
-  function stillSelected(live) { return session === live && musicQueue.list[musicQueue.idx] === live.item; }
+  function stillSelected(live) {
+    if (session !== live) return false;
+    const item = musicQueue.list[musicQueue.idx];
+    if (item === live.item) return true;
+    // The original queue can rebuild its row objects without changing the recording.
+    const track = item && recording(item);
+    if (!track || recordingKey(track) !== live.recordingKey) return false;
+    live.item = item;
+    return true;
+  }
   function planQueue(live, retry = false) {
     // Use exactly these slots. An unresolved or duplicate slot cannot pull in a later song.
     const upcoming = musicQueue.list.slice(musicQueue.idx + 1, musicQueue.idx + 3).map(recording);
@@ -265,23 +282,28 @@
     release(live, true);
     plan(null).catch(() => {});
   }
+  function fail(live, message) {
+    if (session !== live) return;
+    stop(live);
+    if (live.intent !== 'cached-restore') toast(message);
+  }
   const persist = persistMusicPlaybackSession;
   persistMusicPlaybackSession = () => { if (session?.started && stillSelected(session)) persist(); };
 
   async function play(live) {
     try {
-      if (!live.track) { stop(live); return; }
+      if (!live.track) { fail(live, 'This catalogue entry does not identify a full recording.'); return; }
       let snapshot = await planQueue(live, true), key;
       while (stillSelected(live)) {
         key = snapshot.selected;
         const row = snapshot.tracks?.[key];
-        if (!snapshot.available || !row || recordingKey(row.recording) !== recordingKey(live.track) || row.state === 'failed') {
-          stop(live); return;
+        if (!snapshot.available) { fail(live, 'Music playback is not available in this build.'); return; }
+        if (!keyPattern.test(key) || !row || recordingKey(row.recording) !== live.recordingKey) {
+          fail(live, 'Could not prepare this recording. Tap Play to retry.'); return;
         }
-        if (row.state === 'ready' && keyPattern.test(key)) break;
-        await new Promise(resolve => setTimeout(resolve, 650));
-        if (!stillSelected(live)) return;
-        snapshot = await read('', undefined, live.controller.signal);
+        if (row.state === 'failed') { fail(live, row.message || 'Could not prepare this exact recording.'); return; }
+        if (row.state === 'ready') break;
+        snapshot = await read(`/await?key=${key}`, undefined, live.controller.signal);
       }
       if (!stillSelected(live)) return;
       const response = await fetch(audioUrl(key), {cache:'no-store', signal:live.controller.signal});
@@ -310,8 +332,13 @@
       renderMusicDownloads(); updateQCount(); persistMusicPlaybackSession();
     } catch {
       // No preview, video, source dialog, or retry on another recording.
-      if (stillSelected(live)) stop(live);
-    } finally { clearTimeout(live.deadline); }
+      if (stillSelected(live)) fail(live, 'Could not open the audio. Tap Play to retry.');
+    } finally {
+      clearTimeout(live.deadline);
+      // A queue rebuild can replace the selected object while the bridge reply is in flight.
+      // Never leave that abandoned request's ring attached to the original button.
+      if (!live.started && session === live) stop(live);
+    }
   }
 
   function attachSpinner(control) {
@@ -336,16 +363,18 @@
     const item = musicQueue.list[musicQueue.idx];
     if (!item) return;
     if (options.intent === 'restore') return restoreCached(item);
-    if (session?.item === item && !session.started) return session.playing;
+    if (session && !session.started && stillSelected(session)) return session.playing;
     const player = ensureBgAudio();
     if (!player) return;
     if (!options.intent || options.intent === 'user' || options.intent === 'resume') primeMusicFrequencyAnalyser();
     const control = options.control;
     const fromQueue = control?.matches('.bg-queue-row-v49');
     if (session) release(session, false);
-    const live = session = {...player, item, track:recording(item), fromQueue, started:false, controller:new AbortController()};
+    const track = recording(item);
+    const live = session = {...player, item, track, recordingKey:track ? recordingKey(track) : '',
+      fromQueue, intent:options.intent, started:false, controller:new AbortController()};
     live.feedbackId = attachSpinner(fromQueue ? document.querySelector('#bgQueueList .playing') : control);
-    live.deadline = setTimeout(() => stop(live), 195000);
+    live.deadline = setTimeout(() => fail(live, 'Audio took too long to start. Tap Play to retry.'), selectionTimeout);
     live.playing = play(live);
     return live.playing;
   };
@@ -354,7 +383,7 @@
   renderMusicQueue = function () {
     originalRenderQueue();
     if (!session) return;
-    if (!musicQueue.list.length) stop(session);
+    if (!musicQueue.list.length || !session.started && !stillSelected(session)) stop(session);
     else if (stillSelected(session)) {
       if (session.fromQueue && !session.started && !musicPlaybackActionElement?.isConnected) {
         session.feedbackId = attachSpinner(document.querySelector('#bgQueueList .playing'));
@@ -379,6 +408,7 @@
     return back?.() || false;
   };
   document.addEventListener('DOMContentLoaded', () => {
+    byId('navMusic')?.addEventListener('click', primeHelper, {passive:true});
     byId('bgSeek').setAttribute('aria-label', 'Track position');
     byId('bgClose').addEventListener('click', () => { if (session) stop(session); });
     const note = document.querySelector('.bg-queue-note-v49');

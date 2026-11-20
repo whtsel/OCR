@@ -81,21 +81,27 @@ def candidates(entries, title, artist, seconds):
 
 
 def prepare(engine, title, artist, album, seconds, mark, lookup_error):
-    # One bounded metadata search. Resolving candidates does not download any tracks.
-    engine.params['extract_flat'] = 'in_playlist'
-    results = engine.extract_info(f'ytsearch{SEARCH_COUNT}:{artist} {title}', download=False)
-    engine.params['extract_flat'] = False
+    # Use the raw search entries so there's no playlist processing, eager resolution or download.
+    results = engine.extract_info(f'ytsearch{SEARCH_COUNT}:{artist} {title}', download=False, process=False)
+    rejected = None
+    inspected = False
     for video in candidates((results or {}).get('entries'), title, artist, seconds):
         try:
             info = engine.extract_info(f'https://www.youtube.com/watch?v={video}', download=False, process=False)
-        except lookup_error:
+        except lookup_error as problem:
+            if 'http error 429' in str(problem).casefold():
+                raise
+            rejected = problem
             continue
+        inspected = True
         if not info or not matches(info, video, title, artist, album, seconds):
             continue
         mark(video)
         # Same extraction result, not another search or URL resolution. Only this audio is written.
         engine.process_ie_result(info, download=True)
         return True
+    if rejected and not inspected:
+        raise rejected
     return False
 
 
@@ -103,12 +109,17 @@ def main():
     pin, title, artist, album, seconds, *options = sys.argv[1:]
     sys.path.insert(0, pin)
     from yt_dlp import YoutubeDL, parse_options
-    from yt_dlp.utils import DownloadError
+    from yt_dlp.utils import DownloadError, ExtractorError
 
     params = parse_options(options).ydl_opts
-    with YoutubeDL(params) as engine:
-        found = prepare(engine, title, artist, album, int(seconds),
-                        lambda video: Path('source-id').write_text(video, encoding='ascii'), DownloadError)
+    try:
+        with YoutubeDL(params) as engine:
+            found = prepare(engine, title, artist, album, int(seconds),
+                            lambda video: Path('source-id').write_text(video, encoding='ascii'), (DownloadError, ExtractorError))
+    except (DownloadError, ExtractorError) as problem:
+        # The Android adapter maps this output to a small set of user-facing errors.
+        print(str(problem), file=sys.stderr)
+        return 2
     if not found:
         print('BBX_NO_EXACT_RECORDING', file=sys.stderr)
         return 3

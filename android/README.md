@@ -4,16 +4,18 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Install and use
 
-**BlackBox Stream v90 (ARM64)** is a side-by-side test build of the full Android port
-(`com.blackboxstream.mobile.helper`), not the separate phone diagnostic. It does not replace the
-main app. Android only updates an installed preview if both packages have the same signing key.
-Keep the main app installed. Use an up-to-date Android System WebView on Android 7.0 or newer.
+**BlackBox Music v90 (ARM64)** is a side-by-side test build of the full Android port
+(`com.blackboxstream.mobile.music`), not the two-track diagnostic. It does not replace BlackBox
+Stream or the old `.helper` preview, or migrate their app-private downloads. Android only updates
+an installed build if both packages have the same signing key. Keep the main app installed. Use an up-to-date Android System WebView on Android 7.0 or newer.
 As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 
 - **Music:** Tap the existing Play control. Its loading circle stays until the exact audio starts
   on the original player. There is no setup, source picker, progress panel, embed, or video
-  fallback. If the engine cannot verify or open the recording, the circle clears without playing
-  a different recording. The same 14 genres, searches, albums, ordered tracks, queue and library
+  fallback. The helper initializes locally when you enter Music. If it cannot verify/open the
+  recording, or if startup takes more than 45 seconds, the ring clears and the original toast
+  reports the reason. A failed selection never starts another recording. The same 14 genres,
+  searches, albums, ordered tracks, queue and library
   are still used. The catalogue contains metadata, not the songs themselves.
 - **Streaming:** Add your **TMDB** v3 API key or Read Access Token in Settings for movies, series,
   and anime. No sample or archive titles are injected into the home page, search, or title details.
@@ -31,7 +33,9 @@ The full v90 catalogue has **2,620 albums and 35,995 track rows**. The engine ch
 recording's title, artist, release, full duration and source metadata. A few confirmed source IDs
 skip the lookup, but are not a limit on what can play. No login, browser session, remote helper
 updates or alternate editions are used. Provider availability and exact metadata vary by track
-and network; not every catalogue entry can be verified. Only fetch recordings you may download.
+and network; not every catalogue entry can be verified. If the provider rate-limits this device,
+BlackBox pauses new requests to it for one minute. Offline copies still play in that time.
+Only fetch recordings you may download.
 
 The selected track takes priority. On unmetered connections, a single worker prepares the next
 **two actual queue slots** without moving them or substituting other songs. An empty, duplicate,
@@ -117,7 +121,7 @@ and the [pinned extractor release](https://github.com/yt-dlp/yt-dlp/releases/tag
 source and licensing. The Gradle task, on-device loader, and APK verification check the pin. CI
 also compares the six ARM64 runtime files with the exact diagnostic binaries. For a test on an
 x86_64 Android emulator, add `-PbbxHelperAbi=x86_64`, build `:app:assembleDebugAndroidTest` as well,
-and run `BBX_TEST_PACKAGE=com.blackboxstream.mobile.helper BBX_VERIFY_HELPER_FIXTURE=1 ./tests/run_device.sh`.
+and run `BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_HELPER_FIXTURE=1 ./tests/run_device.sh`.
 That test exercises the pinned runtime and conversion, holds a real Android bridge reply to test
 spinner-only delayed autoplay without a second tap, and checks cancellation, seek, and offline
 reuse on two v90 tracks using test-only audio. Run `python3 -B
@@ -147,8 +151,9 @@ gradle :app:assembleDebug :app:assembleDebugAndroidTest -PbbxMusicHelper=false
 ./tests/run_device.sh
 # With libtorrent and OpenSSL: also forward a controlled seeder and HTTPS relay with adb reverse.
 python3 tests/run_device_fixtures.py
-# Run on the helper build to check live full audio (network/provider access required).
-BBX_TEST_PACKAGE=com.blackboxstream.mobile.helper BBX_VERIFY_MUSIC_ONLY=1 ./tests/run_device.sh
+# Separate build and fresh emulator/device package for live Music acceptance.
+gradle :app:assembleDebug :app:assembleDebugAndroidTest -PbbxHelperPreview=true -PbbxHelperAbi=x86_64
+BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_MUSIC_ONLY=1 ./tests/run_device.sh
 # Independently hash two authorized public files, then test explicit imports and offline replay.
 BBX_VERIFY_PUBLIC_MEDIA=1 python3 tests/run_device_fixtures.py
 ```
@@ -161,6 +166,9 @@ Community relay coverage. APK checks enforce the pin, original v90 assets, and e
 sample video, audio and song-video activity. TMDB transport tests use controlled HTTPS responses,
 not a customer key. The optional public-file check supplies the full films as explicit HTTPS
 imports and compares the offline copies with independently collected hashes. It does not put the
-films back in Streaming. A live Music pass requires a moving audio clock, the exact full duration,
-and a successful seek past the preview window in the same v90 player. On GitHub Actions,
-`verify_live_music` is an opt-in dispatch test separate from the normal fixture gate.
+films back in Streaming. A live Music pass requires five cold plays from original album and shelf
+controls (three unpinned), full duration, audio progression, seeking past the preview window, and
+Downloads replay after reopening with all networking off. The GitHub Actions `verify_live_music`
+input runs this independent gate. Provider refusals fail the gate, even if the separate fixture
+job and APK verification pass. The run summary records sanitized preparation stages and timings;
+no audio, account data, or provider links are saved as test results.

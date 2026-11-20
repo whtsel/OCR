@@ -68,7 +68,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             else verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
                     + (publicMediaVerified ? "PASS Android imported media: Sintel and The Dull Sword matched public files and both played with networking off\n" : "")
-                    + (originalMusicVerified ? "PASS Original v90 Music: full recordings advanced and sought in the original audio player, including a catalogue-resolved track\n" : ""));
+                    + (originalMusicVerified ? "PASS Original v90 Music: five cold full recordings advanced and sought in the original player, with offline replay after reopening\n" : ""));
             finish(Activity.RESULT_OK, result);
         } catch (Throwable bad) {
             result.putString("stream", "\nFAIL BlackBox Android smoke: " + android.util.Log.getStackTraceString(bad) + "\n");
@@ -200,7 +200,7 @@ public final class BlackBoxSmoke extends Instrumentation {
     /** Tests the real helper loader, isolated queue worker, and actual v90 WebView using only built-in fixture media. */
     private void verifyHelperFixtures() throws Exception {
         Context app = getTargetContext();
-        assertPass("Helper fixtures run only on the disposable preview package", app.getPackageName().endsWith(".helper"));
+        assertPass("Helper fixtures run only on the disposable preview package", app.getPackageName().equals("com.blackboxstream.mobile.music"));
         Class<?> runtime = Class.forName("com.blackboxstream.mobile.BundledMusicRuntime");
         Object instance = runtime.getDeclaredConstructor(Context.class).newInstance(app);
         java.lang.reflect.Method run = runtime.getDeclaredMethod("run", PreparedMusic.Control.class, File.class, String[].class);
@@ -225,6 +225,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 throw new AssertionError("Short fixture accepted as a 175-second recording");
             } catch (java.io.IOException expected) { checks++; }
             verifyPreparationQueue(scratch, audio);
+            verifyProviderCooldown(scratch);
 
             // Seed only the disposable test package. These files prove local playback, NOT live recording availability.
             assertPass("Preview cache starts empty", cache.mkdir());
@@ -265,8 +266,10 @@ public final class BlackBoxSmoke extends Instrumentation {
                         + " && document.querySelector('#bgAudioBar').hidden && document.querySelector('#bgAudio').paused"));
                 assertPass("One plan preserves the next two queue slots and does not contact a later entry", jsTrue(web,
                         "planLog.length===1 && planLog[0].selected.title==='The Fate of Ophelia' && planLog[0].upcoming.map(x=>x?.title).join('|')==='Locked out of Heaven|NUEVAYoL'"));
-                js(web, "window.releasePlan(); window.releasePlan=null");
-                awaitPreparedFixture(web, "The Fate of Ophelia", 1);
+                js(web, "musicQueue.list[musicQueue.idx]={...musicQueue.list[musicQueue.idx]};renderMusicQueue();"
+                        + "window.releasePlan();window.releasePlan=null");
+                awaitPreparedFixture(web, "The Fate of Ophelia", 1); // Same exact row, new JS object.
+                assertPass("Rebuilding a pending queue row does not abandon its one-tap play", jsTrue(web, "planLog.length===1"));
                 assertPass("The spinner clears and original artwork, player and queue controls remain visible", jsTrue(web,
                         "!document.querySelector('.music-ui-loading-v52') && document.querySelector('#bgArt').getAttribute('src')?.startsWith('/api/cover?')"
                                 + " && document.querySelector('#bgQueueToggle').offsetWidth>0 && document.querySelector('#bgSeek').offsetWidth>0"));
@@ -297,7 +300,8 @@ public final class BlackBoxSmoke extends Instrumentation {
                 tapWeb(web, missing);
                 await("An unavailable offline song stops cleanly with no substitute or source dialog", 9000,
                         () -> jsTrue(web, "musicQueue.list[musicQueue.idx]?.track==='NUEVAYoL' && document.querySelector('#bgAudioBar').hidden"
-                                + " && !document.querySelector('#bgAudio').src && !document.querySelector('.music-ui-loading-v52,dialog[open]')"));
+                                + " && !document.querySelector('#bgAudio').src && !document.querySelector('.music-ui-loading-v52,dialog[open]')"
+                                + " && document.querySelector('#toast.on')?.textContent.includes('Connect to the internet')"));
                 closeScreen(desktop);
                 desktop = launch(V90Activity.class, null);
                 Activity reopened = desktop;
@@ -341,7 +345,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         String playable = "(()=>{const a=document.querySelector('#bgAudio'), b=document.querySelector('#bgAudioBar');return a.src.startsWith('blob:https://blackbox.invalid/')"
                 + " && !b.hidden && getComputedStyle(b).display!=='none' && document.querySelector('#bgTitle').textContent==="
                 + JSONObject.quote(title) + " && Math.abs(a.duration-" + seconds + ")<=" + tolerance
-                + " && !a.paused && a.currentTime>" + from + "})()";
+                + " && !a.paused && !a.muted && a.volume>0 && a.readyState>=2 && !a.seeking && a.currentTime>" + from + "})()";
         try {
             await(title + " starts or seeks in the original audio player without another tap", timeout, () -> jsTrue(web, playable));
         } catch (AssertionError error) {
@@ -404,6 +408,26 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
     }
 
+    private void verifyProviderCooldown(File scratch) throws Exception {
+        JSONObject a = spec("limit:A", "A", "Fixture", "Album", 14, "");
+        JSONObject b = spec("limit:B", "B", "Fixture", "Album", 14, "");
+        java.util.concurrent.atomic.AtomicInteger attempts = new java.util.concurrent.atomic.AtomicInteger();
+        try (PreparedMusic limited = new PreparedMusic(new File(scratch, "limited"), (track, work, control) -> {
+            attempts.incrementAndGet();
+            throw new PreparedMusic.ProviderRateLimited();
+        }, background -> true)) {
+            JSONObject selected = limited.plan(1, a, new JSONArray().put(b), true);
+            String key = selected.getString("selected");
+            JSONObject result = limited.awaitSelection(key).getJSONObject("tracks").getJSONObject(key);
+            assertPass("A provider refusal wakes the selection waiter with a clear failure", "failed".equals(result.getString("state"))
+                    && result.getString("message").contains("rate-limiting"));
+            JSONObject blocked = limited.plan(2, b, new JSONArray(), true);
+            String next = blocked.getString("selected");
+            assertPass("Cooldown makes the next unprepared selection fail without another provider call",
+                    "failed".equals(blocked.getJSONObject("tracks").getJSONObject(next).getString("state")) && attempts.get() == 1);
+        }
+    }
+
     private static JSONObject spec(String ref, String title, String artist, String album, int seconds, String source) throws Exception {
         return new JSONObject().put("ref", ref).put("title", title).put("artist", artist).put("album", album)
                 .put("seconds", seconds).put("source", source);
@@ -426,14 +450,21 @@ public final class BlackBoxSmoke extends Instrumentation {
     }
 
     private void verifyMusicCandidate() throws Exception {
+        Context app = getTargetContext();
+        assertPass("Live tests use a fresh Music candidate, not an installed user library",
+                app.getPackageName().equals("com.blackboxstream.mobile.music") && !PreparedMusic.cacheDirectory(app).exists());
+        LiveMusic results = new LiveMusic();
         Activity desktop = launch(V90Activity.class, null);
         try {
             WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
             await("The v90 music shell is ready on a phone viewport", 18000,
-                    () -> jsTrue(web, "window.bbxAndroidOpen && document.querySelector('#heroSettings') && innerWidth <= 400"));
-            verifyOriginalMusic(web);
-            originalMusicVerified = true;
+                    () -> jsTrue(web, V90_READY + " && innerWidth <= 400"));
+            verifyOriginalMusic(web, results);
         } finally { closeScreen(desktop); }
+        if (!results.played.isEmpty()) verifyLiveOffline(app, results.played);
+        assertPass("Five cold catalogue recordings required: " + results.played.size() + " played. " + results.failures,
+                results.played.size() == 5 && results.failures.isEmpty());
+        originalMusicVerified = true;
     }
 
     /** Run the same public media acceptance on the non-debuggable standalone app. */
@@ -504,16 +535,35 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
     }
 
-    private void verifyOriginalMusic(WebView web) throws Exception {
-        // Capture only sanitized preparation failures inside the test. The product shows only the ring.
+    private static final class LiveMusic {
+        final List<String> failures = new java.util.ArrayList<>();
+        final List<LiveTrack> played = new java.util.ArrayList<>();
+    }
+
+    private static final class LiveTrack {
+        final String title, key;
+        final int seconds;
+        LiveTrack(String title, String key, int seconds) { this.title = title; this.key = key; this.seconds = seconds; }
+    }
+
+    private void verifyOriginalMusic(WebView web, LiveMusic results) throws Exception {
+        // Observe the actual Android bridge. This shim cannot supply source IDs or audio.
         js(web, "window.liveMusicResult={}; (()=>{const live=window.fetch;window.fetch=async (url,options)=>{"
+                + "const plan = url==='/api/mobile/music-helper/plan' && JSON.parse(options.body);"
                 + "const response=await live(url,options);if (response.ok && typeof url==='string' && url.startsWith('/api/mobile/music-helper')) {"
-                + "const result=await response.clone().json(); const row=result.tracks[result.selected];"
-                + "if(row) liveMusicResult[row.recording.title]={state:row.state,message:row.message,source:row.recording.source};}return response;};})()");
+                + "const result=await response.clone().json();const key=result.selected;const row=result.tracks?.[key];"
+                + "if(row){const t=row.recording.title,old=liveMusicResult[t];"
+                + "liveMusicResult[t]={key,state:row.state,message:row.message,source:row.recording.source,"
+                + "initialState:plan?.selected && plan.retry ? row.state : old?.initialState};}} return response;};})()");
         tapWeb(web, "#navMusic");
         await("Original Music shelves contain 14 genres and the original Trending Now card", 10000,
                 () -> jsTrue(web, "document.querySelectorAll('#musicGenreChips button').length===14 "
-                        + "&& document.querySelector('#music-shelf-trending-now [title=\"Play Espresso\"]')"));
+                        + "&& document.querySelector('#music-shelf-trending-now [title=\"Play The Fate of Ophelia\"]')"));
+        tryLiveTrack(web, results, "The Fate of Ophelia", "#music-shelf-trending-now [title='Play The Fate of Ophelia']", 226, true);
+        // If the first unpinned attempt was refused, respect the cooldown before testing the
+        // independent pinned route once. Never retrigger the refused recording during this run.
+        boolean waitForProvider = jsTrue(web, "liveMusicResult['The Fate of Ophelia']?.message?.includes('rate-limiting')");
+        long nextAttempt = SystemClock.elapsedRealtime() + (waitForProvider ? 61_000 : 0);
         js(web, "document.querySelector('#musicQuery').value='Sabrina Carpenter'");
         tapWeb(web, "#musicGo");
         String album = "[data-album-open-v63='1752214909']";
@@ -528,33 +578,80 @@ public final class BlackBoxSmoke extends Instrumentation {
                 () -> jsTrue(web, "!document.querySelector('#bgQueuePanel').hidden && "
                         + "document.querySelectorAll('#bgQueueList .bg-queue-title-v49')[6]?.textContent === 'Espresso'"));
         tapWeb(web, "#bgQueueClose");
-        java.util.List<String> failures = new java.util.ArrayList<>();
-        tryLiveTrack(web, failures, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", 175, false);
-        tryLiveTrack(web, failures, "Taste", ".music-album-tracklist-v63 .music-catalog-track-v63:first-child [data-track-play-v63]", 157, true);
+        if (waitForProvider) SystemClock.sleep(Math.max(0, nextAttempt - SystemClock.elapsedRealtime()));
+        tryLiveTrack(web, results, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", 175, false);
+        tryLiveTrack(web, results, "Taste", ".music-album-tracklist-v63 .music-catalog-track-v63:first-child [data-track-play-v63]", 157, true);
+        tryLiveTrack(web, results, "Sharpest Tool", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(4) [data-track-play-v63]", 218, true);
         tapWeb(web, "#musicClear");
         tapWeb(web, "#musicGenreChips [title='Open 30 Ghana Essentials picks']");
         await("Ghana Essentials shows its original 30 picks", 8000,
                 () -> jsTrue(web, "!document.querySelector('#viewMusicGenre').hidden && document.querySelectorAll('[data-genre-catalog] .music-genre-card-v50').length===30"));
-        tryLiveTrack(web, failures, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", 185, false);
-        assertPass("All three real tracks passed live audio: " + failures, failures.isEmpty());
+        tryLiveTrack(web, results, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", 185, false);
     }
 
-    private void tryLiveTrack(WebView web, List<String> failures, String title, String control, int seconds,
+    private void tryLiveTrack(WebView web, LiveMusic results, String title, String control, int seconds,
                               boolean discoveryRequired) throws Exception {
         String row = "liveMusicResult[" + JSONObject.quote(title) + "]";
+        long tapped = SystemClock.elapsedRealtime();
         try {
             tapWeb(web, control);
-            await(title + " receives a private audio file from the live engine", 178000, () -> {
+            await(title + " reaches the live helper on one tap", 7000, () -> jsTrue(web, row + "?.initialState!=null"));
+            assertPass(title + " began with no prepared audio and chose the expected lookup path",
+                    jsTrue(web, row + ".initialState!=='ready' && " + row + ".source" + (discoveryRequired ? "===''" : "!==''")));
+            await(title + " receives a private full recording", 46000, () -> {
                 if (jsTrue(web, row + "?.state==='failed'")) {
-                    throw new AssertionError(title + ": " + js(web, row + ".message"));
+                    String reason = js(web, row + ".message");
+                    await(title + " shows a failure reason and its Play ring clears", 4500,
+                            () -> jsTrue(web, "document.querySelector('#toast.on')?.textContent===" + JSONObject.quote(reason)
+                                    + " && !document.querySelector('.music-ui-loading-v52') && document.querySelector('#bgAudioBar').hidden"));
+                    throw new AssertionError(title + ": " + reason);
                 }
                 return jsTrue(web, row + "?.state==='ready'");
             });
-            if (discoveryRequired) assertPass(title + " used catalogue discovery, not a prelinked source", jsTrue(web, row + ".source===''"));
-            awaitAudio(web, title, seconds, 6, 1, 21000);
+            long ready = SystemClock.elapsedRealtime();
+            awaitAudio(web, title, seconds, 6, 1, 7500);
+            long advancing = SystemClock.elapsedRealtime() - tapped;
+            assertPass(title + " advances by the startup deadline", advancing <= 47000);
             js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
-            awaitAudio(web, title, seconds, 6, seconds * 0.63, 15000);
-        } catch (AssertionError blocked) { failures.add(blocked.getMessage()); }
+            awaitAudio(web, title, seconds, 6, seconds * 0.63, 10000);
+            String key = js(web, row + ".key");
+            assertPass(title + " is saved under its exact cache key", key.matches("[a-f0-9]{64}"));
+            tapWeb(web, "#bgClose");
+            await("Original player closes without deleting " + title, 7000,
+                    () -> jsTrue(web, "document.querySelector('#bgAudioBar').hidden && !localStorage.getItem(MUSIC_SESSION_KEY)"));
+            results.played.add(new LiveTrack(title, key, seconds));
+            android.util.Log.i("BlackBoxSmoke", "v90 provider " + title + ": ready in " + (ready - tapped) + "ms, advancing in " + advancing + "ms; full seek passed");
+        } catch (AssertionError blocked) {
+            String message = blocked.getMessage() + " (" + (SystemClock.elapsedRealtime() - tapped) + "ms)";
+            results.failures.add(message);
+            android.util.Log.i("BlackBoxSmoke", "v90 provider " + message);
+        }
+    }
+
+    private void verifyLiveOffline(Context app, List<LiveTrack> played) throws Exception {
+        Activity desktop = null;
+        try {
+            shell("cmd connectivity airplane-mode enable");
+            shell("svc wifi disable"); shell("svc data disable");
+            android.net.ConnectivityManager network = app.getSystemService(android.net.ConnectivityManager.class);
+            await("All network interfaces are disconnected before replay", 14000, () -> network.getActiveNetwork() == null);
+            desktop = launch(V90Activity.class, null);
+            Activity reopened = desktop;
+            WebView offline = ui(() -> findWeb(reopened.getWindow().getDecorView()));
+            await("The original shell reopens offline", 18000, () -> jsTrue(offline, V90_READY));
+            tapWeb(offline, "#navMusic");
+            for (LiveTrack track : played) {
+                String control = "#musicDownloadedList [data-musicid='" + track.key + "'] [data-libplay]";
+                await(track.title + " has its exact Downloads row", 10000,
+                        () -> jsTrue(offline, "document.querySelector(" + JSONObject.quote(control) + ")"));
+                tapWeb(offline, control);
+                awaitAudio(offline, track.title, track.seconds, 6, 1, 7500);
+                android.util.Log.i("BlackBoxSmoke", "v90 provider " + track.title + ": exact Downloads replay passed offline");
+            }
+        } finally {
+            closeScreen(desktop);
+            shell("cmd connectivity airplane-mode disable"); shell("svc data enable"); shell("svc wifi enable");
+        }
     }
 
     private MediaEntry verifyDirect(V90Api api, LibraryStore db, JSONObject records, String key, String title,

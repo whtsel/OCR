@@ -20,7 +20,6 @@ class LookupError(Exception):
 
 class Engine:
     def __init__(self, rows, videos):
-        self.params = {}
         self.rows = rows
         self.videos = videos
         self.downloads = []
@@ -30,14 +29,17 @@ class Engine:
         if download:
             raise AssertionError('A metadata lookup must never download')
         if url.startswith('ytsearch'):
-            assert self.params['extract_flat'] == 'in_playlist'
+            assert not process
             return {'entries': self.rows}
         assert not process
         video = url.split('=')[-1]
         self.inspections.append(video)
         if video not in self.videos:
             raise LookupError(video)
-        return self.videos[video]
+        result = self.videos[video]
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     def process_ie_result(self, info, *, download):
         assert download
@@ -64,8 +66,17 @@ class TestSelection(unittest.TestCase):
         self.assertEqual(engine.downloads, ['ORIGINAL123'])
         self.assertEqual(engine.downloads, marks)
         engine = Engine([dict(wrong, id=f'fake{idx:07d}') for idx in range(20)], {})
-        self.assertFalse(resolver.prepare(engine, *track, marks.append, LookupError))
+        with self.assertRaises(LookupError):
+            resolver.prepare(engine, *track, marks.append, LookupError)
         self.assertEqual(len(engine.inspections), resolver.INSPECTIONS)
+        self.assertFalse(engine.downloads)
+
+    def test_rate_limit_stops_candidate_inspection(self):
+        wrong = dict(official, id='NOTORIGINAL')
+        engine = Engine([wrong, official], {'NOTORIGINAL': LookupError('HTTP Error 429'), 'ORIGINAL123': official})
+        with self.assertRaisesRegex(LookupError, '429'):
+            resolver.prepare(engine, *track, lambda video: self.fail('must not fetch'), LookupError)
+        self.assertEqual(engine.inspections, ['NOTORIGINAL'])
         self.assertFalse(engine.downloads)
 
     def test_non_latin_recording_is_supported(self):

@@ -111,6 +111,11 @@ final class V90Api {
             }
             if (get && path.equals("/api/mobile/library")) return library();
             if (get && path.equals("/api/mobile/music-helper")) return ok(music.state());
+            if (get && path.equals("/api/mobile/music-helper/await")) return ok(music.awaitSelection(param(uri, "key", "")));
+            if (!get && path.equals("/api/mobile/music-helper/warm")) {
+                music.warm();
+                return ok(new JSONObject());
+            }
             if (!get && path.equals("/api/mobile/music-helper/forget")) {
                 music.forget(new JSONObject(body).getString("key"));
                 return ok(music.state());

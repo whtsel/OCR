@@ -45,6 +45,10 @@ public final class V90Activity extends Activity {
     private static final Set<String> MOBILE_ASSETS = new HashSet<>(Arrays.asList("android-api.js", "android-port.js", "android-catalogue.js", "android-music.js", "android-v90.css"));
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor work = new ThreadPoolExecutor(6, 6, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(80));
+    // Slow catalogue/source requests must not delay a Music Play or cancel message. Long waits
+    // release the engine monitor and use separate slots, so switching tracks never queues behind them.
+    private final ThreadPoolExecutor musicControl = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(16));
+    private final ThreadPoolExecutor musicWait = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(4));
     private volatile boolean closed;
     private boolean shownError, resumed;
     private WebView view;
@@ -91,6 +95,8 @@ public final class V90Activity extends Activity {
         closed = true;
         if (api != null) api.close();
         work.shutdownNow();
+        musicControl.shutdownNow();
+        musicWait.shutdownNow();
         if (view != null) {
             view.removeJavascriptInterface("BlackBoxAndroid");
             view.stopLoading(); root.removeView(view); view.destroy(); view = null;
@@ -111,7 +117,9 @@ public final class V90Activity extends Activity {
     private final class Bridge {
         @JavascriptInterface public void request(int id, String method, String path, String body) {
             if (closed || id <= 0) return;
-            try { work.execute(() -> reply(id, api.call(method, path, body))); }
+            ThreadPoolExecutor executor = path != null && path.startsWith("/api/mobile/music-helper")
+                    ? path.startsWith("/api/mobile/music-helper/await?") ? musicWait : musicControl : work;
+            try { executor.execute(() -> reply(id, api.call(method, path, body))); }
             catch (RejectedExecutionException busy) { reply(id, V90Api.fail(503, "BlackBox is handling too many requests. Try again in a moment.")); }
         }
         @JavascriptInterface public void open(String action, String id) {

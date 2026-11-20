@@ -3,12 +3,13 @@ package com.blackboxstream.mobile;
 import android.content.Context;
 import com.yausername.ffmpeg.FFmpeg;
 import com.yausername.youtubedl_android.YoutubeDL;
-import java.io.ByteArrayOutputStream;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -31,6 +32,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         nativeDir = new File(app.getApplicationInfo().nativeLibraryDir);
         script = new File(root, "yt-dlp/yt-dlp");
     }
+
+    @Override public void warm() throws Exception { start(); }
 
     private synchronized void start() throws Exception {
         if (ready) return;
@@ -69,8 +72,12 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
 
     @Override public PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control) throws Exception {
         if (control.cancelled) return null;
-        ArrayList<String> options = new ArrayList<>(Arrays.asList("--no-playlist", "--no-progress", "--socket-timeout", "12",
-                "--retries", "1", "--fragment-retries", "1", "--max-filesize", "24M", "-f", "bestaudio[ext=m4a]/bestaudio",
+        // Retain p11's audio extraction, preferring AAC to skip a re-encode when available.
+        // No video format fallback or retries after a refused connection.
+        ArrayList<String> options = new ArrayList<>(Arrays.asList("--no-playlist", "--no-progress", "--socket-timeout", "9",
+                "--retries", "0", "--extractor-retries", "0", "--fragment-retries", "0", "--abort-on-unavailable-fragments",
+                "--no-simulate", "--print", "before_dl:BBX_AUDIO_SELECTED", "--print", "post_process:BBX_AUDIO_DOWNLOADED",
+                "--max-filesize", "24M", "-f", "bestaudio[ext=m4a]/bestaudio",
                 "-x", "--audio-format", "m4a", "--audio-quality", "0", "-o", new File(scratch, "audio.%(ext)s").getAbsolutePath()));
         File audio = new File(scratch, "audio.m4a");
         if (!track.source.isEmpty()) {
@@ -95,9 +102,11 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
     }
 
     private String execute(PreparedMusic.Control control, File scratch, boolean discover, String... args) throws Exception {
+        final long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(PreparedMusic.PREPARE_TIMEOUT_SECONDS);
         try { start(); }
         catch (Exception | LinkageError failed) { throw new IOException("The bundled music helper could not start on this device."); }
         if (control.cancelled) return "";
+        if (System.nanoTime() >= until) throw new IOException("The helper took too long to start.");
         File python = new File(root, "packages/python/usr"), ffmpeg = new File(root, "packages/ffmpeg/usr");
         ArrayList<String> command = new ArrayList<>();
         command.add(new File(nativeDir, "libpython.so").getAbsolutePath());
@@ -119,23 +128,25 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         env.put("PYTHONUTF8", "1");
         env.put("TMPDIR", scratch.getAbsolutePath());
         env.put("PATH", "/system/bin:" + nativeDir.getAbsolutePath());
+        control.stage(discover ? "helper ready, search" : "helper ready, resolve");
         Process child;
         try { child = builder.start(); } catch (IOException denied) { throw new IOException("Android could not launch the bundled music runtime."); }
         control.attach(child);
-        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        StringBuffer captured = new StringBuffer();
         Thread reader = new Thread(() -> {
-            try (InputStream in = child.getInputStream()) {
-                byte[] chunk = new byte[4096];
-                for (int n; (n = in.read(chunk)) != -1;) {
-                    int keep = Math.min(n, 65536 - captured.size());
-                    if (keep > 0) captured.write(chunk, 0, keep);
+            try (BufferedReader lines = new BufferedReader(new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8))) {
+                for (String line; (line = lines.readLine()) != null;) {
+                    if ("BBX_AUDIO_SELECTED".equals(line)) control.stage("resolved, transfer audio");
+                    else if ("BBX_AUDIO_DOWNLOADED".equals(line)) control.stage("downloaded, finalize audio");
+                    // Capture bounded output for diagnostics; never impose a line reading limit on the child.
+                    int keep = Math.min(line.length(), 65536 - captured.length());
+                    if (keep > 0) captured.append(line, 0, keep).append('\n');
                 }
             } catch (IOException stopped) { /* Normal on cancellation. */ }
         }, "music-helper-output");
         reader.setDaemon(true);
         reader.start();
         try {
-            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(PreparedMusic.PREPARE_TIMEOUT_SECONDS);
             for (;;) {
                 try { child.exitValue(); break; }
                 catch (IllegalThreadStateException stillRunning) { Thread.sleep(200); }
@@ -147,8 +158,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             }
             reader.join(2000);
             if (control.cancelled) return "";
-            String output = new String(captured.toByteArray(), StandardCharsets.UTF_8);
-            if (child.exitValue() != 0) throw new IOException(providerFailure(output));
+            String output = captured.toString();
+            if (child.exitValue() != 0) throw providerFailure(output);
             return output;
         } finally {
             child.destroy();
@@ -156,13 +167,15 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         }
     }
 
-    private static String providerFailure(String output) {
+    private static IOException providerFailure(String output) {
         String message = output.toLowerCase(Locale.ROOT);
-        if (message.contains("sign in") || message.contains("not a bot")) return "The provider requires sign-in. No account session was used.";
-        if (message.contains("http error 429")) return "The provider rate-limited this recording. Try again later.";
-        if (message.contains("http error 403") || message.contains("unavailable")) return "The provider did not allow this recording.";
-        if (message.contains("bbx_no_exact_recording")) return "No exact full recording could be verified.";
-        if (message.contains("timed out") || message.contains("resolve") || message.contains("no address")) return "Could not complete the connection to the provider.";
-        return "The helper could not prepare this exact recording.";
+        if (message.contains("http error 429") || message.contains("bbx_provider_limited")) return new PreparedMusic.ProviderRateLimited();
+        String reason;
+        if (message.contains("sign in") || message.contains("not a bot")) reason = "The provider requires sign-in. No account session was used.";
+        else if (message.contains("http error 403") || message.contains("unavailable")) reason = "The provider did not allow this recording.";
+        else if (message.contains("bbx_no_exact_recording")) reason = "No exact full recording could be verified.";
+        else if (message.contains("timed out") || message.contains("resolve") || message.contains("no address")) reason = "Could not complete the connection to the provider.";
+        else reason = "The helper could not prepare this exact recording.";
+        return new IOException(reason);
     }
 }
