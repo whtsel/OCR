@@ -18,12 +18,11 @@ android {
         applicationId 'com.blackboxstream.mobile'
         minSdk 24
         targetSdk 35
-        versionCode 6
-        versionName '1.4.1'
+        versionCode 9
+        versionName '1.4.4-transport'
         testInstrumentationRunner 'com.blackboxstream.mobile.BlackBoxSmoke'
         if (musicHelper) {
-            versionCode 8
-            versionName '1.4.3-helper'
+            versionName '1.4.4'
             if (!(helperAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException('Unsupported helper ABI: ' + helperAbi)
             ndk { abiFilters += [helperAbi] }
         }
@@ -72,7 +71,7 @@ if (musicHelper) {
             if (preview) {
                 def label = previewRes.get().file('values/strings.xml').asFile
                 label.parentFile.mkdirs()
-                label.text = '<resources><string name="app_name">BlackBox Stream v90 Music Preview</string></resources>'
+                label.text = '<resources><string name="app_name">BlackBox Stream v90</string></resources>'
             }
         }
     }

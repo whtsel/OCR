@@ -38,7 +38,7 @@ def check(item):
             sha.update(block)
     if count < minimum:
         raise ValueError(f'{key}: incomplete file ({count:,} of at least {minimum:,} bytes)')
-    return key, {'bytes': count, 'sha256': sha.hexdigest()}
+    return key, {'url': url, 'bytes': count, 'sha256': sha.hexdigest()}
 
 
 def verify():

@@ -71,7 +71,6 @@ public final class LanShareActivity extends Activity {
     private void choose() {
         LibraryStore db = LibraryStore.get(this);
         List<MediaEntry> entries = new ArrayList<>();
-        entries.add(LibraryStore.SAMPLE_VIDEO); entries.add(LibraryStore.SAMPLE_AUDIO);
         for (MediaEntry e : db.transfers()) if (db.isOffline(e) && !e.bundled()) entries.add(e);
         CharSequence[] names = new CharSequence[entries.size()];
         for (int i = 0; i < names.length; i++) names[i] = entries.get(i).title;

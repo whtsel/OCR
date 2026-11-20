@@ -217,9 +217,6 @@ public final class PlaybackService extends Service {
             prepare(p -> {
                 if (store.isOffline(next)) {
                     try (FileInputStream file = new FileInputStream(store.offline(next))) { p.setDataSource(file.getFD()); }
-                } else if (next.bundled()) {
-                    int resource = "demo:orbit".equals(next.source) ? R.raw.orbit : R.raw.dawn;
-                    try (AssetFileDescriptor fd = getResources().openRawResourceFd(resource)) { p.setDataSource(fd); }
                 } else p.setDataSource(this, Uri.parse(next.source), java.util.Collections.singletonMap("User-Agent", MediaSources.USER_AGENT));
             });
         }

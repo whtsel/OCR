@@ -1,9 +1,9 @@
 package com.blackboxstream.mobile;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.media.MediaMetadataRetriever;
 import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -29,7 +29,6 @@ final class PreparedMusic implements AutoCloseable {
     static final int MAX_SECONDS = 1800;
     private static final long CACHE_BYTES = 256L * 1024 * 1024;
     private static final int CACHE_TRACKS = 64;
-    private static final String OPT_IN = "exact_music_helper";
     private static final String CACHE = "prepared-music-" + VERSION;
 
     static final class Track {
@@ -45,8 +44,8 @@ final class PreparedMusic implements AutoCloseable {
             seconds = fields.getInt("seconds");
             if (!source.isEmpty() && !videoId(source) || seconds < 0 || seconds > MAX_SECONDS
                     || source.isEmpty() && (album.isEmpty() || seconds == 0))
-                throw new IllegalArgumentException("Link the exact full recording first.");
-            // Full recording identity, not a title-only match. Explicitly changing a link changes its cache key.
+                throw new IllegalArgumentException("The catalogue does not identify an exact full recording.");
+            // Full recording identity, not a title-only match. The pinned source, when present, is part of that identity.
             try {
                 String spec = ref + "\u001f" + title + "\u001f" + artist + "\u001f" + album + "\u001f" + seconds + "\u001f" + source;
                 key = TorrentMeta.hex(MessageDigest.getInstance("SHA-256").digest(spec.getBytes(StandardCharsets.UTF_8)));
@@ -79,17 +78,14 @@ final class PreparedMusic implements AutoCloseable {
 
     static final class Control {
         volatile boolean cancelled;
-        volatile String phase;
         private Process process;
-        Control() { this("preparing"); }
-        Control(String phase) { this.phase = phase; }
         synchronized void attach(Process p) { if (cancelled) p.destroy(); else process = p; }
         synchronized void detach() { process = null; }
         synchronized void cancel() { cancelled = true; if (process != null) process.destroy(); }
     }
 
     private final File directory;
-    private final SharedPreferences preferences;
+    private Runnable unregisterNetwork;
     private final Runtime runtime;
     private final Network network;
     private final Map<String, Track> desired = new LinkedHashMap<>(), cached = new LinkedHashMap<>();
@@ -109,35 +105,46 @@ final class PreparedMusic implements AutoCloseable {
         ConnectivityManager manager = (ConnectivityManager) app.getSystemService(Context.CONNECTIVITY_SERVICE);
         Network network = background -> manager != null && manager.getActiveNetwork() != null
                 && (!background || !manager.isActiveNetworkMetered());
-        return new PreparedMusic(cacheDirectory(app), app.getSharedPreferences("music-preparation", Context.MODE_PRIVATE), runtime, network);
+        PreparedMusic engine = new PreparedMusic(cacheDirectory(app), runtime, network);
+        if (runtime != null && manager != null) {
+            ConnectivityManager.NetworkCallback callback = new ConnectivityManager.NetworkCallback() {
+                @Override public void onCapabilitiesChanged(android.net.Network net, NetworkCapabilities caps) { engine.networkChanged(); }
+                @Override public void onLost(android.net.Network net) { engine.networkChanged(); }
+            };
+            manager.registerDefaultNetworkCallback(callback);
+            engine.unregisterNetwork = () -> manager.unregisterNetworkCallback(callback);
+        }
+        return engine;
     }
 
     static File cacheDirectory(Context app) { return new File(app.getNoBackupFilesDir(), CACHE); }
 
-    PreparedMusic(File directory, SharedPreferences preferences, Runtime runtime, Network network) {
+    PreparedMusic(File directory, Runtime runtime, Network network) {
         this.directory = directory;
-        this.preferences = preferences;
         this.runtime = runtime;
         this.network = network;
     }
 
-    private boolean enabled() { return !closed && runtime != null && preferences.getBoolean(OPT_IN, false); }
+    private boolean available() { return !closed && runtime != null; }
 
-    synchronized void options(boolean enabled, boolean clear) throws IOException {
-        if (closed || runtime == null) return;
-        preferences.edit().putBoolean(OPT_IN, enabled && !clear).apply();
-        if (!enabled || clear) clearPlan();
-        if (clear) {
-            loadCache();
-            // Delete complete v90 entries, plus any files from the limited earlier helper preview.
-            File[] items = directory.listFiles((parent, name) -> name.matches("[a-f0-9]{64}|[A-Za-z0-9_-]{11}\\.m4a"));
-            if (items != null) for (File item : items) deleteScratch(item);
-            cached.clear(); loaded = false;
-        }
+    synchronized void networkChanged() {
+        if (!available()) return;
+        if (active != null && !requested.equals(running) && !network.allowed(true)) active.cancel();
+        dispatch();
+    }
+
+    synchronized void forget(String key) {
+        if (!available() || !key.matches("[a-f0-9]{64}")) return;
+        loadCache();
+        desired.remove(key);
+        failures.remove(key);
+        if (active != null && key.equals(running)) active.cancel();
+        deleteScratch(entry(key));
+        cached.remove(key);
     }
 
     synchronized JSONObject plan(int sequence, JSONObject selected, JSONArray upcoming, boolean retry) throws JSONException {
-        if (!enabled() || sequence <= epoch) return state();
+        if (!available() || sequence <= epoch) return state();
         if (upcoming.length() > 2) throw new IllegalArgumentException("Only the next two queue entries may be prepared.");
         Map<String, Track> next = new LinkedHashMap<>();
         String key = "";
@@ -163,7 +170,7 @@ final class PreparedMusic implements AutoCloseable {
 
     synchronized JSONObject state() throws JSONException {
         JSONObject rows = new JSONObject();
-        boolean on = enabled();
+        boolean on = available();
         if (runtime != null) loadCache();
         if (on) {
             dispatch();
@@ -172,18 +179,17 @@ final class PreparedMusic implements AutoCloseable {
             for (Track track : entries.values()) {
                 String key = track.key;
                 boolean prepared = readyFile(key) != null;
-                String state = prepared ? "ready" : key.equals(running) && !active.cancelled ? active.phase
+                String state = prepared ? "ready" : key.equals(running) && !active.cancelled ? "working"
                         : failures.containsKey(key) ? "failed" : desired.containsKey(key) ? "queued" : "idle";
                 rows.put(key, new JSONObject().put("state", state).put("recording", track.json())
                         .put("message", "failed".equals(state) ? failures.get(key) : ""));
             }
         }
-        return new JSONObject().put("available", runtime != null).put("enabled", on).put("stored", !cached.isEmpty())
-                .put("selected", requested).put("version", VERSION).put("unmetered", on && network.allowed(true)).put("tracks", rows);
+        return new JSONObject().put("available", on).put("selected", requested).put("sequence", epoch).put("tracks", rows);
     }
 
     synchronized File read(String key) {
-        if (!enabled()) return null;
+        if (!available()) return null;
         loadCache();
         File audio = readyFile(key);
         if (audio != null) audio.setLastModified(System.currentTimeMillis());
@@ -219,7 +225,7 @@ final class PreparedMusic implements AutoCloseable {
     }
 
     private Track nextJob() {
-        if (!enabled() || failures.containsKey(requested)) return null;
+        if (!available() || failures.containsKey(requested)) return null;
         for (Track track : desired.values()) {
             if (readyFile(track.key) != null || failures.containsKey(track.key)) continue;
             boolean background = !track.key.equals(requested);
@@ -247,7 +253,7 @@ final class PreparedMusic implements AutoCloseable {
                 track = nextJob();
                 if (track == null) { dispatching = false; return; }
                 running = track.key;
-                active = control = new Control(track.source.isEmpty() ? "matching" : "preparing");
+                active = control = new Control();
             }
             File scratch = null;
             String failure = null;
@@ -269,7 +275,7 @@ final class PreparedMusic implements AutoCloseable {
                     stream.write(new JSONObject().put("recording", track.json()).put("providerId", out.source).toString().getBytes(StandardCharsets.UTF_8));
                 }
                 synchronized (this) {
-                    if (!control.cancelled && enabled() && desired.containsKey(track.key)) {
+                    if (!control.cancelled && available() && desired.containsKey(track.key)) {
                         if (readyFile(track.key) != null) continue;
                         deleteScratch(entry(track.key));
                         if (!complete.renameTo(entry(track.key))) throw new IOException("Unable to store the prepared recording.");
@@ -342,5 +348,6 @@ final class PreparedMusic implements AutoCloseable {
         closed = true;
         clearPlan();
         worker.shutdownNow();
+        if (unregisterNetwork != null) { unregisterNetwork.run(); unregisterNetwork = null; }
     }
 }

@@ -34,8 +34,10 @@ public final class ServiceChecks {
         cards = Catalogue.music(URI.create(relay + "/ws/2"), Catalogue.Music.TRACKS, "Low Orbit");
         check("MusicBrainz search returns real-shaped metadata and a canonical listing", cards.size() == 1 && cards.get(0).musicBrainz()
                 && cards.get(0).listing().equals("https://musicbrainz.org/recording/a9b2b000-fef0-4444-9999-adababa00002"));
-        check("open catalogue includes immediately available offline samples", Catalogue.open(false).get(0).entry().bundled()
-                && Catalogue.open(true).get(0).entry().kind == MediaEntry.Kind.MUSIC);
+        JSONObject anime = Catalogue.anime(base, readToken, false, 2);
+        check("The v90 anime shelf uses only real TMDB title rows", anime.getJSONArray("items").length() == 1
+                && anime.getJSONArray("items").getJSONObject(0).getInt("id") == 102
+                && !anime.getJSONArray("items").getJSONObject(0).has("playable"));
 
         verifyV90Providers();
 

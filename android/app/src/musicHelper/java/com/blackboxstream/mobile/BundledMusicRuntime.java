@@ -136,13 +136,11 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         reader.start();
         try {
             long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(PreparedMusic.PREPARE_TIMEOUT_SECONDS);
-            File match = discover ? new File(scratch, "source-id") : null;
             for (;;) {
                 try { child.exitValue(); break; }
                 catch (IllegalThreadStateException stillRunning) { Thread.sleep(200); }
                 if (control.cancelled) return "";
                 if (System.nanoTime() >= until) throw new IOException("The recording took too long to prepare.");
-                if (match != null && match.isFile()) control.phase = "preparing";
                 File[] files = scratch.listFiles();
                 if (files != null) for (File f : files) if (f.length() > PreparedMusic.MAX_AUDIO)
                     throw new IOException("This recording is above the preparation size limit.");

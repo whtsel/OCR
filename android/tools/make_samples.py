@@ -9,7 +9,7 @@ import subprocess
 from PIL import Image, ImageDraw, ImageFont
 
 WIDTH, HEIGHT, FPS, SECONDS = 640, 360, 24, 14
-RAW = Path(__file__).resolve().parents[1] / 'app/src/main/res/raw'
+RAW = Path(__file__).resolve().parents[1] / 'app/src/androidTest/assets/fixtures'
 
 
 def make_art(font_dir, frames):

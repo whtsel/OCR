@@ -45,8 +45,6 @@ import org.json.JSONObject;
 public final class BlackBoxSmoke extends Instrumentation {
     private PlaybackService engine;
     private int checks;
-    private boolean liveVerified;
-    private String providerStatus = "";
     private boolean publicMediaVerified, originalMusicVerified;
     private Bundle fixtures;
     private final ServiceConnection binding = new ServiceConnection() {
@@ -66,13 +64,11 @@ public final class BlackBoxSmoke extends Instrumentation {
             if (fixtures != null && "yes".equals(fixtures.getString("helper_fixture"))) verifyHelperFixtures();
             else if (fixtures != null && "yes".equals(fixtures.getString("music_only"))) verifyMusicCandidate();
             else if (fixtures != null && "yes".equals(fixtures.getString("public_only"))) verifyCandidate();
-            else if (fixtures != null && "yes".equals(fixtures.getString("public_preview"))) verifyPublicPreview();
+            else if (fixtures != null && "yes".equals(fixtures.getString("public_preview"))) verifyPublicWithPlayer(getTargetContext());
             else verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
-                    + (liveVerified ? "PASS v90 Android: original search and source picker opened full Sintel, rendered and sought to 2:30 before the transfer finished\n" : "")
-                    + (publicMediaVerified ? "PASS Android in-app playback and complete downloads: Sintel and The Dull Sword (bytes matched public files; both played with networking off)\n" : "")
-                    + (originalMusicVerified ? "PASS Original v90 Music: Espresso from Short n’ Sweet and Kwaku the Traveller from Ghana Essentials played the exact official recordings in BlackBox\n" : "")
-                    + providerStatus);
+                    + (publicMediaVerified ? "PASS Android imported media: Sintel and The Dull Sword matched public files and both played with networking off\n" : "")
+                    + (originalMusicVerified ? "PASS Original v90 Music: both selected full recordings advanced and sought in the original audio player\n" : ""));
             finish(Activity.RESULT_OK, result);
         } catch (Throwable bad) {
             result.putString("stream", "\nFAIL BlackBox Android smoke: " + android.util.Log.getStackTraceString(bad) + "\n");
@@ -85,6 +81,14 @@ public final class BlackBoxSmoke extends Instrumentation {
         LibraryStore db = LibraryStore.get(app);
         MediaEntry fixture = new MediaEntry("BlackBox smoke only", MediaEntry.Kind.MOVIE,
                 "content://" + app.getPackageName() + ".fixture/dawn.mp4");
+        MediaEntry audioFixture = new MediaEntry("BlackBox audio smoke only", MediaEntry.Kind.MUSIC,
+                "content://" + app.getPackageName() + ".fixture/orbit.m4a");
+        File fixtureDir = new File(app.getCacheDir(), "test-media");
+        if (!fixtureDir.isDirectory() && !fixtureDir.mkdir()) throw new java.io.IOException("Cannot stage fixtures");
+        copyFixture("dawn.mp4", new File(fixtureDir, "dawn.mp4"));
+        copyFixture("orbit.m4a", new File(fixtureDir, "orbit.m4a"));
+        SmokeMediaProvider.available = true;
+        db.save(fixture, false); db.save(audioFixture, false);
         Activity launcher = null;
         Activity sample = null;
         Activity offline = null;
@@ -93,27 +97,14 @@ public final class BlackBoxSmoke extends Instrumentation {
             launcher = launch(MainActivity.class, null);
             Activity visible = launcher;
             bound = ui(() -> app.bindService(new Intent(app, PlaybackService.class), binding, Context.BIND_AUTO_CREATE));
-            assertPass("Cold launch opens a populated film shelf", ui(() -> find(visible.getWindow().getDecorView(), "Open cinema") != null
-                    && find(visible.getWindow().getDecorView(), "▶  Watch now") != null
-                    && find(visible.getWindow().getDecorView(), "Tears of Steel") != null));
-            for (Cinema.Film film : Cinema.FILMS) {
-                TorrentMeta meta = film.metadata(app);
-                assertPass(film.title + " has an exact playable torrent and HTTP source", meta.items.get(film.index).playable()
-                        && film.directEntry(app).remote() && Arrays.equals(meta.hash, TorrentMeta.magnet(film.magnet()).hash));
-            }
-            screenFromHome(visible, "Sources", FilmActivity.class, "▶  Watch torrent");
-            verifyV90OnAndroid(app, db, fixtures != null && "yes".equals(fixtures.getString("live_cinema")));
+            assertPass("Device Library has no preloaded cinema shelf or video sample", ui(() -> find(visible.getWindow().getDecorView(), "Open cinema") == null
+                    && find(visible.getWindow().getDecorView(), "▶  Play sample") == null));
+            verifyTmdbShell(app);
             screenFromHome(visible, "Torrents", TorrentActivity.class, "Open a torrent");
-            screenFromHome(visible, "Discover", DiscoverActivity.class, "Play on-device sample  ›");
+            screenFromHome(visible, "Discover", DiscoverActivity.class, "Discover");
             screenFromHome(visible, "Local Share", LanShareActivity.class, "Connect securely");
             screenFromHome(visible, "Community rooms  ›", CommunityActivity.class, "Join room");
-            ActivityMonitor monitor = addMonitor(PlayerActivity.class.getName(), null, false);
-            assertPass("Home sample control", ui(() -> {
-                TextView sampleButton = find(visible.getWindow().getDecorView(), "▶  Play sample");
-                return sampleButton != null && sampleButton.performClick();
-            }));
-            sample = waitForMonitorWithTimeout(monitor, 10000);
-            assertPass("Tap opens native PlayerActivity", sample != null);
+            sample = launch(PlayerActivity.class, fixture.id);
             try {
                 await("sample decodes H.264 and playback advances", 22000, () -> ui(() -> engine != null && engine.ready()
                         && engine.videoWidth() == 640 && engine.renderedVideo() && engine.duration() >= 13500 && engine.playing() && engine.position() > 500));
@@ -125,7 +116,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             ui(() -> { engine.pause(); engine.seek(6500); return null; });
             await("native seek completes", 6000, () -> ui(() -> !engine.playing() && !engine.seeking()
                     && Math.abs(engine.position() - 6500) < 1000));
-            assertPass("watch position is persisted", db.get(LibraryStore.SAMPLE_VIDEO.id).positionMs >= 5500);
+            assertPass("watch position is persisted", db.get(fixture.id).positionMs >= 5500);
             Activity sampleScreen = sample;
             ui(() -> { sampleScreen.finish(); return null; });
             sample = null;
@@ -135,7 +126,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             await("JobScheduler imports and validates a phone media copy", 60000,
                     () -> db.isOffline(fixture) && db.get(fixture.id).transfer == -1);
             assertPass("offline item persisted as saved", db.get(fixture.id).saved);
-            try (InputStream original = app.getResources().openRawResource(R.raw.dawn);
+            try (InputStream original = getContext().getAssets().open("fixtures/dawn.mp4");
                  InputStream copy = new FileInputStream(db.offline(fixture))) {
                 assertPass("offline file is an exact copy", Arrays.equals(sha(original), sha(copy)));
             }
@@ -152,9 +143,8 @@ public final class BlackBoxSmoke extends Instrumentation {
                 verifyTorrentOnAndroid(app, db, visible);
                 verifyServicesOnAndroid();
             }
-            if (liveVerified) verifyLiveProviders(app);
             if (fixtures != null && fixtures.containsKey("public_media")) verifyPublicMedia(app, db);
-            Activity audio = launch(PlayerActivity.class, LibraryStore.SAMPLE_AUDIO.id);
+            Activity audio = launch(PlayerActivity.class, audioFixture.id);
             try {
                 await("audio plays through foreground media session", 16000, () -> ui(() -> engine.ready() && engine.playing()
                         && !engine.video() && engine.inBackgroundSession() && engine.position() > 500));
@@ -168,82 +158,41 @@ public final class BlackBoxSmoke extends Instrumentation {
             if (bound) ui(() -> { if (engine != null) engine.close(); app.unbindService(binding); return null; });
             SmokeMediaProvider.available = true;
             Downloads.deleteCopy(app, fixture);
-            if (db.get(fixture.id) != null) db.getWritableDatabase().delete("media", "id=?", new String[] {fixture.id});
+            db.getWritableDatabase().delete("media", "id=? OR id=?", new String[] {fixture.id, audioFixture.id});
+            PreparedMusic.deleteScratch(fixtureDir);
         }
     }
 
-    private void verifyV90OnAndroid(Context app, LibraryStore db, boolean live) throws Exception {
-        Cinema.Film film = Cinema.FILMS.get(0);
-        MediaEntry entry = film.torrentEntry();
-        if (live) Downloads.deleteCopy(app, entry);
-        V90Api local = new V90Api(app);
+    private static final String V90_READY = "window.bbxAndroidOpen && document.querySelector('#engineDot.ok') && document.querySelector('#heroSettings')";
+    private void verifyTmdbShell(Context app) throws Exception {
+        V90Api api = new V90Api(app);
         try {
-            V90Api.Reply films = local.call("GET", "/api/mobile/open-films", "");
-            assertPass("The v90 API returns the real open-film cards: " + films.status + (films.status != 200 ? " / " + films.value.optString("error") : ""),
-                    films.status == 200 && films.value.getJSONArray("results").length() == 4);
-            V90Api.Reply title = local.call("GET", "/api/tmdb/movie/open_sintel", "");
-            assertPass("v90 keyless detail correctly maps to the selected full film", title.status == 200 && "Sintel".equals(title.value.optString("title")));
-            String lookup = local.call("POST", "/api/content-resolve", new JSONObject().put("uri", film.magnet()).toString()).value.getString("job");
-            String status = "/api/content-job/" + lookup;
-            await("v90 manifest lookup binds the original info hash to the requested job", 7000, () -> {
-                JSONObject value = local.call("GET", status, "").value;
-                JSONObject data = value.optJSONObject("result");
-                return data != null && lookup.equals(data.optString("job")) && film.hash.equals(data.optString("id"));
-            });
-            String selection = new JSONObject().put("job", lookup).toString();
-            assertPass("Picking a different info hash cannot start another torrent", local.call("POST",
-                    "/api/torrent/" + Cinema.FILMS.get(1).hash + "/select/1", selection).status == 409);
-            local.call("POST", status + "/cancel", "{}");
-            assertPass("Cancelling a v90 source cannot select or queue its file", local.call("POST",
-                    "/api/torrent/" + film.hash + "/select/5", selection).status == 409);
-        } finally { local.close(); }
+            assertPass("Keyless TMDB routes require a credential, not a mock search result",
+                    api.call("GET", "/api/tmdb/search/movie?query=Sintel", "").status == 412
+                            && api.call("GET", "/api/anime/top", "").status == 412);
+            assertPass("Old sample movie ids and direct demo actions are not playable",
+                    api.call("GET", "/api/tmdb/movie/open_sintel", "").status == 404
+                            && api.call("GET", "/api/mobile/open-films", "").status != 200
+                            && api.call("GET", "/api/mobile/open-anime", "").status != 200
+                            && api.call("POST", "/api/mobile/playable", "{\"key\":\"film:sintel\"}").status != 200);
+        } finally { api.close(); }
         Activity desktop = launch(V90Activity.class, null);
-        Activity screen = null;
-        WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
         try {
-            assertPass("The Android v90 launcher hosts the bundled Windows interface", web != null);
-            await("Android loads the shipped DOMPurify sanitizer as a local asset", 12000,
-                    () -> jsTrue(web, "window.DOMPurify?.isSupported === true"));
-            await("Original v90 boot and Open films row complete on Android WebView", 18000, () -> jsTrue(web,
-                    "document.title.includes('BlackBox Stream v90') && document.querySelector('#rows .card') && document.querySelector('#engineDot.ok') && !!window.bbxExpiryV90"));
-            assertPass("Original v90 search accepts a full title", jsTrue(web,
-                    "(document.querySelector('#searchInput').value='Sintel',document.querySelector('#searchBtn').click(),true)"));
-            await("Original browse cards show the exact title", 12000, () -> jsTrue(web,
-                    "!document.querySelector('#viewBrowse').hidden && Array.from(document.querySelectorAll('#browseGrid .card')).some(c=>c.textContent.includes('Sintel'))"));
-            assertPass("A v90 result opens its original Detail view", jsTrue(web,
-                    "(Array.from(document.querySelectorAll('#browseGrid .card')).find(c=>c.textContent.includes('Sintel')).click(),true)"));
-            await("Native adapter supplies the exact source to the original v90 source rows", 12000, () -> jsTrue(web,
-                    "!document.querySelector('#viewDetail').hidden && !!Array.from(document.querySelectorAll('#sourcesBox .src')).find(c=>c.title.includes('Blender open film'))"));
-            assertPass("Finding sources does not queue a movie transfer", !live || !db.isOffline(entry) && (db.get(entry.id) == null || db.get(entry.id).transfer < 0));
-            if (!live) return;
-            ActivityMonitor monitor = addMonitor(PlayerActivity.class.getName(), null, false);
-            assertPass("Playing the v90 source starts the exact manifest lookup", jsTrue(web,
-                    "(Array.from(document.querySelectorAll('#sourcesBox .src')).find(c=>c.title.includes('Blender open film')).click(),true)"));
-            screen = waitForMonitorWithTimeout(monitor, 18000);
-            assertPass("The original v90 chooser opens a native Android player", screen != null);
-            await("Sintel renders from the public torrent web seed before download completes", 65000,
-                    () -> ui(() -> engine != null && engine.entry() != null && entry.id.equals(engine.entry().id)
-                            && engine.ready() && engine.duration() > 720000 && engine.videoWidth() > 640
-                            && engine.renderedVideo() && engine.playing() && engine.position() > 750 && !db.isOffline(entry)));
-            ui(() -> { engine.seek(150000); return null; });
-            await("Sintel seeks to a later part of the full film, still before completion", 22000,
-                    () -> ui(() -> engine.playing() && !engine.seeking() && engine.position() >= 149000 && !db.isOffline(entry)));
-            liveVerified = true;
-        } catch (AssertionError problem) {
-            MediaEntry row = db.get(entry.id);
-            String page = web == null ? "no WebView" : js(web, "JSON.stringify({url:location.href, title:document.title, adapter:typeof window.bbxAndroidOpen, view:window.__BBX_STATE__?.view, rows:document.querySelector('#rows')?.innerText.slice(0,200), tmdb:window.__BBX_STATE__?.tmdb, hero:document.querySelector('#hero')?.innerText.slice(0,150), engine:document.querySelector('#engineDot')?.className, sources:document.querySelector('#sourcesBox')?.innerText.slice(0,160)})");
-            throw new AssertionError(problem.getMessage() + "; page=" + page + "; player=" + ui(() -> engine == null ? "unbound" : engine.failure())
-                    + "; transfer=" + (row == null ? "not queued" : row.transferError + " / " + Downloads.received(db, row) + " verified bytes"), problem);
-        } finally {
-            Activity player = screen;
-            ui(() -> { if (player != null) player.finish(); if (engine != null) engine.close(); desktop.finish(); return null; });
-            if (live) {
-                Downloads.deleteCopy(app, entry);
-                db.getWritableDatabase().delete("media", "id=?", new String[] {entry.id});
-                TorrentJobs.descriptor(app, film.hash).delete();
-            }
-            waitForIdleSync();
-        }
+            WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
+            checkKeylessHome(web);
+            js(web, "document.querySelector('#searchInput').value='Sintel'");
+            tapWeb(web, "#searchBtn");
+            await("Streaming search asks for TMDB and shows no sample card", 8000, () -> jsTrue(web,
+                    "!document.querySelector('#viewBrowse').hidden && !document.querySelector('#browseGrid .card') && document.querySelector('#browseGrid').textContent.includes('TMDB key')"));
+            tapWeb(web, "[data-nav=anime]");
+            assertPass("Anime uses the same key requirement and never injects an archive shelf", jsTrue(web,
+                    "!document.querySelector('#androidAnimeArchive,#browseGrid .card') && document.querySelector('#browseGrid').textContent.includes('TMDB key')"));
+        } finally { closeScreen(desktop); }
+    }
+
+    private void checkKeylessHome(WebView web) throws Exception {
+        await("Original v90 boot shows TMDB setup, not demo movies", 18000, () -> jsTrue(web,
+                V90_READY + " && document.title.includes('BlackBox Stream v90') && window.DOMPurify?.isSupported && !document.querySelector('#rows .card')"));
     }
 
     /** Tests the real helper loader, isolated queue worker, and actual v90 WebView using only built-in fixture media. */
@@ -257,14 +206,13 @@ public final class BlackBoxSmoke extends Instrumentation {
         File root = app.getNoBackupFilesDir();
         File scratch = new File(root, "helper-smoke");
         File cache = PreparedMusic.cacheDirectory(app);
-        android.content.SharedPreferences prefs = app.getSharedPreferences("music-preparation", Context.MODE_PRIVATE);
         assertPass("Prepare a fresh test directory", scratch.mkdir());
         Activity desktop = null;
         try {
             String installed = (String) run.invoke(instance, new PreparedMusic.Control(), scratch, new String[] {"--version"});
             assertPass("Pinned Android Python runtime executes yt-dlp 2026.10.26", PreparedMusic.VERSION.equals(installed.trim()));
             File video = new File(scratch, "fixture.mp4");
-            copyRaw(app, R.raw.dawn, video);
+            copyFixture("dawn.mp4", video);
             run.invoke(instance, new PreparedMusic.Control(), scratch, new String[] {"--enable-file-urls", "-x", "--audio-format", "m4a",
                     "-o", new File(scratch, "audio.%(ext)s").getPath(), video.toURI().toString()});
             File audio = new File(scratch, "audio.m4a");
@@ -274,31 +222,50 @@ public final class BlackBoxSmoke extends Instrumentation {
                 PreparedMusic.verifyAudio(audio, 175);
                 throw new AssertionError("Short fixture accepted as a 175-second recording");
             } catch (java.io.IOException expected) { checks++; }
-            verifyPreparationQueue(app, scratch, audio);
+            verifyPreparationQueue(scratch, audio);
 
             // Seed only the disposable test package. These files prove local playback, NOT live recording availability.
             assertPass("Preview cache starts empty", cache.mkdir());
-            seedPreparedFixture(app, cache, spec("pick:3579685431", "The Fate of Ophelia", "Taylor Swift", "The Life of a Showgirl", 226, ""));
-            seedPreparedFixture(app, cache, spec("pick:62724015", "Locked out of Heaven", "Bruno Mars", "Unorthodox Jukebox", 233, ""));
+            seedPreparedFixture(cache, spec("pick:3579685431", "The Fate of Ophelia", "Taylor Swift", "The Life of a Showgirl", 226, ""));
+            seedPreparedFixture(cache, spec("pick:62724015", "Locked out of Heaven", "Bruno Mars", "Unorthodox Jukebox", 233, ""));
             desktop = launch(V90Activity.class, null);
             Activity shown = desktop;
             WebView web = ui(() -> findWeb(shown.getWindow().getDecorView()));
-            await("v90 preview opens the original library and genres", 18000,
-                    () -> jsTrue(web, "window.bbxAndroidOpen && document.querySelector('#rows .card')"));
+            checkKeylessHome(web);
             tapWeb(web, "#navMusic");
-            await("The Music opt-in is present, with the original fourteen genres", 8000,
-                    () -> jsTrue(web, "document.querySelector('#androidMusicHelper')?.hidden===false && document.querySelectorAll('#musicGenreChips button').length===14"));
-            tapWeb(web, "#androidMusicHelperToggle");
-            tapWeb(web, "#androidMusicHelperConsent .primary");
-            await("Two opted-in cached fixtures are ready", 8000, () -> jsTrue(web, "document.querySelectorAll('#androidPreparedMusic button').length===2"));
+            await("Original Music has fourteen genres and its original downloads, not a preparation shelf", 10000,
+                    () -> jsTrue(web, "document.querySelectorAll('#musicGenreChips button').length===14 && document.querySelector('#musicDownloadedList')"
+                            + " && !document.querySelector('#androidMusicHelper,#androidAudioLibrary,#androidPreparedMusic')"));
+            // Hold the actual bridge reply long past a transient user gesture, while keeping the
+            // production transport, spinner and audio decoder. No second tap is permitted.
+            js(web, "window.planLog=[];window.holdNextPlan=true;window.releasePlan=null;"
+                    + "(()=>{const fetchLive=window.fetch;window.fetch=(url,options)=>{const result=fetchLive(url,options);"
+                    + "if (url!=='/api/mobile/music-helper/plan') return result;"
+                    + "const plan=JSON.parse(options.body);planLog.push(plan);"
+                    + "if (plan.selected && window.holdNextPlan) {window.holdNextPlan=false;return result.then(reply=>new Promise(resolve=>{window.releasePlan=()=>resolve(reply)}))}return result}})()");
             shell("cmd connectivity airplane-mode enable");
             shell("svc wifi disable"); shell("svc data disable");
             try {
                 android.net.ConnectivityManager network = app.getSystemService(android.net.ConnectivityManager.class);
                 await("Test device is offline", 14000, () -> network.getActiveNetwork() == null);
-                tapWeb(web, "#music-shelf-trending-now [title='Play The Fate of Ophelia']");
+                String ophelia = "#music-shelf-trending-now [title='Play The Fate of Ophelia']";
+                String locked = "#music-shelf-trending-now [title='Play Locked out of Heaven']";
+                String missing = "#music-shelf-trending-now [title='Play NUEVAYoL']";
+                js(web, "window.musicMessageBeforePlay=document.querySelector('#musicMsg').textContent");
+                tapWeb(web, ophelia);
+                await("The original Play control shows only its loading ring while audio is pending", 7000,
+                        () -> jsTrue(web, spinnerOnly(ophelia) + " && window.releasePlan && document.querySelector('#bgAudioBar').hidden"));
+                SystemClock.sleep(6200);
+                assertPass("The wait does not open a video, panel, or progress message", jsTrue(web, spinnerOnly(ophelia)
+                        + " && document.querySelector('#bgAudioBar').hidden && document.querySelector('#bgAudio').paused"));
+                assertPass("One plan preserves the next two queue slots and does not contact a later entry", jsTrue(web,
+                        "planLog.length===1 && planLog[0].selected.title==='The Fate of Ophelia' && planLog[0].upcoming.map(x=>x?.title).join('|')==='Locked out of Heaven|NUEVAYoL'"));
+                js(web, "window.releasePlan(); window.releasePlan=null");
                 awaitPreparedFixture(web, "The Fate of Ophelia", 1);
-                assertPass("The original queue is still in order and includes arbitrary v90 tracks", jsTrue(web,
+                assertPass("The spinner clears and original artwork, player and queue controls remain visible", jsTrue(web,
+                        "!document.querySelector('.music-ui-loading-v52') && document.querySelector('#bgArt').getAttribute('src')?.startsWith('/api/cover?')"
+                                + " && document.querySelector('#bgQueueToggle').offsetWidth>0 && document.querySelector('#bgSeek').offsetWidth>0"));
+                assertPass("The original queue is still in order and includes previously unlisted v90 tracks", jsTrue(web,
                         "musicQueue.list[musicQueue.idx+1].track==='Locked out of Heaven' && musicQueue.list[musicQueue.idx+2].track==='NUEVAYoL'"));
                 js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
                 awaitPreparedFixture(web, "The Fate of Ophelia", 16.3);
@@ -306,46 +273,71 @@ public final class BlackBoxSmoke extends Instrumentation {
                 await("Pause is available in the visible original player", 6000, () -> jsTrue(web, "document.querySelector('#bgAudio').paused"));
                 tapWeb(web, "#bgPlayBtn");
                 awaitPreparedFixture(web, "The Fate of Ophelia", 17);
-                // Completion advances to the next actual catalogue row without swapping the queue.
                 js(web, "document.querySelector('#bgAudio').currentTime = document.querySelector('#bgAudio').duration - 0.25");
                 awaitPreparedFixture(web, "Locked out of Heaven", 1);
+
+                js(web, "window.holdNextPlan=true");
+                tapWeb(web, ophelia);
+                await("A second pending request holds its original spinner", 7000,
+                        () -> jsTrue(web, spinnerOnly(ophelia) + " && window.releasePlan"));
+                tapWeb(web, locked);
+                awaitPreparedFixture(web, "Locked out of Heaven", 1);
+                js(web, "window.releasePlan(); window.releasePlan=null");
+                SystemClock.sleep(700);
+                assertPass("Late reply cannot revive the cancelled track or its spinner", jsTrue(web,
+                        "document.querySelector('#bgTitle').textContent==='Locked out of Heaven' && !document.querySelector('.music-ui-loading-v52')"));
+                tapWeb(web, missing);
+                await("An unavailable offline song stops cleanly with no substitute or source dialog", 9000,
+                        () -> jsTrue(web, "musicQueue.list[musicQueue.idx]?.track==='NUEVAYoL' && document.querySelector('#bgAudioBar').hidden"
+                                + " && !document.querySelector('#bgAudio').src && !document.querySelector('.music-ui-loading-v52,dialog[open]')"));
                 closeScreen(desktop);
                 desktop = launch(V90Activity.class, null);
                 Activity reopened = desktop;
                 WebView offline = ui(() -> findWeb(reopened.getWindow().getDecorView()));
-                await("Preview relaunches with networking still off", 18000,
-                        () -> jsTrue(offline, "window.bbxAndroidOpen && document.querySelector('#rows .card')"));
+                checkKeylessHome(offline);
                 tapWeb(offline, "#navMusic");
-                await("Both unpinned catalogue tracks remain available after relaunch", 10000,
-                        () -> jsTrue(offline, "document.querySelectorAll('#androidPreparedMusic button').length===2"));
-                js(offline, "Array.from(document.querySelectorAll('#androidPreparedMusic button')).find(b=>b.textContent.includes('Locked out of Heaven')).id='smokePrepared'");
-                tapWeb(offline, "#smokePrepared");
+                await("Both recordings are in the original offline downloads after reopening", 10000,
+                        () -> jsTrue(offline, "musicDownloads.filter(t=>t.offline).length===2 && document.querySelector('#musicDownloadedList [data-libplay]')"));
+                js(offline, "Array.from(document.querySelectorAll('#musicDownloadedList .music-library-item-v47')).find(row=>row.textContent.includes('Locked out of Heaven')).querySelector('[data-libplay]').id='smokeSaved'");
+                tapWeb(offline, "#smokeSaved");
                 awaitPreparedFixture(offline, "Locked out of Heaven", 1);
             } finally {
                 shell("cmd connectivity airplane-mode disable"); shell("svc data enable"); shell("svc wifi enable");
             }
         } finally {
             closeScreen(desktop);
-            prefs.edit().clear().commit();
             PreparedMusic.deleteScratch(cache);
             PreparedMusic.deleteScratch(scratch);
         }
     }
 
+    private static String spinnerOnly(String selector) {
+        return "(()=>{const b=document.querySelector(" + JSONObject.quote(selector) + ");return b?.classList.contains('music-ui-loading-v52')"
+                + " && b.getAttribute('aria-busy')==='true' && getComputedStyle(b,'::after').animationName!=='none' && !b.dataset.loadingLabel"
+                + " && document.querySelector('#musicSourcePopup').hidden && !document.querySelector('dialog[open],#androidMusicSource,#androidMusicHelper')"
+                + " && document.querySelector('#musicMsg').textContent===window.musicMessageBeforePlay})()";
+    }
+
     private void awaitPreparedFixture(WebView web, String title, double from) throws Exception {
-        String playable = "(()=>{const a=document.querySelector('#bgAudio'), b=document.querySelector('#bgAudioBar');return a?.src.startsWith('blob:https://blackbox.invalid/') && !b.hidden && getComputedStyle(b).display!=='none' && document.querySelector('#bgTitle').textContent==="
-                + JSONObject.quote(title) + " && a.duration > 23 && a.duration < 25 && !a.paused && a.currentTime > " + from + "})()";
+        awaitAudio(web, title, 24, 1, from, 14000);
+    }
+
+    private void awaitAudio(WebView web, String title, int seconds, int tolerance, double from, int timeout) throws Exception {
+        String playable = "(()=>{const a=document.querySelector('#bgAudio'), b=document.querySelector('#bgAudioBar');return a.src.startsWith('blob:https://blackbox.invalid/')"
+                + " && !b.hidden && getComputedStyle(b).display!=='none' && document.querySelector('#bgTitle').textContent==="
+                + JSONObject.quote(title) + " && Math.abs(a.duration-" + seconds + ")<=" + tolerance
+                + " && !a.paused && a.currentTime>" + from + "})()";
         try {
-            await(title + " fixture loads into the v90 audio player", 12000,
-                    () -> jsTrue(web, "document.querySelector('#bgAudio').readyState>=2 && document.querySelector('#bgTitle').textContent===" + JSONObject.quote(title)));
-            if (jsTrue(web, "document.querySelector('#bgAudio').paused")) tapWeb(web, "#bgPlayBtn");
-            await(title + " fixture decodes and advances from " + from, 10000, () -> jsTrue(web, playable));
+            await(title + " starts or seeks in the original audio player without another tap", timeout, () -> jsTrue(web, playable));
         } catch (AssertionError error) {
-            throw new AssertionError(error.getMessage() + ": " + js(web, "JSON.stringify({blob:document.querySelector('#bgAudio').src.startsWith('blob:'),error:document.querySelector('#bgAudio').error?.code,duration:document.querySelector('#bgAudio').duration,time:document.querySelector('#bgAudio').currentTime,status:document.querySelector('#musicMsg').textContent})"),error);
+            throw new AssertionError(error.getMessage() + ": " + js(web,
+                    "JSON.stringify({title:document.querySelector('#bgTitle').textContent,blob:document.querySelector('#bgAudio').src.startsWith('blob:'),"
+                            + "error:document.querySelector('#bgAudio').error?.code,duration:document.querySelector('#bgAudio').duration,time:document.querySelector('#bgAudio').currentTime,"
+                            + "busy:document.querySelector('.music-ui-loading-v52')?.outerHTML.slice(0,150),paused:document.querySelector('#bgAudio').paused})"), error);
         }
     }
 
-    private void verifyPreparationQueue(Context app, File scratch, File audio) throws Exception {
+    private void verifyPreparationQueue(File scratch, File audio) throws Exception {
         PreparedMusic.Track a = new PreparedMusic.Track(spec("test:A", "A", "Fixture", "Album", 14, ""));
         PreparedMusic.Track b = new PreparedMusic.Track(spec("test:B", "B", "Fixture", "Album", 14, ""));
         PreparedMusic.Track c = new PreparedMusic.Track(spec("test:C", "C", "Fixture", "Album", 14, ""));
@@ -363,17 +355,14 @@ public final class BlackBoxSmoke extends Instrumentation {
             return new PreparedMusic.Result(local, track.key.equals(d.key) ? "ddddddddddd" : "aaaaaaaaaaa");
         };
         File dir = new File(scratch, "queue");
-        android.content.SharedPreferences prefs = app.getSharedPreferences("helper-fixture-unit", Context.MODE_PRIVATE);
-        try (PreparedMusic queue = new PreparedMusic(dir, prefs, fixture, background -> !background || unmetered.get())) {
-            queue.plan(1, a.json(), new JSONArray().put(b.json()).put(c.json()), true);
-            assertPass("Opt-out prevents queueing and access", calls.isEmpty() && queue.read(a.key) == null);
-            queue.options(true, false);
+        try (PreparedMusic queue = new PreparedMusic(dir, fixture, background -> !background || unmetered.get())) {
+            assertPass("Bundled engine is ready without opt-in and browsing alone does no work", queue.state().getBoolean("available") && calls.isEmpty());
             queue.plan(1, a.json(), new JSONArray().put(b.json()).put(c.json()), true);
             await("Any catalogue row can prepare, without a fixed ID table", 7000, () -> queue.read(a.key) != null);
             assertPass("Metered prefetch waits for an unmetered connection", calls.equals(Arrays.asList("A"))
                     && "queued".equals(queue.state().getJSONObject("tracks").getJSONObject(b.key).getString("state")));
             unmetered.set(true);
-            queue.state();
+            queue.networkChanged();
             await("First actual upcoming entry starts", 7000, () -> calls.contains("B"));
             assertPass("Only one job runs at once", calls.equals(Arrays.asList("A", "B")));
             queue.plan(2, b.json(), new JSONArray().put(c.json()), true); // Promote rather than restart B.
@@ -388,14 +377,14 @@ public final class BlackBoxSmoke extends Instrumentation {
                 throw new AssertionError("Three upcoming items accepted");
             } catch (IllegalArgumentException expected) { checks++; }
         }
-        try (PreparedMusic reopened = new PreparedMusic(dir, prefs, fixture, background -> false)) {
+        try (PreparedMusic reopened = new PreparedMusic(dir, fixture, background -> false)) {
             reopened.plan(1, a.json(), new JSONArray(), true);
             assertPass("Completed catalogue recording is reused across instances when offline", reopened.read(a.key) != null && calls.size() == 4);
             PreparedMusic.Track otherRelease = new PreparedMusic.Track(spec("test:A", "A", "Fixture", "Another album", 14, ""));
             assertPass("Another release of the same title cannot read the cached recording", reopened.read(otherRelease.key) == null);
-            reopened.options(false, true);
+            reopened.forget(a.key);
             assertPass("Clearing the cache leaves no ready file", reopened.read(a.key) == null && !new File(dir, a.key).exists());
-        } finally { prefs.edit().clear().commit(); }
+        }
     }
 
     private static JSONObject spec(String ref, String title, String artist, String album, int seconds, String source) throws Exception {
@@ -403,17 +392,17 @@ public final class BlackBoxSmoke extends Instrumentation {
                 .put("seconds", seconds).put("source", source);
     }
 
-    private static void seedPreparedFixture(Context app, File cache, JSONObject recording) throws Exception {
+    private void seedPreparedFixture(File cache, JSONObject recording) throws Exception {
         File entry = new File(cache, new PreparedMusic.Track(recording).key);
         if (!entry.mkdir()) throw new java.io.IOException("Could not seed prepared fixture");
         try (FileOutputStream out = new FileOutputStream(new File(entry, "recording.json"))) {
             out.write(new JSONObject().put("recording", recording).put("providerId", "aaaaaaaaaaa").toString().getBytes(StandardCharsets.UTF_8));
         }
-        copyRaw(app, R.raw.orbit, new File(entry, "audio.m4a"));
+        copyFixture("orbit.m4a", new File(entry, "audio.m4a"));
     }
 
-    private static void copyRaw(Context app, int resource, File target) throws Exception {
-        try (InputStream in = app.getResources().openRawResource(resource); FileOutputStream out = new FileOutputStream(target)) {
+    private void copyFixture(String resource, File target) throws Exception {
+        try (InputStream in = getContext().getAssets().open("fixtures/" + resource); FileOutputStream out = new FileOutputStream(target)) {
             byte[] bytes = new byte[8192];
             for (int n; (n = in.read(bytes)) != -1;) out.write(bytes, 0, n);
         }
@@ -424,7 +413,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         try {
             WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
             await("The v90 music shell is ready on a phone viewport", 18000,
-                    () -> jsTrue(web, "window.bbxAndroidOpen && document.querySelector('#rows .card') && innerWidth <= 400"));
+                    () -> jsTrue(web, "window.bbxAndroidOpen && document.querySelector('#heroSettings') && innerWidth <= 400"));
             verifyOriginalMusic(web);
             originalMusicVerified = true;
         } finally { closeScreen(desktop); }
@@ -436,20 +425,6 @@ public final class BlackBoxSmoke extends Instrumentation {
         assertPass("Standalone media acceptance does not depend on debug fixtures",
                 (app.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0);
         verifyPublicWithPlayer(app);
-    }
-
-    private void verifyPublicPreview() throws Exception {
-        Context app = getTargetContext();
-        assertPass("Preview check does not replace the release acceptance gate", app.getPackageName().endsWith(".helper"));
-        V90Api api = new V90Api(app);
-        try {
-            assertPass("Music preparation can stay enabled during film and anime playback",
-                    api.call("POST", "/api/mobile/music-helper/options", "{\"enabled\":true}").value.optBoolean("enabled"));
-            verifyPublicWithPlayer(app);
-        } finally {
-            api.call("POST", "/api/mobile/music-helper/options", "{\"enabled\":false}");
-            api.close();
-        }
     }
 
     private void verifyPublicWithPlayer(Context app) throws Exception {
@@ -466,28 +441,12 @@ public final class BlackBoxSmoke extends Instrumentation {
         Activity desktop = launch(V90Activity.class, null);
         WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
         java.util.List<MediaEntry> saved = new java.util.ArrayList<>();
-        final String station = "#androidDetailMedia", play = " .android-media-play", download = " .android-media-download";
+        V90Api api = new V90Api(app);
         try {
-            await("The v90 touch UI is ready on a phone viewport", 18000,
-                    () -> jsTrue(web, "document.querySelector('#rows .card') && innerWidth <= 400"));
-            // Use the real pointer, including the original navigation and detail actions.
-            js(web, "document.querySelector('#searchInput').value='Sintel'");
-            tapWeb(web, "#searchBtn");
-            await("Search results render a touchable Sintel card", 17000, () -> jsTrue(web,
-                    "Array.from(document.querySelectorAll('#browseGrid .card')).some(c=>c.textContent.includes('Sintel'))"));
-            js(web, "Array.from(document.querySelectorAll('#browseGrid .card')).find(c=>c.textContent.includes('Sintel')).id='smokeSintel'");
-            tapWeb(web, "#smokeSintel");
-            saved.add(verifyDirect(web, db, records, "film:sintel", "Sintel", station, "#detailPlay", station + download,
-                    MediaEntry.Kind.MOVIE, 720000L, 150000L));
-
-            tapWeb(web, "[data-nav=anime]");
-            String archive = "#androidAnimeArchive [data-playable-key='anime:dull-sword']";
-            await("Anime tab shows a real in-app playable archive title", 12000,
-                    () -> jsTrue(web, "document.querySelector(" + JSONObject.quote(archive) + ")"));
-            tapWeb(web, archive);
-            saved.add(verifyDirect(web, db, records, "anime:dull-sword", "The Dull Sword", station, station + play, station + download,
-                    MediaEntry.Kind.ANIME, 250000L, 60000L));
-
+            checkKeylessHome(web);
+            // Test authorized HTTPS imports explicitly. These are not entries in the user catalogue.
+            saved.add(verifyDirect(api, db, records, "film:sintel", "Sintel", MediaEntry.Kind.MOVIE, 720000L, 150000L));
+            saved.add(verifyDirect(api, db, records, "anime:dull-sword", "The Dull Sword", MediaEntry.Kind.ANIME, 250000L, 60000L));
             tapWeb(web, "[data-nav=library]");
             await("Library shows every complete download in the original interface", 10000, () -> {
                 for (MediaEntry entry : saved) if (!jsTrue(web, "document.querySelector(" + JSONObject.quote(offlineRow(entry)) + ")")) return false;
@@ -515,15 +474,12 @@ public final class BlackBoxSmoke extends Instrumentation {
                 shell("svc wifi enable");
             }
             publicMediaVerified = true;
-            if ("yes".equals(fixtures.getString("public_only"))) {
-                verifyOriginalMusic(web);
-                originalMusicVerified = true;
-            }
         } catch (AssertionError problem) {
             String view = js(web, "JSON.stringify({view:window.__BBX_STATE__?.view,title:document.querySelector('#detailBody h1')?.textContent,"
                     + "music:document.getElementById('musicMsg')?.textContent,status:Array.from(document.querySelectorAll('.android-action-status')).map(e=>e.textContent).filter(Boolean).slice(-5)})");
             throw new AssertionError(problem.getMessage() + "; page=" + view, problem);
         } finally {
+            api.close();
             ui(() -> { if (engine != null) engine.close(); desktop.finish(); return null; });
             for (MediaEntry e : saved) {
                 Downloads.deleteCopy(app, e); db.getWritableDatabase().delete("media", "id=?", new String[] {e.id});
@@ -550,88 +506,42 @@ public final class BlackBoxSmoke extends Instrumentation {
                 () -> jsTrue(web, "!document.querySelector('#bgQueuePanel').hidden && "
                         + "document.querySelectorAll('#bgQueueList .bg-queue-title-v49')[6]?.textContent === 'Espresso'"));
         tapWeb(web, "#bgQueueClose");
-        verifyOfficialTrack(web, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", "sc:1799087761", 175);
+        verifyLiveTrack(web, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", 175);
         tapWeb(web, "#musicClear");
         tapWeb(web, "#musicGenreChips [title='Open 30 Ghana Essentials picks']");
         await("Ghana Essentials shows its original 30 picks", 8000,
                 () -> jsTrue(web, "!document.querySelector('#viewMusicGenre').hidden && document.querySelectorAll('[data-genre-catalog] .music-genre-card-v50').length===30"));
-        verifyOfficialTrack(web, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", "sc:1229321974", 185);
-        tapWeb(web, "#musicGenrePage [title='Play Adonai (Remix) [feat. Castro]']");
-        await("An unlinked recording offers its own sources without silently playing a substitute", 8000,
-                () -> jsTrue(web, "document.querySelector('#androidMusicSource')?.open && "
-                        + "document.querySelector('#androidTrackTitle')?.textContent.includes('Adonai')"));
+        verifyLiveTrack(web, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", 185);
     }
 
-    private void verifyOfficialTrack(WebView web, String title, String control, String id, int seconds) throws Exception {
-        ActivityMonitor monitor = addMonitor(MusicVideoActivity.class.getName(), null, false);
-        Activity screen = null;
-        WebView player = null;
+    private void verifyLiveTrack(WebView web, String title, String control, int seconds) throws Exception {
+        tapWeb(web, control);
+        awaitAudio(web, title, seconds, 6, 1, 194000);
+        js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
+        awaitAudio(web, title, seconds, 6, seconds * 0.63, 22000);
+    }
+
+    private MediaEntry verifyDirect(V90Api api, LibraryStore db, JSONObject records, String key, String title,
+                                    MediaEntry.Kind kind, long duration, long seek) throws Exception {
+        JSONObject ref = records.getJSONObject(key);
+        JSONObject request = new JSONObject().put("url", ref.getString("url")).put("title", title).put("kind", kind.name());
+        V90Api.Reply opened = api.call("POST", "/api/mobile/direct", request.toString());
+        MediaEntry entry = db.get(opened.value.optString("id"));
+        assertPass(title + " imports the authorized exact source and media type", entry != null && entry.remote() && entry.kind == kind);
+        Activity screen = launch(PlayerActivity.class, entry.id);
         try {
-            tapWeb(web, control);
-            screen = waitForMonitorWithTimeout(monitor, 12000);
-            assertPass(title + " opens the official player inside BlackBox", screen != null && id.equals(screen.getIntent().getStringExtra(MusicVideoActivity.EXTRA_VIDEO)));
-            Activity activity = screen;
-            player = ui(() -> findWeb(activity.getWindow().getDecorView()));
-            assertPass("The separate provider player has no catalogue bridge", jsTrue(player, "typeof BlackBoxAndroid === 'undefined'"));
-            WebView embed = player;
-            if (id.startsWith("sc:")) {
-                await(title + " SoundCloud controls finish loading", 24000, () -> officialState(embed).optBoolean("ready"));
-                // Normal player fallback when the WebView/provider doesn't allow autoplay.
-                SystemClock.sleep(2800);
-                JSONObject state = officialState(embed);
-                if (state.optInt("error") == 0 && state.optDouble("seconds", 0) < .2) tapWebAt(embed, "#recording", 36, 36);
-            }
-            await(title + " plays the exact full online recording (not a preview)", 65000, () -> {
-                JSONObject state = officialState(embed);
-                if (state.optInt("error") != 0) throw new AssertionError(title + " provider error: " + state);
-                return state.optInt("state", -2) == 1 && state.optDouble("seconds", 0) >= 1
-                        && Math.abs(state.optDouble("duration", 0) - seconds) <= 6
-                        && (id.startsWith("sc:") ? id.substring(3).equals(state.optString("id"))
-                        : state.optString("url").contains("v=" + id));
-            });
-            int seek = seconds * 2 / 3;
-            js(player, "bbxSeek(" + seek + ")");
-            await(title + " advances from a seek beyond the preview window", 22000, () -> {
-                JSONObject state = officialState(embed);
-                return state.optInt("state", -2) == 1 && state.optDouble("seconds", 0) > seek + 1;
-            });
-        } catch (AssertionError failure) {
-            throw new AssertionError(failure.getMessage() + "; official player=" + (player == null ? "not opened" : officialState(player)), failure);
-        } finally { closeScreen(screen); removeMonitor(monitor); }
-    }
-
-    private JSONObject officialState(WebView web) throws Exception {
-        String value = js(web, "JSON.stringify(window.bbxPlayerState?.() || {url:location.href,api:typeof YT})");
-        return new JSONObject((String) new org.json.JSONTokener(value).nextValue());
-    }
-
-    private MediaEntry verifyDirect(WebView web, LibraryStore db, JSONObject records, String key, String title,
-                                    String card, String play, String download, MediaEntry.Kind kind,
-                                    long duration, long seek) throws Exception {
-        await(title + " has both Play and Download on screen", 22000, () -> jsTrue(web,
-                "document.querySelector(" + JSONObject.quote(card) + ")?.dataset.playableKey === " + JSONObject.quote(key)
-                + " && document.querySelector(" + JSONObject.quote(play) + ") && document.querySelector(" + JSONObject.quote(download) + ")"));
-        ActivityMonitor monitor = addMonitor(PlayerActivity.class.getName(), null, false);
-        Activity screen = null;
-        MediaEntry entry;
-        try {
-            tapWeb(web, play);
-            screen = waitForMonitorWithTimeout(monitor, 17000);
-            assertPass(title + " opens the internal player (not another app)", screen != null);
-            entry = db.get(screen.getIntent().getStringExtra(PlaybackService.EXTRA_ID));
-            assertPass(title + " resolves the right direct source and media type", entry != null && entry.remote() && entry.kind == kind && entry.title.contains(title));
             awaitMedia(title + " online", entry, duration, false, db);
             ui(() -> { engine.seek(seek); return null; });
             await(title + " seeks in the full online file", 16000,
                     () -> ui(() -> engine.playing() && !engine.seeking() && engine.position() >= seek - 1100));
-        } finally { closeScreen(screen); removeMonitor(monitor); }
-        tapWeb(web, download);
+        } finally { closeScreen(screen); }
+        V90Api.Reply download = api.call("POST", "/api/mobile/direct", request.put("download", true).toString());
+        assertPass(title + " download request is accepted", download.status == 200 || download.status == 202);
         await(title + " download finishes and commits in Android", 110000, () -> {
             MediaEntry active = db.get(entry.id);
             if (active.transferError != null) throw new AssertionError(title + " download failed: " + active.transferError);
             return db.isOffline(entry) && active.transfer < 0;
         });
-        JSONObject ref = records.getJSONObject(key);
         File path = db.offline(entry);
         try (InputStream stream = new FileInputStream(path)) {
             assertPass(title + " offline file matches the independently fetched public bytes", path.length() == ref.getLong("bytes")
@@ -720,7 +630,7 @@ public final class BlackBoxSmoke extends Instrumentation {
     private void verifyLanOnAndroid(Context app, LibraryStore db) throws Exception {
         File bytes = File.createTempFile("lan-smoke", ".mp4", app.getCacheDir());
         try {
-            try (InputStream original = app.getResources().openRawResource(R.raw.dawn); FileOutputStream temp = new FileOutputStream(bytes)) {
+            try (InputStream original = getContext().getAssets().open("fixtures/dawn.mp4"); FileOutputStream temp = new FileOutputStream(bytes)) {
                 byte[] block = new byte[8192];
                 for (int n; (n = original.read(block)) != -1; ) temp.write(block, 0, n);
             }
@@ -815,7 +725,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                     && engine.renderedVideo() && engine.playing() && engine.position() > 500 && !db.isOffline(entry)));
             await("Verified torrent file is committed to Offline", 45000,
                     () -> db.isOffline(entry) && db.get(entry.id).transfer == -1);
-            try (InputStream original = app.getResources().openRawResource(R.raw.dawn);
+            try (InputStream original = getContext().getAssets().open("fixtures/dawn.mp4");
                  InputStream copy = new FileInputStream(db.offline(entry))) {
                 assertPass("Torrent's offline copy matches the independent seeder", Arrays.equals(sha(original), sha(copy)));
             }
@@ -832,35 +742,6 @@ public final class BlackBoxSmoke extends Instrumentation {
             db.getWritableDatabase().delete("media", "id=?", new String[] {entry.id});
             TorrentJobs.descriptor(app, TorrentMeta.hex(resolved.hash)).delete();
         }
-    }
-
-    private void verifyLiveProviders(Context app) throws Exception {
-        V90Api api = new V90Api(app);
-        java.util.concurrent.ExecutorService probes = java.util.concurrent.Executors.newFixedThreadPool(4);
-        try {
-            java.util.Map<String, java.util.concurrent.Future<String>> responses = new java.util.LinkedHashMap<>();
-            for (String name : Arrays.asList("Knaben", "Torrents-CSV", "Anime catalogue", "Incompetech")) {
-                responses.put(name, probes.submit(() -> {
-                    String route = name.equals("Anime catalogue") ? "/api/anime/search?q=Astro%20Boy&page=1"
-                            : name.equals("Incompetech") ? "/api/mobile/music?q=Sauropod%20Spotting"
-                            : "/api/sources/" + (name.equals("Knaben") ? "find" : "deep") + "?type=movie&title=Elephants%20Dream&year=2006";
-                    V90Api.Reply reply = api.call("GET", route, "");
-                    if (reply.status != 200) return "unavailable (" + reply.status + ": " + reply.value.optString("message") + ")";
-                    if ("unavailable".equals(reply.value.optString("indexStatus"))) return reply.value.optString("note");
-                    org.json.JSONArray entries = reply.value.optJSONArray(name.equals("Anime catalogue") ? "items" : name.equals("Incompetech") ? "results" : "sources");
-                    String provider = reply.value.optString("provider");
-                    return (provider.isEmpty() ? "" : provider + " ") + "answered with " + (entries == null ? 0 : entries.length()) + " results";
-                }));
-            }
-            StringBuilder report = new StringBuilder();
-            for (java.util.Map.Entry<String, java.util.concurrent.Future<String>> result : responses.entrySet()) {
-                String status;
-                try { status = result.getValue().get(18, TimeUnit.SECONDS); }
-                catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException unavailable) { status = "did not complete"; }
-                report.append("v90 provider ").append(result.getKey()).append(": ").append(status).append('\n');
-            }
-            providerStatus = report.toString();
-        } finally { api.close(); probes.shutdownNow(); }
     }
 
     private void verifyServicesOnAndroid() throws Exception {

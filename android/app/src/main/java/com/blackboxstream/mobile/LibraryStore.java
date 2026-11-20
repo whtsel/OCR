@@ -13,8 +13,6 @@ import java.util.concurrent.ThreadLocalRandom;
 /** One database shared by the UI, player and download jobs. Never store partial files as playable. */
 final class LibraryStore extends SQLiteOpenHelper {
     static final int MAX_PENDING = 12;
-    static final MediaEntry SAMPLE_VIDEO = new MediaEntry("Signal at Dawn", MediaEntry.Kind.MOVIE, "demo:signal");
-    static final MediaEntry SAMPLE_AUDIO = new MediaEntry("Low Orbit", MediaEntry.Kind.MUSIC, "demo:orbit");
     private static LibraryStore instance;
     private final File offlineDir;
 
@@ -59,15 +57,12 @@ final class LibraryStore extends SQLiteOpenHelper {
     MediaEntry get(String key) {
         if (key == null || !key.matches("[a-f0-9]{64}")) return null;
         List<MediaEntry> rows = select("WHERE id=?", key);
-        if (!rows.isEmpty()) return rows.get(0);
-        if (SAMPLE_VIDEO.id.equals(key)) return SAMPLE_VIDEO;
-        if (SAMPLE_AUDIO.id.equals(key)) return SAMPLE_AUDIO;
-        return null;
+        return rows.isEmpty() || rows.get(0).bundled() ? null : rows.get(0);
     }
 
-    List<MediaEntry> recentlyPlayed() { return select("WHERE played>0 ORDER BY played DESC LIMIT 8"); }
-    List<MediaEntry> saved() { return select("WHERE saved=1 ORDER BY title COLLATE NOCASE"); }
-    List<MediaEntry> transfers() { return select("WHERE job>=0 OR error IS NOT NULL OR has_copy=1 ORDER BY job DESC,title COLLATE NOCASE"); }
+    List<MediaEntry> recentlyPlayed() { return select("WHERE played>0 AND source NOT LIKE 'demo:%' ORDER BY played DESC LIMIT 8"); }
+    List<MediaEntry> saved() { return select("WHERE saved=1 AND source NOT LIKE 'demo:%' ORDER BY title COLLATE NOCASE"); }
+    List<MediaEntry> transfers() { return select("WHERE (job>=0 OR error IS NOT NULL OR has_copy=1) AND source NOT LIKE 'demo:%' ORDER BY job DESC,title COLLATE NOCASE"); }
 
     private static String[] key(MediaEntry e) { return new String[] {e.id}; }
 

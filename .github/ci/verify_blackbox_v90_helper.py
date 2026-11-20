@@ -18,6 +18,12 @@ ARM64 = {
 
 with zipfile.ZipFile(Path(sys.argv[1])) as apk:
     verify_refreshed_helper(apk.read('res/raw/ytdlp'))
+    for member in apk.namelist():
+        assert not member.startswith('assets/fixtures/') and not member.endswith(('/dawn.mp4', '/orbit.m4a')), f'Test-only media shipped: {member}'
+    for line in Path('android/V90-ASSETS.sha256').read_text().splitlines():
+        expected, asset = line.split(maxsplit=1)
+        assert hashlib.sha256(apk.read('assets/v90/' + asset)).hexdigest() == expected, f'Original asset was changed: {asset}'
+
     for name, expected in ARM64.items():
         data = apk.read('lib/arm64-v8a/' + name)
         if hashlib.sha256(data).hexdigest() != expected:
@@ -27,5 +33,6 @@ with zipfile.ZipFile(Path(sys.argv[1])) as apk:
                  b'Lorg/apache/commons/compress/archivers/zip/ZipFile;'):
         if not any(name in dex for dex in dexes):
             raise SystemExit(f'Missing class in package: {name.decode()}')
+    assert not any(b'Lcom/blackboxstream/mobile/MusicVideoActivity;' in dex for dex in dexes), 'Song video player shipped'
     assert apk.testzip() is None
 print('::notice::Verified the v90 APK contains the exact phone-tested zipapp and all six matching ARM64 files.')

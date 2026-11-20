@@ -18,7 +18,7 @@ import libtorrent as lt
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'app/src/main/java/com/blackboxstream/mobile'
-RAW = ROOT / 'app/src/main/res/raw'
+FIXTURES = ROOT / 'app/src/androidTest/assets/fixtures'
 
 
 def deps(classes, names, test):
@@ -95,7 +95,7 @@ def main():
         files = lt.file_storage()
         files.add_file('share/a-padding.txt', 7921)
         (folder / 'a-padding.txt').write_bytes(b'x' * 7921)
-        shutil.copyfile(RAW / 'dawn.mp4', folder / 'dawn.mp4')
+        shutil.copyfile(FIXTURES / 'dawn.mp4', folder / 'dawn.mp4')
         files.add_file('share/dawn.mp4', (folder / 'dawn.mp4').stat().st_size)
         files.add_file('share/z-padding.txt', 5553)
         (folder / 'z-padding.txt').write_bytes(b'z' * 5553)
@@ -125,7 +125,7 @@ def main():
             threading.Thread(target=server.serve_forever, daemon=True).start()
             cleanup.callback(server.shutdown)
         try:
-            subprocess.run([java, '-cp', str(classes), 'com.blackboxstream.mobile.PeerChecks', str(root), str(RAW),
+            subprocess.run([java, '-cp', str(classes), 'com.blackboxstream.mobile.PeerChecks', str(root), str(FIXTURES),
                         str(info.info_hashes().v1), *links, f'127.0.0.1:{port(dht)}'], check=True, timeout=75)
         except subprocess.CalledProcessError:
             for alert in session.pop_alerts():

@@ -15,7 +15,7 @@ import time
 
 import libtorrent as lt
 
-SOURCE = Path(__file__).resolve().parents[1] / 'app/src/main/res/raw/dawn.mp4'
+SOURCE = Path(__file__).resolve().parents[1] / 'app/src/androidTest/assets/fixtures/dawn.mp4'
 LOCAL = tuple(ip_network(block) for block in ('127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 
 

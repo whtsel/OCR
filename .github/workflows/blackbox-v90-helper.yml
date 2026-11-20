@@ -1,4 +1,4 @@
-name: BlackBox v90 Music helper preview
+name: BlackBox v90 Android audio-only
 on:
   workflow_dispatch:
   push:
@@ -8,9 +8,8 @@ on:
       - '.github/ci/verify_blackbox_v90_helper.py'
       - 'android/app/build.gradle'
       - 'android/app/src/musicHelper/**'
-      - 'android/app/src/main/java/**/PreparedMusic.java'
-      - 'android/app/src/main/java/**/V90*.java'
-      - 'android/app/src/main/assets/v90-mobile/**'
+      - 'android/app/src/main/**'
+      - 'android/app/src/debug/**'
       - 'android/app/src/androidTest/**'
       - 'android/tests/run_device.sh'
       - 'android/tests/test_catalogue_music.py'
@@ -61,7 +60,7 @@ jobs:
           grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
           hash=$(sha256sum "$apk")
           echo "::notice::ARM64 v90 candidate SHA-256 ${hash%% *} ($(stat -c %s "$apk") bytes)"
-          cp "$apk" "$RUNNER_TEMP/BlackBox-Stream-v90-Helper-Preview-ARM64.apk"
+          cp "$apk" "$RUNNER_TEMP/BlackBox-Stream-v90-ARM64.apk"
       - name: Assemble the x86_64 counterpart and fixture instrumentation
         working-directory: android
         run: >-
@@ -87,8 +86,8 @@ jobs:
       - name: Retain the side-by-side candidate (not a release)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: BlackBox-Stream-v90-Helper-Preview-ARM64
-          path: ${{ runner.temp }}/BlackBox-Stream-v90-Helper-Preview-ARM64.apk
+          name: BlackBox-Stream-v90-ARM64
+          path: ${{ runner.temp }}/BlackBox-Stream-v90-ARM64.apk
           compression-level: 0
           if-no-files-found: error
           retention-days: 7

@@ -95,18 +95,9 @@ final class V90Api {
                 key = ""; prefs.edit().remove("key").apply(); return ok(new JSONObject().put("ok", true));
             }
             if (get && path.startsWith("/api/tmdb/")) return catalogue(uri, path.substring(9));
-            if (get && path.equals("/api/mobile/open-films")) return ok(new JSONObject().put("results", films("", 1)));
-            if (get && path.equals("/api/mobile/open-anime")) return ok(new JSONObject().put("items", OpenAnime.search("")));
-            if (get && path.matches("/api/anime/(top|airing|search)")) {
-                String mode = path.substring(11), query = param(uri, "q", param(uri, "query", ""));
-                int page = number(uri, "page", 1);
-                JSONArray direct = mode.equals("search") && page == 1 && !query.trim().isEmpty() ? OpenAnime.search(query) : new JSONArray();
-                if (direct.length() != 0) return ok(new JSONObject().put("items", direct).put("provider", "Wikimedia Commons")
-                        .put("pagination", new JSONObject().put("lastPage", 1)));
-                return ok(online.anime(mode, query, page));
-            }
+            if (get && path.matches("/api/anime/(top|airing|search)")) return tmdbAnime(uri, path.substring(11));
             if (get && path.matches("/api/sources/(find|deep)")) return search(uri, path.endsWith("/deep"));
-            if (!get && path.equals("/api/availability")) return availability(body);
+            if (!get && path.equals("/api/availability")) return ok(new JSONObject()); // Metadata does not imply a playable file.
             if (!get && path.equals("/api/coverage")) return ok(new JSONObject()); // No per-episode availability is inferred.
             if (!get && (path.equals("/api/content-resolve") || path.equals("/api/resolve"))) {
                 JSONObject data = new JSONObject(body);
@@ -120,9 +111,8 @@ final class V90Api {
             }
             if (get && path.equals("/api/mobile/library")) return library();
             if (get && path.equals("/api/mobile/music-helper")) return ok(music.state());
-            if (!get && path.equals("/api/mobile/music-helper/options")) {
-                JSONObject data = new JSONObject(body);
-                music.options(data.optBoolean("enabled"), data.optBoolean("clear"));
+            if (!get && path.equals("/api/mobile/music-helper/forget")) {
+                music.forget(new JSONObject(body).getString("key"));
                 return ok(music.state());
             }
             if (!get && path.equals("/api/mobile/music-helper/plan")) {
@@ -139,12 +129,6 @@ final class V90Api {
                             .put("source", "MusicBrainz metadata"));
                 }
                 return ok(new JSONObject().put("results", tracks));
-            }
-            if (!get && path.equals("/api/mobile/playable")) {
-                JSONObject data = new JSONObject(body);
-                MediaEntry entry = playable(data.optString("key"));
-                if (entry == null) return fail(404, "That playable file is not in the catalogue. Reopen the title or search again.");
-                return prepareMedia(entry, data.optBoolean("download"));
             }
             if (!get && path.equals("/api/mobile/direct")) {
                 JSONObject data = new JSONObject(body); String url = MediaSources.https(data.optString("url"));
@@ -173,18 +157,6 @@ final class V90Api {
         } catch (RuntimeException | StackOverflowError failure) { return fail(500, "Android couldn't complete this operation."); }
     }
 
-    private MediaEntry playable(String key) throws IOException {
-        if (key.matches("film:[a-z-]{1,40}")) {
-            Cinema.Film film = Cinema.fromSlug(key.substring(5));
-            return film == null ? null : film.directEntry(app);
-        }
-        if (key.matches("anime:[a-z-]{1,40}")) {
-            OpenAnime anime = OpenAnime.named(key.substring(6));
-            return anime == null ? null : anime.entry();
-        }
-        return null;
-    }
-
     private Reply prepareMedia(MediaEntry entry, boolean download) throws IOException, JSONException {
         if (download && !Downloads.canKeep(entry)) return fail(415, "This stream cannot be downloaded. Choose a direct media file.");
         MediaEntry existing = db.get(entry.id);
@@ -207,23 +179,9 @@ final class V90Api {
         if (!route.matches("/(?:configuration|(?:discover|trending|search|genre|movie|tv|person|find)(?:/[a-zA-Z0-9_]+){1,5})")) {
             return fail(400, "Unsupported catalogue route.");
         }
-        String credential = prefs.getString("key", key);
-        if (credential.isEmpty()) credential = key;
-        String openId = route.startsWith("/movie/open_") ? route.substring(12).split("/")[0] : "";
-        if (!openId.isEmpty()) {
-            Cinema.Film film = Cinema.fromSlug(openId.replace('_', '-'));
-            if (film == null) return fail(404, "Open film not found.");
-            if (route.equals("/movie/open_" + openId)) return ok(card(film));
-            return ok(new JSONObject().put("results", new JSONArray()));
-        }
-        if (credential.isEmpty()) {
-            if (route.matches("/(?:movie/(?:popular|top_rated)|discover/movie|trending/(?:all|movie)/week|search/(?:multi|movie))")) {
-                JSONArray films = films(param(uri, "query", ""), number(uri, "page", 1));
-                return ok(new JSONObject().put("page", 1).put("total_pages", 1).put("total_results", films.length()).put("results", films));
-            }
-            if (route.startsWith("/search/") || route.startsWith("/discover/")) return ok(new JSONObject().put("results", new JSONArray()).put("total_pages", 1));
-            return fail(412, "Add your TMDB API key in Settings for the full v90 catalogue.");
-        }
+        if (route.startsWith("/movie/open_")) return fail(404, "Not a TMDB title.");
+        String credential = credential();
+        if (credential.isEmpty()) return fail(412, "Add your TMDB API key in Settings to browse the catalogue.");
         StringBuilder request = new StringBuilder(route);
         for (String name : uri.getQueryParameterNames()) {
             if (!name.matches("[a-zA-Z0-9_.-]{1,60}") || name.equalsIgnoreCase("api_key") || name.equals("include_adult")) continue;
@@ -232,52 +190,21 @@ final class V90Api {
             request.append(request.indexOf("?") < 0 ? '?' : '&').append(name).append('=').append(V90Online.encode(value));
         }
         if (route.startsWith("/search/") || route.startsWith("/discover/")) request.append(request.indexOf("?") < 0 ? '?' : '&').append("include_adult=false");
-        String raw = Catalogue.fetch(URI.create(Catalogue.TMDB), request.toString(), credential);
-        JSONObject payload = new JSONObject(raw);
-        if (route.startsWith("/movie/") || route.startsWith("/search/") || route.startsWith("/trending/") || route.equals("/discover/movie")) {
-            tagDirectFilm(payload);
-            JSONArray results = payload.optJSONArray("results");
-            if (results != null) for (int i = 0; i < Math.min(50, results.length()); i++) tagDirectFilm(results.optJSONObject(i));
-        }
-        return ok(payload);
+        return ok(new JSONObject(Catalogue.fetch(URI.create(Catalogue.TMDB), request.toString(), credential)));
     }
 
-    private static void tagDirectFilm(JSONObject item) throws JSONException {
-        if (item == null || "tv".equals(item.optString("media_type"))) return;
-        Cinema.Film film = Cinema.exactTitle(item.optString("title"));
-        if (film != null && item.optString("release_date").startsWith(film.year + "-")) {
-            item.put("_androidPlayable", "film:" + film.slug).put("_openFilm", true)
-                    .put("_androidReference", "https://studio.blender.org/projects/" + film.project + "/");
-        }
+    private String credential() {
+        // An unsaved key lives only for this activity. It is never forwarded to source indexes.
+        return key.isEmpty() ? prefs.getString("key", "") : key;
     }
 
-    private static JSONObject card(Cinema.Film film) throws JSONException {
-        String slug = film.slug.replace('-', '_'), art = "open/" + slug + ".jpg";
-        return new JSONObject().put("id", "open_" + slug).put("title", film.title).put("original_title", film.title)
-                .put("media_type", "movie").put("release_date", film.year + "-01-01").put("status", "Released")
-                .put("poster_path", "/" + art).put("backdrop_path", "/" + art).put("overview", film.story).put("_openFilm", true)
-                .put("_androidPlayable", "film:" + film.slug).put("runtime", Integer.parseInt(film.duration.split(" ")[0])).put("genre_ids", new JSONArray().put(16))
-                .put("genres", new JSONArray().put(new JSONObject().put("name", film.genre)));
-    }
-
-    private static JSONArray films(String query, int page) throws JSONException {
-        JSONArray rows = new JSONArray();
-        if (page > 1) return rows;
-        String clean = V90Online.searchText(query).toLowerCase(Locale.ROOT);
-        for (Cinema.Film f : Cinema.FILMS) if (f.title.toLowerCase(Locale.ROOT).contains(clean)) rows.put(card(f));
-        return rows;
-    }
-
-    private Reply availability(String body) throws JSONException {
-        JSONObject known = new JSONObject(); JSONArray checks = new JSONArray(body);
-        // Do not send the whole poster grid to torrent indexes. Only the opened title is searched.
-        for (int i = 0; i < Math.min(100, checks.length()); i++) {
-            JSONObject check = checks.optJSONObject(i);
-            if (check == null || !"movie".equals(check.optString("type"))) continue;
-            Cinema.Film film = Cinema.exactTitle(check.optString("title"));
-            if (film != null && film.year.equals(check.optString("year"))) known.put(check.optString("key"), 1);
-        }
-        return ok(known);
+    private Reply tmdbAnime(Uri uri, String mode) throws IOException, JSONException {
+        // General search already includes TMDB series. Do not append duplicate results from another index.
+        if ("search".equals(mode)) return ok(new JSONObject().put("items", new JSONArray()));
+        String credential = credential();
+        if (credential.isEmpty()) return fail(412, "Add your TMDB API key in Settings to browse anime.");
+        int page = Math.max(1, Math.min(100, number(uri, "page", 1)));
+        return ok(Catalogue.anime(URI.create(Catalogue.TMDB), credential, "airing".equals(mode), page));
     }
 
     private Reply search(Uri uri, boolean deep) throws JSONException {
@@ -287,15 +214,6 @@ final class V90Api {
         String alternative = V90Online.searchText(param(uri, "alt", ""));
         Map<String, JSONObject> distinct = new LinkedHashMap<>();
         JSONArray providers = new JSONArray();
-        Cinema.Film film = "movie".equals(type) ? Cinema.exactTitle(title) : null;
-        if (film != null && (film.year.equals(year) || year.isEmpty())) {
-            try {
-                TorrentMeta meta = film.metadata(app);
-                distinct.put(film.hash, V90Online.source(film.title + " · Blender open film · Full " + film.fileName.substring(film.fileName.lastIndexOf('.') + 1).toUpperCase(Locale.ROOT),
-                        film.magnet(), meta.items.get(film.index).length, 0, "Official open film"));
-                providers.put("Official open film");
-            } catch (IOException ignored) { }
-        }
         for (MediaEntry local : db.saved()) {
             if (!local.title.equalsIgnoreCase(title) || !local.unresolvedTorrent()) continue;
             if (local.source.startsWith("magnet:?")) {
@@ -305,7 +223,6 @@ final class V90Api {
         }
         String index = deep ? "Torrents-CSV" : "Knaben", indexStatus = "skipped";
         String note = "Source counts are reported by the index. BlackBox checks the actual manifest and pieces before playing.";
-        // Pinned open-film manifests can be shown immediately, even without an index response.
         if (distinct.isEmpty() || deep) {
             try {
                 JSONArray found = online.sources(deep, title, year, type, season, episode);
@@ -322,7 +239,7 @@ final class V90Api {
                 indexStatus = "unavailable";
                 note = index + " is unavailable right now. " + safeFailure(failed, "Try again or open a known source.");
             }
-        } else note = film != null ? "The original Blender film is available from an exact, verified descriptor." : "Matching sources from your Library.";
+        } else note = "Matching sources from your Library.";
         JSONArray sources = new JSONArray();
         for (JSONObject source : distinct.values()) sources.put(source);
         return ok(new JSONObject().put("sources", sources).put("note", note).put("providers", providers).put("index", index).put("indexStatus", indexStatus));
@@ -358,7 +275,6 @@ final class V90Api {
         if (MediaSources.torrentDescriptor(link)) return TorrentMeta.read(TorrentWebSeed.descriptor(link));
         TorrentMeta.Magnet magnet = TorrentMeta.magnet(link);
         String hash = TorrentMeta.hex(magnet.hash);
-        for (Cinema.Film film : Cinema.FILMS) if (film.hash.equals(hash)) return film.metadata(app).withMagnet(magnet);
         synchronized (this) {
             for (Resolve job : jobs.values()) {
                 TorrentMeta cached = job.meta;

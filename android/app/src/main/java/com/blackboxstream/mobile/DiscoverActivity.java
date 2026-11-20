@@ -36,7 +36,7 @@ public final class DiscoverActivity extends Activity {
     private EditText query;
     private Spinner shelf, music;
     private TextView status, next;
-    private Catalogue.Filter filter = Catalogue.Filter.OPEN;
+    private Catalogue.Filter filter = Catalogue.Filter.MOVIE;
     private int page, ticket;
     private final List<Catalogue.Card> current = new ArrayList<>();
     private boolean busy;
@@ -51,7 +51,7 @@ public final class DiscoverActivity extends Activity {
         top.addView(Ui.action(this, "Catalogue key", false, v -> credential())); body.addView(top);
         Ui.gap(body, 18); body.addView(Ui.kicker(this, "BLACKBOX  /  SCREENING ROOM")); Ui.gap(body, 6);
         body.addView(Ui.text(this, "Discover", 38, Ui.INK, Ui.DISPLAY)); Ui.gap(body, 6);
-        body.addView(Ui.text(this, "Play the open catalogue or browse TMDB for films, series and anime. Metadata doesn't include streaming rights or a media file.", 14, Ui.MUTED, null));
+        body.addView(Ui.text(this, "Browse TMDB for films, series and anime. The catalogue provides information, not playable video.", 14, Ui.MUTED, null));
         Ui.gap(body, 12);
         HorizontalScrollView strip = new HorizontalScrollView(this); strip.setHorizontalScrollBarEnabled(false);
         filters = Ui.row(this); strip.addView(filters); body.addView(strip); Ui.gap(body, 10);
@@ -76,7 +76,7 @@ public final class DiscoverActivity extends Activity {
         body.addView(Ui.text(this, "This product uses the TMDB API but is not endorsed or certified by TMDB.", 12, Ui.MUTED, null));
         Ui.gap(body, 8); body.addView(Ui.action(this, "Visit The Movie Database", false, v -> browser("https://www.themoviedb.org/")));
         if (state != null) {
-            try { filter = Catalogue.Filter.valueOf(state.getString("filter", "OPEN")); } catch (IllegalArgumentException ignored) { }
+            try { filter = Catalogue.Filter.valueOf(state.getString("filter", "MOVIE")); } catch (IllegalArgumentException ignored) { }
             query.setText(state.getString("query", "")); shelf.setSelection(state.getInt("shelf", 0));
         }
         if (state == null) {
@@ -104,14 +104,15 @@ public final class DiscoverActivity extends Activity {
         music.setVisibility(filter == Catalogue.Filter.AUDIO ? View.VISIBLE : View.GONE);
         if (filter == Catalogue.Filter.WATCHLIST) {
             for (Object raw : watchlist.getAll().values()) if (raw instanceof String) {
-                try { current.add(Catalogue.Card.saved(new JSONObject((String) raw))); } catch (JSONException | IllegalArgumentException ignored) { }
+                try {
+                    Catalogue.Card saved = Catalogue.Card.saved(new JSONObject((String) raw));
+                    if (!saved.id.startsWith("open:")) current.add(saved);
+                } catch (JSONException | IllegalArgumentException ignored) { }
             }
             current.sort((a, b) -> a.title.compareToIgnoreCase(b.title));
             paint(current.isEmpty() ? "Save a title from its detail card to see it here." : "Your saved titles are kept on this device.", false);
-        } else if (filter == Catalogue.Filter.OPEN || filter == Catalogue.Filter.AUDIO) {
-            current.addAll(Catalogue.open(filter == Catalogue.Filter.AUDIO));
-            paint(filter == Catalogue.Filter.AUDIO ? "Play open audio below or search MusicBrainz for tracks, albums and artists. Results are metadata only."
-                    : "Authentic open media you can play. Built-in samples work without internet.", false);
+        } else if (filter == Catalogue.Filter.AUDIO) {
+            paint("Search MusicBrainz for tracks, albums and artists. Results are metadata only.", false);
         } else load(true);
     }
 
@@ -119,7 +120,7 @@ public final class DiscoverActivity extends Activity {
         if (filter == Catalogue.Filter.AUDIO) { musicSearch(); return; }
         if (!filter.tmdb() || !fresh && busy) return;
         String key = settings.getString("key", "");
-        if (key.isEmpty()) { paint("Add your own TMDB key to browse or search these titles. The Open catalogue works without a key.", false); return; }
+        if (key.isEmpty()) { paint("Add your own TMDB key to browse or search these titles.", false); return; }
         int run = ++ticket, requestedPage = fresh ? 1 : page + 1;
         String text = query.getText().toString();
         Catalogue.Filter scope = filter;
@@ -168,16 +169,11 @@ public final class DiscoverActivity extends Activity {
     private boolean valid(int run) { return run == ticket && !isFinishing() && !isDestroyed(); }
     private void paint(String text, boolean more) {
         status.setText(text); next.setVisibility(more ? View.VISIBLE : View.GONE); results.removeAllViews();
-        if (filter == Catalogue.Filter.OPEN) {
-            results.addView(Ui.text(this, "Full open films", 23, Ui.INK, Ui.DISPLAY)); Ui.gap(results, 8);
-            CinemaViews.shelf(this, results, Cinema.FILMS);
-            Ui.gap(results, 17);
-        }
         for (Catalogue.Card item : current) {
             LinearLayout card = Ui.column(this); Ui.pad(card, 13, 13); Ui.click(card, Ui.CARD, 14, Ui.BORDER, v -> detail(item));
             card.addView(Ui.kicker(this, item.kind.badge + (item.year.isEmpty() ? "" : "  /  " + item.year)));
             Ui.gap(card, 4); card.addView(Ui.text(this, item.title, 19, Ui.INK, Ui.BOLD)); Ui.gap(card, 4);
-            card.addView(Ui.text(this, item.source == null ? "Details & watchlist  ›" : item.source.startsWith("demo:") ? "Play on-device sample  ›" : "Play open media  ›", 13, Ui.MUTED, null));
+            card.addView(Ui.text(this, "Details & watchlist  ›", 13, Ui.MUTED, null));
             results.addView(card); Ui.gap(results, 7);
         }
     }

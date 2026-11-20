@@ -16,36 +16,22 @@
   window.bbxAndroidRequest = read;
   const player = () => node('playerWrap');
   const originalNoKey = renderNoKey;
-  let keylessRequest;
-  function fillKeylessHome() {
-    const hero = node('hero'), rows = node('rows'), description = hero.querySelector('.hero-desc');
-    const quick = node('heroTorrent');
-    if (quick) quick.onclick = () => bbxAndroidOpen('torrent');
-    if (!description || !quick) return;
-    hero.classList.add('android-keyless');
-    description.textContent = 'Use your TMDB key for the full v90 movie and series catalogue. You can also look up torrent sources by title or play the open films below without a key.';
-    keylessRequest ||= read('/api/mobile/open-films');
-    keylessRequest.then(({results}) => {
-      if (state.tmdb || !hero.classList.contains('android-keyless')) return;
-      rows.replaceChildren(makeRow('Open films · full-length sources', results, null));
-    }).catch(error => {
-      keylessRequest = null;
-      rows.replaceChildren(el('p', 'msg err', `Open film list couldn't load. ${error.message}`));
-    });
-  }
-  renderNoKey = function () { originalNoKey(); fillKeylessHome(); };
-  if (!state.tmdb && node('heroSettings')) fillKeylessHome();
-  document.addEventListener('DOMContentLoaded', () => {
-    if (!state.tmdb && node('heroSettings') && !node('rows').children.length) fillKeylessHome();
-  }, {once:true});
+  renderNoKey = function () {
+    originalNoKey();
+    node('hero').classList.add('android-keyless');
+    node('heroTorrent').onclick = () => bbxAndroidOpen('torrent');
+  };
   const originalLoadHome = loadHome;
   loadHome = function (...args) {
     node('hero')?.classList.remove('android-keyless');
     return originalLoadHome.apply(this, args);
   };
+  // Ignore synthetic catalogue entries persisted by older previews, without changing user files.
+  const tmdbTitle = item => /^[1-9][0-9]*$/.test(String(item?.id || '')) && !item._anime;
+  state.watchlist = state.watchlist.filter(entry => tmdbTitle(entry.movie));
+  for (const [key, item] of COMING_SOON_CACHE) if (!tmdbTitle(item)) COMING_SOON_CACHE.delete(key);
 
-  // Keep the original search cards, title details and source list; add the index search option
-  // when there is no TMDB credential. An index result is never autoplayed.
+  // Sources are separate from the TMDB catalogue and open only the chosen release/file.
   const originalSourceCard = sourceCardV70;
   sourceCardV70 = function (source) {
     const card = originalSourceCard(source);
@@ -61,46 +47,14 @@
     };
     return card;
   };
-  const originalSearch = doSearch;
-  doSearch = function () {
-    originalSearch();
-    const query = node('searchInput').value.trim();
-    let station = node('androidSourceSearch');
-    if (!station) {
-      station = el('div', 'android-source-search'); station.id = 'androidSourceSearch';
-      node('browseGrid').before(station);
-    }
-    station.replaceChildren();
-    if (!query || state.tmdb || state.view !== 'browse') { station.hidden = true; return; }
-    station.hidden = false;
-    const search = button('Search torrent sources', async () => {
-      search.disabled = true;
-      const status = el('p', 'sub', 'Searching Knaben and Torrents-CSV…');
-      station.replaceChildren(search, status);
-      const q = new URLSearchParams({title: query.slice(0, 130), type: 'movie'});
-      const responses = await Promise.allSettled(['find','deep'].map(mode => read(`/api/sources/${mode}?${q}`)));
-      if (!status.isConnected || state.browse?.query !== query) return;
-      search.disabled = false;
-      const sources = new Map(); const notes = [];
-      for (const reply of responses) {
-        if (reply.status !== 'fulfilled') continue;
-        notes.push(reply.value.note);
-        for (const s of reply.value.sources || []) if (!sources.has(s.magnet)) sources.set(s.magnet, s);
-      }
-      status.textContent = sources.size ? `${sources.size} source candidates. Choose a release to verify its exact files.`
-        : notes.filter(Boolean).join(' ') || 'The source indexes did not answer. Try opening an authorized magnet instead.';
-      for (const source of sources.values()) {
-        const card = sourceCardV70(source);
-        station.append(card);
-      }
-    });
-    station.append(search, el('p', 'sub', 'Searches public indexes with this title only. Select media that you have permission to download.'));
+  const originalBrowse = loadBrowsePage;
+  loadBrowsePage = function (...args) {
+    if (state.tmdb) return originalBrowse.apply(this, args);
+    node('browseMore').hidden = true;
+    node('resultCount').textContent = '';
+    node('browseGrid').replaceChildren(el('p', 'sub', 'Add your TMDB key to browse and search the catalogue.'),
+      button('Add TMDB key', openSettings, 'primary'));
   };
-  node('searchBtn').onclick = doSearch;
-  document.addEventListener('bbx-view', () => {
-    const panel = node('androidSourceSearch');
-    if (panel && (state.view !== 'browse' || state.browse?.mode !== 'search')) panel.hidden = true;
-  });
 
   // Bind every chooser to the specific manifest job from the chosen source, not a recent torrent.
   openTorrent = async function (source, title, options = {}) {

@@ -11,9 +11,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -62,17 +60,9 @@ public final class LanShareService extends Service {
                     MediaEntry e = db.get(id);
                     if (e == null) continue;
                     File file = db.offline(e);
-                    if (e.bundled()) {
-                        file = new File(temp, e.id);
-                        try (InputStream in = getResources().openRawResource(e.music() ? R.raw.orbit : R.raw.dawn);
-                             FileOutputStream out = new FileOutputStream(file)) {
-                            byte[] bytes = new byte[32768];
-                            for (int n; (n = in.read(bytes)) != -1; ) out.write(bytes, 0, n);
-                        }
-                    }
                     if (file.isFile() && file.length() > 0) chosen.add(LanShare.Item.file(e.title, e.kind, file));
                 }
-                if (chosen.isEmpty()) throw new IOException("Select a completed offline copy or a built-in sample.");
+                if (chosen.isEmpty()) throw new IOException("Select a completed offline copy.");
                 if (run != generation) { remove(temp); return; }
                 server = new LanShare.Server(wifi.address, wifi.prefix, chosen, TTL, false);
                 final LanShare.Server opened = server;

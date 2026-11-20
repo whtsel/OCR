@@ -15,7 +15,7 @@ final class Catalogue {
     static final String TMDB = "https://api.themoviedb.org/3";
     private static final int MAX_REPLY = 1024 * 1024;
     enum Filter {
-        OPEN("Open catalogue"), MOVIE("Movies"), TV("Series"), ANIME("Anime"), AUDIO("Music"), WATCHLIST("Saved titles");
+        MOVIE("Movies"), TV("Series"), ANIME("Anime"), AUDIO("Music"), WATCHLIST("Saved titles");
         final String label;
         Filter(String label) { this.label = label; }
         boolean tmdb() { return this == MOVIE || this == TV || this == ANIME; }
@@ -57,28 +57,6 @@ final class Catalogue {
         }
     }
 
-    private static final String EXAMPLES = "https://raw.githubusercontent.com/mdn/learning-area/21973263ba859ff3477919087b488157f9d618a6/";
-    private static final String INTERACTIVE = "https://raw.githubusercontent.com/mdn/interactive-examples/13024db581b08fae11a0ca229497198b9b0534e7/";
-    static List<Card> open(boolean music) {
-        List<Card> list = new ArrayList<>();
-        list.add(new Card("open:orbit", "Low Orbit", "An original 24-second ambient audio sample, already on your device.",
-                "", "BlackBox Studio · original audio", MediaEntry.Kind.MUSIC, "demo:orbit", null));
-        if (!music) {
-            list.add(0, new Card("open:signal", "Signal at Dawn", "An original 14-second audiovisual short. Play and seek without internet.",
-                    "", "BlackBox Studio · original short", MediaEntry.Kind.MOVIE, "demo:signal", null));
-            list.add(new Card("open:bunny", "Big Buck Bunny · excerpt", "A short clip from the open animated movie, served by the MDN learning repository.",
-                    "2008", "Blender Foundation · CC BY 3.0 · excerpt", MediaEntry.Kind.MOVIE,
-                    EXAMPLES + "html/multimedia-and-embedding/video-and-audio-content/rabbit320.mp4", null));
-            list.add(new Card("open:sintel", "Sintel · excerpt", "A clip from Blender's open fantasy short. This is an excerpt, not the full film.",
-                    "2010", "Blender Foundation · CC BY 3.0 · excerpt", MediaEntry.Kind.MOVIE,
-                    EXAMPLES + "javascript/apis/video-audio/finished/video/sintel-short.mp4", null));
-            list.add(new Card("open:flower", "Flower", "A short nature clip for trying streaming and offline downloads.", "",
-                    "MDN Interactive Examples · CC0 media collection", MediaEntry.Kind.MOVIE,
-                    INTERACTIVE + "live-examples/media/cc0-videos/flower.mp4", null));
-        }
-        return list;
-    }
-
     static String credential(String value) {
         String input = value == null ? "" : value.trim();
         if (input.matches("[0-9a-fA-F]{32}") || input.matches("[A-Za-z0-9_-]{6,256}\\.[A-Za-z0-9_-]{6,1600}\\.[A-Za-z0-9_-]{6,400}")) return input;
@@ -104,6 +82,30 @@ final class Catalogue {
         else if (shelf == Shelf.TOP_RATED) route = "/" + type + "/top_rated?";
         else route = "/" + type + (filter == Filter.MOVIE ? "/upcoming?" : "/on_the_air?");
         return parse(fetch(base, route + "&language=en-US&page=" + page, credential(key)), filter);
+    }
+
+    /** TMDB series in the v90 Anime shelf response shape. Never append a playable or local fixture. */
+    static JSONObject anime(URI base, String key, boolean airing, int page) throws IOException, JSONException {
+        String route = "/discover/tv?include_adult=false&with_genres=16&with_original_language=ja&page=" + page;
+        if (airing) {
+            long today = System.currentTimeMillis(), day = 86_400_000L;
+            java.text.SimpleDateFormat date = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.ROOT);
+            date.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            route += "&air_date.gte=" + date.format(new java.util.Date(today - 60 * day))
+                    + "&air_date.lte=" + date.format(new java.util.Date(today + 30 * day)) + "&sort_by=popularity.desc";
+        } else route += "&sort_by=vote_average.desc&vote_count.gte=50";
+        JSONObject reply = new JSONObject(fetch(base, route, credential(key)));
+        JSONArray results = reply.getJSONArray("results"), items = new JSONArray();
+        for (int i = 0; i < results.length(); i++) {
+            JSONObject row = results.optJSONObject(i);
+            if (row != null && row.optLong("id", 0) > 0 && !row.optBoolean("adult")
+                    && "ja".equals(row.optString("original_language"))) {
+                JSONArray genres = row.optJSONArray("genre_ids");
+                if (genres != null) for (int j = 0; j < genres.length(); j++) if (genres.optInt(j) == 16) { items.put(row); break; }
+            }
+        }
+        return new JSONObject().put("items", items).put("pagination",
+                new JSONObject().put("lastPage", Math.max(1, Math.min(500, reply.optInt("total_pages", 1)))));
     }
 
     static List<Card> parse(String content, Filter filter) throws IOException {

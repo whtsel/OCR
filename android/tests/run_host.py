@@ -15,7 +15,8 @@ import threading
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / 'app/src/main/java/com/blackboxstream/mobile'
 RAW = ROOT / 'app/src/main/res/raw'
-FILES = {name: (RAW / name).read_bytes() for name in ('dawn.mp4', 'orbit.m4a')}
+FIXTURES = ROOT / 'app/src/androidTest/assets/fixtures'
+FILES = {name: (FIXTURES / name).read_bytes() for name in ('dawn.mp4', 'orbit.m4a')}
 WEB_FILES = {'opening note.txt': b'BlackBox licensed torrent fixture', 'dawn.mp4': FILES['dawn.mp4'], 'closing.txt': b'End of fixture'}
 WEB_PAD = 397
 WEB_PIECE = 32768

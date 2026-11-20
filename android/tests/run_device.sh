@@ -12,9 +12,6 @@ if [[ -n "${BBX_FIXTURE_MAGNET:-}" ]]; then
     args=(-e fixture_magnet "$BBX_FIXTURE_MAGNET" -e fixture_torrent "$BBX_FIXTURE_TORRENT"
           -e fixture_relay "$BBX_FIXTURE_RELAY" -e fixture_cert "$BBX_FIXTURE_CERT")
 fi
-if [[ "${BBX_VERIFY_LIVE_FILM:-0}" == 1 ]]; then
-    args+=(-e live_cinema yes)
-fi
 if [[ -n "${BBX_PUBLIC_MEDIA_HASHES:-}" ]]; then
     args+=(-e public_media "$BBX_PUBLIC_MEDIA_HASHES")
 fi
@@ -36,7 +33,7 @@ out=$("$adb" shell am instrument -w -r "${args[@]}" "$package.test/com.blackboxs
 printf '%s\n' "$out"
 if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_CODE: -1'* ||
     ( -n "${BBX_PUBLIC_MEDIA_HASHES:-}" && "$out" != *'both played with networking off'* ) ||
-    ( ( "${BBX_VERIFY_PUBLIC_ONLY:-0}" == 1 || "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 ) && "$out" != *'PASS Original v90 Music:'* ) ]]; then
+    ( "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 && "$out" != *'PASS Original v90 Music:'* ) ]]; then
     device_log=$("$adb" logcat -d -v brief -s AndroidRuntime:E BlackBoxSmoke:I MediaPlayer:E | tail -65 || true)
     printf '%s\n' "$device_log"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then

@@ -62,18 +62,12 @@ jobs:
             exit 1
           fi
           python3 -c 'import libtorrent; print(libtorrent.version)'
-      - name: Check the first and last pieces of the public open films
-        continue-on-error: true
-        run: python3 android/tests/check_open_films.py
       - name: Enable Android emulator virtualization
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Test real anime, music, movie and offline playback before packaging
-        env:
-          BBX_VERIFY_LIVE_FILM: '1'
-          BBX_VERIFY_PUBLIC_MEDIA: '1'
+      - name: Test the v90 TMDB-only shell and native playback, imports, torrents and offline copies
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 35
@@ -84,16 +78,6 @@ jobs:
           script: |
             adb shell wm size 720x1560
             adb shell wm density 320
-            BBX_VERIFY_MUSIC_ONLY=1 BBX_VERIFY_LIVE_FILM=0 bash android/tests/run_device.sh
-            python3 android/tests/run_device_fixtures.py --record-public-hashes "${{ runner.temp }}/media-hashes.txt"
-            adb uninstall com.blackboxstream.mobile.test
-            adb uninstall com.blackboxstream.mobile
-            bash android/tools/build_apk.sh "${{ runner.temp }}/BlackBox-Stream-Android.apk"
-            bash android/tests/check_standalone.sh "${{ runner.temp }}/BlackBox-Stream-Android.apk" "${{ runner.temp }}/media-hashes.txt"
-      - name: Retain the tested standalone package for signing
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: blackbox-verified-standalone
-          path: ${{ runner.temp }}/BlackBox-Stream-Android.apk
-          if-no-files-found: error
-          retention-days: 3
+            python3 android/tests/run_device_fixtures.py
+      - name: Verify the standalone transport build compiles (does not include the Music engine)
+        run: bash android/tools/build_apk.sh "${{ runner.temp }}/BlackBox-Stream-Android-Transport.apk"

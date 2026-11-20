@@ -53,7 +53,7 @@ public final class MainActivity extends Activity implements PlaybackService.List
     private int tab, limit = PAGE_SIZE;
     private String query = "";
     private MediaEntry.Kind filter;
-    private boolean bound, busy, startingFilm, resumed;
+    private boolean bound, busy, resumed;
     private long previousOffline;
 
     private final Runnable update = new Runnable() {
@@ -258,27 +258,6 @@ public final class MainActivity extends Activity implements PlaybackService.List
         }
         filters.addView(categories); body.addView(filters);
         Ui.gap(body, 15);
-        Cinema.Film featured = Cinema.FILMS.get(0);
-        LinearLayout hero = Ui.column(this);
-        Ui.card(hero, Ui.CARD, 19, Ui.BORDER);
-        Ui.pad(hero, 13, 13);
-        CinemaViews.title(this, hero, featured, true);
-        Ui.gap(hero, 14);
-        LinearLayout actions = Ui.row(this);
-        TextView watch = Ui.action(this, "▶  Watch now", true, v -> watchFilm(featured, (TextView) v));
-        actions.addView(watch, new LinearLayout.LayoutParams(0, -2, 1.45f));
-        Ui.space(actions, 8);
-        actions.addView(Ui.action(this, "Sources", false, v -> FilmActivity.show(this, featured)), new LinearLayout.LayoutParams(0, -2, 1));
-        hero.addView(actions);
-        TextView foot = Ui.text(this, "Full film · Verified torrent stream", 11, Ui.MUTED, null);
-        Ui.gap(hero, 8); hero.addView(foot);
-        body.addView(hero);
-
-        Ui.gap(body, 22);
-        section(body, "Open cinema", "WATCH FROM TORRENTS");
-        Ui.gap(body, 8);
-        CinemaViews.shelf(this, body, Cinema.FILMS);
-
         List<MediaEntry> recents = store.recentlyPlayed();
         if (!recents.isEmpty()) {
             Ui.gap(body, 22);
@@ -308,36 +287,6 @@ public final class MainActivity extends Activity implements PlaybackService.List
         Ui.gap(body, 8);
         body.addView(Ui.action(this, "Community rooms  ›", false, v -> startActivity(new Intent(this, CommunityActivity.class))));
 
-        Ui.gap(body, 22);
-        section(body, "On-device samples", "NO CONNECTION NEEDED");
-        Ui.gap(body, 9);
-        body.addView(Ui.action(this, "▶  Play sample", false, v -> open(LibraryStore.SAMPLE_VIDEO, false)));
-        Ui.gap(body, 7);
-        addRow(body, store.get(LibraryStore.SAMPLE_AUDIO.id), false);
-        Ui.gap(body, 8);
-    }
-
-    private void watchFilm(Cinema.Film film, TextView control) {
-        if (startingFilm) return;
-        startingFilm = true;
-        if (control != null) { control.setText("Opening…"); control.setEnabled(false); }
-        io.execute(() -> {
-            MediaEntry entry = null;
-            String problem = null;
-            try { entry = Cinema.queue(getApplicationContext(), film); }
-            catch (IOException | RuntimeException failed) { problem = failed.getMessage() == null ? "Could not open this torrent." : failed.getMessage(); }
-            MediaEntry selected = entry;
-            String error = problem;
-            handler.post(() -> {
-                startingFilm = false;
-                if (control != null) { control.setText("▶  Watch now"); control.setEnabled(true); }
-                if (!resumed || isFinishing() || isDestroyed()) return;
-                if (selected == null) {
-                    new AlertDialog.Builder(this).setTitle("Couldn't start " + film.title).setMessage(error)
-                            .setPositiveButton("View sources", (d, w) -> FilmActivity.show(this, film)).setNegativeButton("Close", null).show();
-                } else startActivity(new Intent(this, PlayerActivity.class).putExtra(PlaybackService.EXTRA_ID, selected.id));
-            });
-        });
     }
 
     private void findTitle() {

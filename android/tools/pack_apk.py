@@ -11,7 +11,7 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 def check(apk):
     with ZipFile(apk) as z, open(apk, 'rb') as f:
         assert z.testzip() is None, 'APK has a corrupt ZIP entry'
-        for name in ('classes.dex', 'AndroidManifest.xml', 'resources.arsc', 'res/raw/dawn.mp4', 'res/raw/orbit.m4a'):
+        for name in ('classes.dex', 'AndroidManifest.xml', 'resources.arsc'):
             assert name in z.namelist(), f'Missing {name}'
         manifest = Path(__file__).resolve().parents[1] / 'V90-ASSETS.sha256'
         if manifest.is_file():
@@ -22,7 +22,7 @@ def check(apk):
             for name in ('android-api.js', 'android-port.js', 'android-catalogue.js', 'android-music.js', 'android-v90.css'):
                 assert 'assets/v90-mobile/' + name in z.namelist(), f'Missing Android adapter {name}'
         for entry in z.infolist():
-            if entry.filename in ('resources.arsc', 'res/raw/dawn.mp4', 'res/raw/orbit.m4a'):
+            if entry.filename == 'resources.arsc':
                 assert entry.compress_type == ZIP_STORED, f'{entry.filename} must be uncompressed'
             if entry.compress_type == ZIP_STORED:
                 f.seek(entry.header_offset + 26)

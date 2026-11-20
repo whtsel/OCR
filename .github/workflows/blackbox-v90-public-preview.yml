@@ -1,9 +1,6 @@
-name: BlackBox v90 helper film and anime compatibility
+name: BlackBox v90 authorized video imports
 on:
   workflow_dispatch:
-  push:
-    branches: ['arena/**']
-    paths: ['.github/workflows/blackbox-v90-public-preview.yml']
 permissions:
   contents: read
 jobs:
@@ -39,7 +36,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Play, seek, download and reopen the full film and anime offline with the helper enabled
+      - name: Play, seek, download and reopen the two explicitly imported files offline
         env:
           BBX_TEST_PACKAGE: com.blackboxstream.mobile.helper
           BBX_VERIFY_PUBLIC_PREVIEW: '1'

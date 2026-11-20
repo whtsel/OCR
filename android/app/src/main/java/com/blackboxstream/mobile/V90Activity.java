@@ -41,12 +41,8 @@ public final class V90Activity extends Activity {
     private static final String POLICY = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
             + "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; "
             + "frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'";
-    private static final Set<String> ART_HOSTS = new HashSet<>(Arrays.asList("image.tmdb.org", "cdn.myanimelist.net",
-            "s4.anilist.co", "i.ytimg.com", "img.youtube.com", "cdn-images.dzcdn.net", "is1-ssl.mzstatic.com"));
+    private static final Set<String> ART_HOSTS = new HashSet<>(Arrays.asList("image.tmdb.org", "i.ytimg.com", "img.youtube.com", "cdn-images.dzcdn.net", "is1-ssl.mzstatic.com"));
     private static final Set<String> MOBILE_ASSETS = new HashSet<>(Arrays.asList("android-api.js", "android-port.js", "android-catalogue.js", "android-music.js", "android-v90.css"));
-    private static final int PICK_MUSIC = 94;
-    private int musicFileRequest;
-    private String musicFileTitle;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor work = new ThreadPoolExecutor(6, 6, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(80));
     private volatile boolean closed;
@@ -69,7 +65,9 @@ public final class V90Activity extends Activity {
             s.setAllowFileAccess(false); s.setAllowContentAccess(false);
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
             s.setSupportMultipleWindows(false); s.setJavaScriptCanOpenWindowsAutomatically(false);
-            s.setMediaPlaybackRequiresUserGesture(true);
+            // The trusted local page starts audio after an asynchronous Play request.
+            // External pages and frames cannot run here or use the bridge.
+            s.setMediaPlaybackRequiresUserGesture(false);
             view.addJavascriptInterface(new Bridge(), "BlackBoxAndroid");
             root.addView(view, new LinearLayout.LayoutParams(-1, -1));
             view.loadUrl(HOME);
@@ -116,25 +114,6 @@ public final class V90Activity extends Activity {
             try { work.execute(() -> reply(id, api.call(method, path, body))); }
             catch (RejectedExecutionException busy) { reply(id, V90Api.fail(503, "BlackBox is handling too many requests. Try again in a moment.")); }
         }
-        @JavascriptInterface public void pickMusic(int request, String title) {
-            if (closed || request <= 0 || title == null || title.length() > 512) return;
-            main.post(() -> {
-                if (!active() || musicFileRequest != 0) {
-                    musicFileReply(request, "", "Android's file picker is busy. Try again.");
-                    return;
-                }
-                Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("audio/*")
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-                musicFileRequest = request;
-                musicFileTitle = MediaEntry.cleanTitle(title);
-                try { startActivityForResult(picker, PICK_MUSIC); }
-                catch (android.content.ActivityNotFoundException unavailable) {
-                    musicFileRequest = 0;
-                    musicFileTitle = null;
-                    musicFileReply(request, "", "Android's file picker isn't available.");
-                }
-            });
-        }
         @JavascriptInterface public void open(String action, String id) {
             if (closed || V90Api.expired()) return;
             if ("play".equals(action) && id != null && id.matches("[a-f0-9]{64}")) {
@@ -160,47 +139,9 @@ public final class V90Activity extends Activity {
                 else if ("torrent".equals(action)) launch(TorrentActivity.class);
                 else if ("share".equals(action)) launch(LanShareActivity.class);
                 else if ("rooms".equals(action)) launch(CommunityActivity.class);
-                else if ("music-video".equals(action) && MusicVideoActivity.validId(id))
-                    startActivity(new Intent(V90Activity.this, MusicVideoActivity.class).putExtra(MusicVideoActivity.EXTRA_VIDEO, id));
                 else if ("browser".equals(action)) openProviderPage(id);
             });
         }
-    }
-
-    @Override protected void onActivityResult(int request, int result, Intent data) {
-        super.onActivityResult(request, result, data);
-        if (request != PICK_MUSIC || musicFileRequest == 0) return;
-        int token = musicFileRequest;
-        String title = musicFileTitle;
-        musicFileRequest = 0;
-        musicFileTitle = null;
-        if (closed || V90Api.expired()) return;
-        Uri uri = data == null ? null : data.getData();
-        if (result != RESULT_OK || uri == null) { musicFileReply(token, "", ""); return; }
-        if (!"content".equals(uri.getScheme())) { musicFileReply(token, "", "Choose an audio file from your phone."); return; }
-        try {
-            work.execute(() -> {
-                try {
-                    String type = getContentResolver().getType(uri);
-                    if (type == null || !type.startsWith("audio/")) {
-                        musicFileReply(token, "", "Choose an audio file such as MP3, AAC or FLAC."); return;
-                    }
-                    getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    MediaEntry entry = new MediaEntry(title, MediaEntry.Kind.MUSIC, uri.toString());
-                    LibraryStore.get(this).save(entry, true);
-                    musicFileReply(token, entry.id, "");
-                } catch (RuntimeException unavailable) {
-                    musicFileReply(token, "", "Android couldn't keep access to this file. Save a copy on your phone and try again.");
-                }
-            });
-        } catch (RejectedExecutionException busy) { musicFileReply(token, "", "BlackBox is busy. Try again."); }
-    }
-
-    private void musicFileReply(int request, String id, String error) {
-        main.post(() -> {
-            if (!closed && view != null) view.evaluateJavascript("window.bbxAndroidMusicFile?.(" + request + "," +
-                    JSONObject.quote(id) + "," + JSONObject.quote(error) + ")", null);
-        });
     }
 
     private boolean active() { return resumed && !isFinishing() && !isDestroyed() && !closed && !V90Api.expired(); }
@@ -219,11 +160,7 @@ public final class V90Activity extends Activity {
             boolean allowed = "www.youtube.com".equals(host) && ("/results".equals(path) || "/watch".equals(path))
                     || "www.themoviedb.org".equals(host) && path.matches("/(?:[a-z]{2}(?:-[A-Z]{2})?/)?(?:movie|tv)/[A-Za-z0-9_-]+(?:/watch)?/?")
                     || "musicbrainz.org".equals(host) && path.matches("/recording/[a-f0-9-]{36}")
-                    || "studio.blender.org".equals(host) && path.matches("/projects/[a-z0-9-]+/?")
-                    || "incompetech.com".equals(host) && "/music/royalty-free/index.html".equals(path)
-                        && V90Api.param(uri, "isrc", "").matches("[A-Z]{2}[A-Z0-9]{3}[0-9]{7}")
-                    || "commons.wikimedia.org".equals(host) && OpenAnime.FILMS.stream()
-                        .anyMatch(film -> film.attribution().equals(uri.toString()));
+;
             if (allowed) startActivity(new Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE));
         } catch (android.content.ActivityNotFoundException unavailable) { toast("No app is available to open this provider page."); }
         catch (IllegalArgumentException invalid) { toast("This provider link is not supported."); }
@@ -262,15 +199,6 @@ public final class V90Activity extends Activity {
                         return new WebResourceResponse("audio/mp4", null, 200, "OK", responseHeaders, new FileInputStream(prepared));
                     }
                 }
-                if (path != null && path.matches("/api/img/(w[0-9]{2,4}|original)/open/[a-z_]+\\.jpg")) {
-                    String slug = path.substring(path.lastIndexOf('/') + 1, path.length() - 4).replace('_', '-');
-                    Cinema.Film f = Cinema.fromSlug(slug);
-                    if (f != null) return response(200, "OK", "image/jpeg", TorrentMeta.slurp(getResources().openRawResource(f.art), 512 * 1024));
-                }
-                if (path != null && path.matches("/api/img/(w[0-9]{2,4}|original)/anime/[a-z-]+\\.jpg")) {
-                    OpenAnime film = OpenAnime.named(path.substring(path.lastIndexOf('/') + 1, path.length() - 4));
-                    if (film != null) return artwork(URI.create(film.artwork()), true);
-                }
                 if (path != null && path.matches("/api/img/(w[0-9]{2,4}|original)/[a-zA-Z0-9_-]{1,90}\\.(jpg|jpeg|png|webp)"))
                     return artwork(URI.create("https://image.tmdb.org/t/p/" + path.substring(9)));
                 if ("/api/cover".equals(path)) {
@@ -302,10 +230,8 @@ public final class V90Activity extends Activity {
         return html.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static WebResourceResponse artwork(URI uri) throws IOException { return artwork(uri, false); }
-
-    private static WebResourceResponse artwork(URI uri, boolean pinned) throws IOException {
-        if (!"https".equals(uri.getScheme()) || !pinned && !ART_HOSTS.contains(uri.getHost()) || uri.getPort() != -1 || uri.getUserInfo() != null)
+    private static WebResourceResponse artwork(URI uri) throws IOException {
+        if (!"https".equals(uri.getScheme()) || !ART_HOSTS.contains(uri.getHost()) || uri.getPort() != -1 || uri.getUserInfo() != null)
             return response(403, "Forbidden", "text/plain", new byte[0]);
         HttpsURLConnection req = (HttpsURLConnection) uri.toURL().openConnection();
         req.setConnectTimeout(4500); req.setReadTimeout(6000); req.setInstanceFollowRedirects(false);
