@@ -63,6 +63,7 @@ def main():
     for arg in ('original', 'helper', 'dependency', 'manifest', 'output'):
         parser.add_argument(arg, type=Path)
     parser.add_argument('--native-x86', type=Path, help='CI smoke-test variant only')
+    parser.add_argument('--fixture', type=Path, help='CI smoke-test asset only')
     args = parser.parse_args()
     package(**vars(args))
 
