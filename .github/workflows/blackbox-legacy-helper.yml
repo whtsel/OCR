@@ -28,7 +28,7 @@ jobs:
       - name: Verify p19's release bytes and test exact recordings
         run: |
           python3 -u .github/ci/check_blackbox_p11.py download-refreshed "$RUNNER_TEMP/p19-ytdlp"
-          python3 -u .github/ci/check_blackbox_p11.py host --refreshed "$RUNNER_TEMP/p19-ytdlp"
+          python3 -u .github/ci/check_blackbox_p11.py host "$RUNNER_TEMP/p19-ytdlp" --refreshed
   android-probe:
     name: p19-pinned zipapp in repaired p11 on Android (no sign-in)
     runs-on: ubuntu-24.04
