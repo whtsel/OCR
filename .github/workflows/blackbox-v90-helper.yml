@@ -118,6 +118,4 @@ jobs:
           script: |
             adb shell wm size 720x1560
             adb shell wm density 320
-            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_MUSIC_ONLY=1 \
-            BBX_VERIFY_UNPINNED_ONLY=${{ inputs.verify_live_unpinned && !inputs.verify_live_music && '1' || '0' }} \
-            bash android/tests/run_device.sh
+            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_MUSIC_ONLY=1 BBX_VERIFY_UNPINNED_ONLY=${{ inputs.verify_live_unpinned && !inputs.verify_live_music && '1' || '0' }} bash android/tests/run_device.sh
