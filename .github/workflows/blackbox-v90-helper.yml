@@ -22,7 +22,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: blackbox-v90-helper-${{ github.ref }}
+  group: blackbox-v90-helper-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 jobs:
   assemble:

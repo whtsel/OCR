@@ -159,8 +159,7 @@ public final class V90Activity extends Activity {
             if (uri.getPort() != -1 || uri.getUserInfo() != null || path == null) return;
             boolean allowed = "www.youtube.com".equals(host) && ("/results".equals(path) || "/watch".equals(path))
                     || "www.themoviedb.org".equals(host) && path.matches("/(?:[a-z]{2}(?:-[A-Z]{2})?/)?(?:movie|tv)/[A-Za-z0-9_-]+(?:/watch)?/?")
-                    || "musicbrainz.org".equals(host) && path.matches("/recording/[a-f0-9-]{36}")
-;
+                    || "musicbrainz.org".equals(host) && path.matches("/recording/[a-f0-9-]{36}");
             if (allowed) startActivity(new Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE));
         } catch (android.content.ActivityNotFoundException unavailable) { toast("No app is available to open this provider page."); }
         catch (IllegalArgumentException invalid) { toast("This provider link is not supported."); }
@@ -223,9 +222,11 @@ public final class V90Activity extends Activity {
     private byte[] index() throws IOException {
         String html = new String(TorrentMeta.slurp(getAssets().open("v90/index.html"), 256 * 1024), StandardCharsets.UTF_8);
         // Keep the desktop sources byte-for-byte on disk. Change only how the mobile shell loads them.
+        // The desktop anime add-on replaces the standard browse handler and loads other providers.
+        // Android keeps the normal v90 browse view and supplies TMDB metadata to its Anime tab.
         html = html.replace("</head>", "<link rel=\"stylesheet\" href=\"/android-v90.css\" />\n</head>")
                 .replace("<script src=\"/app.js", "<script src=\"/android-api.js\"></script>\n<script src=\"/app.js")
-                .replaceAll("<script src=\"/(?:fast-source-v74|play-anyway-v74|local-share-v70|ads-v88|source-votes-v74|vote-gate-v75|votes-sync-v74|privacy-panel-v86)\\.js[^\"]*\"></script>", "")
+                .replaceAll("<script src=\"/(?:fast-source-v74|play-anyway-v74|local-share-v70|ads-v88|source-votes-v74|vote-gate-v75|votes-sync-v74|privacy-panel-v86|anime-media-v74)\\.js[^\"]*\"></script>", "")
                 .replace("</body>", "<script src=\"/android-port.js\"></script>\n<script src=\"/android-catalogue.js\"></script>\n<script src=\"/android-music.js\"></script>\n</body>");
         return html.getBytes(StandardCharsets.UTF_8);
     }

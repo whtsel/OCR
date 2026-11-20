@@ -83,10 +83,6 @@
 
   // Keep the original Anime view, but its cards are TMDB series rather than a second catalogue.
   animeToMovie = item => ({...item, media_type:'tv'});
-  window.bbxDecorateCardMediaV74 = undefined;
-  window.bbxMountAnimeStudioV74 = undefined;
-  window.bbxMountDetailMediaStripV74 = undefined;
-  window.bbxOpenCardMediaModalV74 = undefined;
   findAnimeStreams = async () => { byId('streamBox')?.closest('.streambox')?.setAttribute('hidden', ''); };
   renderSourceFallback = target => {
     target.append(button('Search by title instead', () => byId('searchInput').focus()),
