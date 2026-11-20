@@ -1,7 +1,7 @@
-"""Source selection for v90, using the pinned yt-dlp engine without accounts or plugins.
+"""Find one exact v90 recording using the byte-pinned extractor.
 
-The catalogue itself has metadata, not playable URLs. Never download a search result
-without checking the actual video page's release, credits, track, and duration.
+Catalogue row IDs and provider video IDs are deliberately separate. Search hints
+never bypass recording validation, even after an earlier successful download.
 """
 import itertools
 import re
@@ -11,7 +11,10 @@ from pathlib import Path
 
 
 VIDEO_ID = re.compile(r'[A-Za-z0-9_-]{11}\Z')
-AUDIO_SUFFIX = re.compile(r'\s*[(\[]\s*(?:official audio|audio)\s*[)\]]\s*$', re.I)
+# Presentation labels, not edits, live versions, lyric versions or remixes.
+PRESENTATION = re.compile(r'\s*[\[(]\s*(?:official\s+(?:music\s+)?(?:audio|video)|audio)\s*[\])]\s*$', re.I)
+CREDIT_SPLIT = re.compile(r'\s*[,;]\s*|\s+(?:&|×|feat(?:uring)?\.?|ft\.?)\s+', re.I)
+TOPIC = re.compile(r'\s*[-–—]\s*Topic\s*$', re.I)
 SEARCH_COUNT = 10
 INSPECTIONS = 4
 DURATION_SLOP = 6
@@ -26,14 +29,38 @@ def close_length(value, seconds):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and abs(value - seconds) <= DURATION_SLOP
 
 
+def credit_parts(value):
+    return [name for part in CREDIT_SPLIT.split(value) if (name := norm(part))]
+
+
+def same_credits(values, expected):
+    if not isinstance(values, list) or not values or not all(isinstance(value, str) and norm(value) for value in values):
+        return False
+    if norm(' '.join(values)) == norm(expected):
+        return True
+    expected_parts = credit_parts(expected)
+    # Only interchange explicitly separated credits, not arbitrary words within a stage name.
+    return len(expected_parts) > 1 and sorted(expected_parts) == sorted(norm(value) for value in values)
+
+
 def same_video_title(value, title, artist):
-    clean = AUDIO_SUFFIX.sub('', value) if isinstance(value, str) else ''
-    return norm(clean) in (norm(title), norm(f'{artist} {title}'))
+    name = PRESENTATION.sub('', unicodedata.normalize('NFKC', value)) if isinstance(value, str) else ''
+    wanted, actual = norm(title), norm(name)
+    if actual in (wanted, norm(f'{artist} {title}'), norm(f'{title} {artist}')):
+        return True
+    # A visible credit prefix can use different separators or order of collaborating artists.
+    # Require a real title/credit separator; never strip arbitrary trailing words.
+    pair = re.split(r'\s+[-–—]\s+', name, maxsplit=1)
+    parts = credit_parts(artist)
+    if len(pair) == 2 and len(parts) > 1:
+        return any(norm(song) == wanted and sorted(credit_parts(credit)) == sorted(parts)
+                   for credit, song in (pair, pair[::-1]))
+    return False
 
 
 def channel_artist(info):
     name = info.get('channel') or info.get('uploader') or ''
-    return norm(re.sub(r'\s*[-–—]\s*Topic\s*$', '', name, flags=re.I)) if isinstance(name, str) else ''
+    return norm(TOPIC.sub('', name)) if isinstance(name, str) else ''
 
 
 def prerecorded(info):
@@ -41,29 +68,29 @@ def prerecorded(info):
 
 
 def matches(info, expected_id, title, artist, album, seconds):
-    if (info.get('id') != expected_id or info.get('_type', 'video') != 'video' or not prerecorded(info)
-            or info.get('availability') not in (None, 'public', 'unlisted') or not close_length(info.get('duration'), seconds)
-            or not same_video_title(info.get('title'), title, artist) or norm(info.get('track')) != norm(title)
-            or not album or norm(info.get('album')) != norm(album)):
+    if (not isinstance(info, dict) or info.get('id') != expected_id or info.get('_type', 'video') != 'video'
+            or not prerecorded(info) or info.get('availability') not in (None, 'public', 'unlisted')
+            or not close_length(info.get('duration'), seconds) or not same_video_title(info.get('title'), title, artist)
+            or norm(info.get('track')) != norm(title) or not album or norm(info.get('album')) != norm(album)):
         return False
     credits = info.get('artists') or [info.get('artist')]
-    if not isinstance(credits, list) or not all(isinstance(credit, str) for credit in credits):
+    if not same_credits(credits, artist):
         return False
-    if norm(' '.join(credits)) != norm(artist):
+    # A verified channel can be the credited performer or one of the named collaborators.
+    if channel_artist(info) not in {norm(artist), *(norm(credit) for credit in credits)}:
         return False
-    if info.get('channel_is_verified') is True and channel_artist(info) == norm(artist):
+    if info.get('channel_is_verified') is True:
         return True
-    # Some label-supplied album audio uses a Topic channel without a verified badge.
     topic = info.get('channel') or info.get('uploader') or ''
     desc = info.get('description') or ''
-    return bool(isinstance(topic, str) and re.search(r'\s-\sTopic\s*$', topic, re.I)
-                and channel_artist(info) == norm(artist) and isinstance(desc, str)
+    return bool(isinstance(topic, str) and TOPIC.search(topic) and isinstance(desc, str)
                 and desc.startswith('Provided to YouTube by ') and desc.rstrip().endswith('Auto-generated by YouTube.'))
 
 
-def candidates(entries, title, artist, seconds):
+def candidates(entries, title, artist, seconds, inspected=()):
     ranked = []
-    seen = set()
+    seen = set(inspected)
+    credits = {norm(artist), *credit_parts(artist)}
     for item in itertools.islice(entries or (), SEARCH_COUNT):
         if not isinstance(item, dict):
             continue
@@ -74,39 +101,56 @@ def candidates(entries, title, artist, seconds):
                 or not same_video_title(item.get('title'), title, artist)):
             continue
         seen.add(video)
-        candidate = (2 * (channel_artist(item) == norm(artist)) + (duration is not None), video)
-        ranked.append(candidate)
+        ranked.append((2 * (channel_artist(item) in credits) + (duration is not None), video))
     ranked.sort(key=lambda pair: pair[0], reverse=True)
-    return [video for _, video in ranked[:INSPECTIONS]]
+    return [video for _, video in ranked]
 
 
-def prepare(engine, title, artist, album, seconds, mark, lookup_error):
-    # Use the raw search entries so there's no playlist processing, eager resolution or download.
-    results = engine.extract_info(f'ytsearch{SEARCH_COUNT}:{artist} {title}', download=False, process=False)
+def provider_refused(problem):
+    text = str(problem).casefold()
+    return any(reason in text for reason in ('http error 429', 'http error 403', 'too many requests', 'not a bot', 'sign in'))
+
+
+def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembered=''):
+    checked = set()
     rejected = None
     inspected = False
-    for video in candidates((results or {}).get('entries'), title, artist, seconds):
+
+    def verify(video):
+        nonlocal rejected, inspected
+        checked.add(video)
         try:
             info = engine.extract_info(f'https://www.youtube.com/watch?v={video}', download=False, process=False)
         except lookup_error as problem:
-            if 'http error 429' in str(problem).casefold():
+            if provider_refused(problem):
                 raise
             rejected = problem
-            continue
+            return False
         inspected = True
-        if not info or not matches(info, video, title, artist, album, seconds):
-            continue
+        if not matches(info, video, title, artist, album, seconds):
+            return False
         mark(video)
-        # Same extraction result, not another search or URL resolution. Only this audio is written.
+        # Reuse this resolution, not a new search, download of a candidate, or substitution.
         engine.process_ie_result(info, download=True)
         return True
+
+    if isinstance(remembered, str) and VIDEO_ID.fullmatch(remembered) and verify(remembered):
+        return True
+    # Search only after a tap/preparation request. Reserve a candidate check for the
+    # edition-aware alternate wording; both searches share the same overall deadline.
+    for index, query in enumerate((f'{artist} {title}', f'{title} {artist} {album} official audio')):
+        rows = engine.extract_info(f'ytsearch{SEARCH_COUNT}:{query}', download=False, process=False)
+        limit = INSPECTIONS - len(checked) - (1 if index == 0 else 0)
+        for video in candidates((rows or {}).get('entries'), title, artist, seconds, checked)[:limit]:
+            if verify(video):
+                return True
     if rejected and not inspected:
         raise rejected
     return False
 
 
 def main():
-    pin, title, artist, album, seconds, *options = sys.argv[1:]
+    pin, title, artist, album, seconds, remembered, *options = sys.argv[1:]
     sys.path.insert(0, pin)
     from yt_dlp import YoutubeDL, parse_options
     from yt_dlp.utils import DownloadError, ExtractorError
@@ -115,9 +159,10 @@ def main():
     try:
         with YoutubeDL(params) as engine:
             found = prepare(engine, title, artist, album, int(seconds),
-                            lambda video: Path('source-id').write_text(video, encoding='ascii'), (DownloadError, ExtractorError))
+                            lambda video: Path('source-id').write_text(video, encoding='ascii'),
+                            (DownloadError, ExtractorError), remembered)
     except (DownloadError, ExtractorError) as problem:
-        # The Android adapter maps this output to a small set of user-facing errors.
+        # The Android adapter maps this output to small, sanitized failure reasons.
         print(str(problem), file=sys.stderr)
         return 2
     if not found:

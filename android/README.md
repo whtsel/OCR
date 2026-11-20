@@ -30,12 +30,18 @@ As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 ## Music engine and offline listening
 
 The full v90 catalogue has **2,620 albums and 35,995 track rows**. The engine checks an exact
-recording's title, artist, release, full duration and source metadata. A few confirmed source IDs
-skip the lookup, but are not a limit on what can play. No login, browser session, remote helper
-updates or alternate editions are used. Provider availability and exact metadata vary by track
+recording's title, credited artists, release, full duration and publisher metadata. A few confirmed
+source IDs skip the lookup. For other cards, there are at most two searches (the second includes
+release and official-audio wording) and four source inspections in total. Presentation labels and
+separator/order differences in credited collaborations don't invalidate an otherwise verified
+recording. Missing release evidence, a wrong edition, or a remix still cannot play. After complete
+audio is validated, the app remembers the provider ID privately as a lookup hint; it rechecks the
+metadata if audio has to be fetched again. Card, queue and Downloads keys do not change. No login,
+browser session, remote helper updates or alternate editions are used. Provider availability and exact metadata vary by track
 and network; not every catalogue entry can be verified. If the provider rate-limits this device,
 BlackBox pauses new requests to it for one minute. Offline copies still play in that time.
-Only fetch recordings you may download.
+Only fetch recordings you may download. The separately installed Helper Stream tester measures
+progressive startup; this v90 candidate keeps its existing complete-audio/offline path.
 
 The selected track takes priority. On unmetered connections, a single worker prepares the next
 **two actual queue slots** without moving them or substituting other songs. An empty, duplicate,

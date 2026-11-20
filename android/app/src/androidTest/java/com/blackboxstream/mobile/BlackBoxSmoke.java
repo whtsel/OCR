@@ -45,7 +45,7 @@ import org.json.JSONObject;
 public final class BlackBoxSmoke extends Instrumentation {
     private PlaybackService engine;
     private int checks;
-    private boolean publicMediaVerified, originalMusicVerified;
+    private boolean publicMediaVerified, originalMusicVerified, unpinnedMusicVerified;
     private Bundle fixtures;
     private final ServiceConnection binding = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder local) { engine = ((PlaybackService.LocalBinder) local).get(); }
@@ -62,13 +62,14 @@ public final class BlackBoxSmoke extends Instrumentation {
         Bundle result = new Bundle();
         try {
             if (fixtures != null && "yes".equals(fixtures.getString("helper_fixture"))) verifyHelperFixtures();
-            else if (fixtures != null && "yes".equals(fixtures.getString("music_only"))) verifyMusicCandidate();
+            else if (fixtures != null && "yes".equals(fixtures.getString("music_only"))) verifyMusicCandidate("yes".equals(fixtures.getString("unpinned_only")));
             else if (fixtures != null && "yes".equals(fixtures.getString("public_only"))) verifyCandidate();
             else if (fixtures != null && "yes".equals(fixtures.getString("public_preview"))) verifyPublicWithPlayer(getTargetContext());
             else verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
                     + (publicMediaVerified ? "PASS Android imported media: Sintel and The Dull Sword matched public files and both played with networking off\n" : "")
-                    + (originalMusicVerified ? "PASS Original v90 Music: five cold full recordings advanced and sought in the original player, with offline replay after reopening\n" : ""));
+                    + (originalMusicVerified ? "PASS Original v90 Music: five cold full recordings advanced and sought in the original player, with offline replay after reopening\n" : "")
+                    + (unpinnedMusicVerified ? "PASS Original v90 Music: unpinned card discovered a full recording, sought, and replayed offline after reopening\n" : ""));
             finish(Activity.RESULT_OK, result);
         } catch (Throwable bad) {
             result.putString("stream", "\nFAIL BlackBox Android smoke: " + android.util.Log.getStackTraceString(bad) + "\n");
@@ -226,6 +227,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             } catch (java.io.IOException expected) { checks++; }
             verifyPreparationQueue(scratch, audio);
             verifyProviderCooldown(scratch);
+            verifySourceHints(app, instance, runtime);
 
             // Seed only the disposable test package. These files prove local playback, NOT live recording availability.
             assertPass("Preview cache starts empty", cache.mkdir());
@@ -428,6 +430,20 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
     }
 
+    private void verifySourceHints(Context app, Object runtime, Class<?> type) throws Exception {
+        PreparedMusic.Track first = new PreparedMusic.Track(spec("test:remembered", "A", "Artist", "Edition A", 150, ""));
+        PreparedMusic.Track another = new PreparedMusic.Track(spec("test:remembered", "A", "Artist", "Edition B", 150, ""));
+        PreparedMusic.Track pinned = new PreparedMusic.Track(spec("test:remembered", "A", "Artist", "Edition A", 150, "aaaaaaaaaaa"));
+        java.lang.reflect.Method remembered = type.getDeclaredMethod("remembered", String.class);
+        remembered.setAccessible(true);
+        ((PreparedMusic.Runtime) runtime).rememberSource(first, "bbbbbbbbbbb");
+        ((PreparedMusic.Runtime) runtime).rememberSource(pinned, "aaaaaaaaaaa");
+        Object reopened = type.getDeclaredConstructor(Context.class).newInstance(app);
+        assertPass("Provider hint persists across runtime instances without changing the catalogue ID or edition",
+                "bbbbbbbbbbb".equals(remembered.invoke(reopened, first.key)) && first.source.isEmpty()
+                        && "".equals(remembered.invoke(reopened, another.key)) && "".equals(remembered.invoke(reopened, pinned.key)));
+    }
+
     private static JSONObject spec(String ref, String title, String artist, String album, int seconds, String source) throws Exception {
         return new JSONObject().put("ref", ref).put("title", title).put("artist", artist).put("album", album)
                 .put("seconds", seconds).put("source", source);
@@ -449,7 +465,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
     }
 
-    private void verifyMusicCandidate() throws Exception {
+    private void verifyMusicCandidate(boolean unpinnedOnly) throws Exception {
         Context app = getTargetContext();
         assertPass("Live tests use a fresh Music candidate, not an installed user library",
                 app.getPackageName().equals("com.blackboxstream.mobile.music") && !PreparedMusic.cacheDirectory(app).exists());
@@ -459,12 +475,14 @@ public final class BlackBoxSmoke extends Instrumentation {
             WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
             await("The v90 music shell is ready on a phone viewport", 18000,
                     () -> jsTrue(web, V90_READY + " && innerWidth <= 400"));
-            verifyOriginalMusic(web, results);
+            verifyOriginalMusic(web, results, unpinnedOnly);
         } finally { closeScreen(desktop); }
         if (!results.played.isEmpty()) verifyLiveOffline(app, results.played);
-        assertPass("Five cold catalogue recordings required: " + results.played.size() + " played. " + results.failures,
-                results.played.size() == 5 && results.failures.isEmpty());
-        originalMusicVerified = true;
+        int required = unpinnedOnly ? 1 : 5;
+        assertPass(required + " cold catalogue recordings required: " + results.played.size() + " played. " + results.failures,
+                results.played.size() == required && results.failures.isEmpty());
+        unpinnedMusicVerified = unpinnedOnly;
+        originalMusicVerified = !unpinnedOnly;
     }
 
     /** Run the same public media acceptance on the non-debuggable standalone app. */
@@ -546,7 +564,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         LiveTrack(String title, String key, int seconds) { this.title = title; this.key = key; this.seconds = seconds; }
     }
 
-    private void verifyOriginalMusic(WebView web, LiveMusic results) throws Exception {
+    private void verifyOriginalMusic(WebView web, LiveMusic results, boolean unpinnedOnly) throws Exception {
         // Observe the actual Android bridge. This shim cannot supply source IDs or audio.
         js(web, "window.liveMusicResult={}; (()=>{const live=window.fetch;window.fetch=async (url,options)=>{"
                 + "const plan = url==='/api/mobile/music-helper/plan' && JSON.parse(options.body);"
@@ -560,6 +578,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 () -> jsTrue(web, "document.querySelectorAll('#musicGenreChips button').length===14 "
                         + "&& document.querySelector('#music-shelf-trending-now [title=\"Play The Fate of Ophelia\"]')"));
         tryLiveTrack(web, results, "The Fate of Ophelia", "#music-shelf-trending-now [title='Play The Fate of Ophelia']", 226, true);
+        if (unpinnedOnly) return;
         // If the first unpinned attempt was refused, respect the cooldown before testing the
         // independent pinned route once. Never retrigger the refused recording during this run.
         boolean waitForProvider = jsTrue(web, "liveMusicResult['The Fate of Ophelia']?.message?.includes('rate-limiting')");

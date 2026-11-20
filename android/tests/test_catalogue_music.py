@@ -24,13 +24,16 @@ class Engine:
         self.videos = videos
         self.downloads = []
         self.inspections = []
+        self.queries = []
 
     def extract_info(self, url, *, download, process=True):
         if download:
             raise AssertionError('A metadata lookup must never download')
         if url.startswith('ytsearch'):
             assert not process
-            return {'entries': self.rows}
+            query = url.split(':', 1)[1]
+            self.queries.append(query)
+            return {'entries': self.rows.get(query, []) if isinstance(self.rows, dict) else self.rows}
         assert not process
         video = url.split('=')[-1]
         self.inspections.append(video)
@@ -78,6 +81,47 @@ class TestSelection(unittest.TestCase):
             resolver.prepare(engine, *track, lambda video: self.fail('must not fetch'), LookupError)
         self.assertEqual(engine.inspections, ['NOTORIGINAL'])
         self.assertFalse(engine.downloads)
+
+    def test_alternate_wording_finds_exact_edition_with_reordered_credits(self):
+        record = ('After Midnight', 'Singer A feat. Singer B', 'Night Album', 180)
+        cover = dict(official, id='WRONGED1111', title='After Midnight (Official Audio)',
+                     track=record[0], artists=['Singer A', 'Singer B'], channel='Singer B', channel_is_verified=True,
+                     duration=180, album='Cover Album')
+        right = dict(cover, id='RIGHTED1111', title='Singer B & Singer A — After Midnight [Official Video]',
+                     artists=['Singer B', 'Singer A'], album=record[2])
+        engine = Engine({f'{record[1]} {record[0]}': [cover],
+                         f'{record[0]} {record[1]} {record[2]} official audio': [cover, right]},
+                        {cover['id']: cover, right['id']: right})
+        self.assertTrue(resolver.prepare(engine, *record, lambda _: None, LookupError))
+        self.assertEqual(engine.inspections, [cover['id'], right['id']])
+        self.assertEqual(engine.downloads, [right['id']])
+        self.assertEqual(len(engine.queries), 2)
+        for change in (dict(album=None), dict(artists=['Singer B', 'Wrong Artist']),
+                       dict(title='Singer B & Singer A — After Midnight (Slowed)'),
+                       dict(title='Singer B & Singer A — After Midnight (Radio Edit)'),
+                       dict(channel='Other Channel'), dict(duration=200)):
+            self.assertFalse(resolver.matches(dict(right, **change), right['id'], *record), change)
+
+    def test_remembered_id_has_no_search_when_valid_but_stale_metadata_cannot_play(self):
+        engine = Engine([], {official['id']: official})
+        self.assertTrue(resolver.prepare(engine, *track, lambda _: None, LookupError, official['id']))
+        self.assertEqual(engine.queries, [])
+        self.assertEqual(engine.downloads, [official['id']])
+        stale = dict(official, id='STALEID1111', album='Alternate release')
+        engine = Engine([stale, official], {stale['id']: stale, official['id']: official})
+        self.assertTrue(resolver.prepare(engine, *track, lambda _: None, LookupError, stale['id']))
+        self.assertEqual(engine.inspections, [stale['id'], official['id']])
+        self.assertEqual(engine.downloads, [official['id']])
+        engine = Engine([stale], {stale['id']: stale})
+        self.assertFalse(resolver.prepare(engine, *track, lambda _: self.fail('must not mark'), LookupError, stale['id']))
+        self.assertEqual(engine.downloads, [])
+
+    def test_bot_check_does_not_try_an_alternate_query(self):
+        engine = Engine([official], {official['id']: LookupError('Sign in to confirm you are not a bot')})
+        with self.assertRaisesRegex(LookupError, 'not a bot'):
+            resolver.prepare(engine, *track, lambda _: self.fail('must not fetch'), LookupError)
+        self.assertEqual(len(engine.queries), 1)
+        self.assertEqual(engine.downloads, [])
 
     def test_non_latin_recording_is_supported(self):
         info = dict(official, title='夜に駆ける', track='夜に駆ける', artists=['YOASOBI'], album='THE BOOK',

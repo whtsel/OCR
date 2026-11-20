@@ -1,6 +1,7 @@
 package com.blackboxstream.mobile;
 
 import android.content.Context;
+import android.util.AtomicFile;
 import com.yausername.ffmpeg.FFmpeg;
 import com.yausername.youtubedl_android.YoutubeDL;
 import java.io.BufferedReader;
@@ -14,15 +15,21 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import org.json.JSONArray;
+import org.json.JSONException;
 
 /** The tested upstream Android 0.18.1 runtime and the pinned zipapp; no web bridge or account state. */
 final class BundledMusicRuntime implements PreparedMusic.Runtime {
     static final String PIN = "e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3";
+    private static final int SOURCE_HINT_LIMIT = 128;
+    private static final Object SOURCE_HINT_LOCK = new Object();
     private final Context app;
     private final File root, nativeDir, script;
+    private final AtomicFile sourceHints;
     private boolean ready;
     private String companion;
 
@@ -31,6 +38,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         root = new File(app.getNoBackupFilesDir(), "youtubedl-android");
         nativeDir = new File(app.getApplicationInfo().nativeLibraryDir);
         script = new File(root, "yt-dlp/yt-dlp");
+        sourceHints = new AtomicFile(new File(root, "recording-sources-v1.json"));
     }
 
     @Override public void warm() throws Exception { start(); }
@@ -88,12 +96,49 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             run(control, scratch, options.toArray(new String[0]));
             return new PreparedMusic.Result(audio, track.source);
         }
-        // The companion is bundled code. Recording text is passed only as positional arguments.
-        options.addAll(0, Arrays.asList(track.title, track.artist, track.album, Integer.toString(track.seconds)));
+        // A remembered provider ID is a hint, not a pin. The companion rechecks all recording
+        // metadata and may search again if the hint is stale. It never changes track.key.
+        options.addAll(0, Arrays.asList(track.title, track.artist, track.album, Integer.toString(track.seconds), remembered(track.key)));
         execute(control, scratch, true, options.toArray(new String[0]));
         if (control.cancelled) return null;
         try (FileInputStream in = new FileInputStream(new File(scratch, "source-id"))) {
             return new PreparedMusic.Result(audio, new String(TorrentMeta.slurp(in, 16), StandardCharsets.US_ASCII));
+        }
+    }
+
+    private Map<String, String> readHints() {
+        Map<String, String> hints = new LinkedHashMap<>();
+        try (FileInputStream in = sourceHints.openRead()) {
+            JSONArray rows = new JSONArray(new String(TorrentMeta.slurp(in, 16 * 1024), StandardCharsets.UTF_8));
+            for (int i = Math.max(0, rows.length() - SOURCE_HINT_LIMIT); i < rows.length(); i++) {
+                JSONArray row = rows.optJSONArray(i);
+                if (row == null) continue;
+                String key = row.optString(0), id = row.optString(1);
+                if (key.matches("[a-f0-9]{64}") && PreparedMusic.videoId(id)) hints.put(key, id);
+            }
+        } catch (IOException | JSONException unavailable) { /* Hints are optional and safely rebuildable. */ }
+        return hints;
+    }
+
+    private String remembered(String key) {
+        synchronized (SOURCE_HINT_LOCK) { return readHints().getOrDefault(key, ""); }
+    }
+
+    @Override public void rememberSource(PreparedMusic.Track track, String providerId) {
+        if (!track.source.isEmpty() || !PreparedMusic.videoId(providerId)) return;
+        synchronized (SOURCE_HINT_LOCK) {
+            Map<String, String> hints = readHints();
+            hints.remove(track.key);
+            hints.put(track.key, providerId);
+            while (hints.size() > SOURCE_HINT_LIMIT) hints.remove(hints.keySet().iterator().next());
+            JSONArray rows = new JSONArray();
+            hints.forEach((key, id) -> rows.put(new JSONArray().put(key).put(id)));
+            FileOutputStream out = null;
+            try {
+                out = sourceHints.startWrite();
+                out.write(rows.toString().getBytes(StandardCharsets.UTF_8));
+                sourceHints.finishWrite(out);
+            } catch (IOException failed) { sourceHints.failWrite(out); }
         }
     }
 
@@ -112,7 +157,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         command.add(new File(nativeDir, "libpython.so").getAbsolutePath());
         if (discover) command.addAll(Arrays.asList("-c", companion));
         command.add(script.getAbsolutePath());
-        int positional = discover ? 4 : 0;
+        int positional = discover ? 5 : 0;
         command.addAll(Arrays.asList(args).subList(0, positional));
         command.addAll(Arrays.asList("--ignore-config", "--no-update", "--no-cache-dir", "--no-plugin-dirs",
                 "--no-remote-components", "--js-runtimes", "quickjs:" + new File(nativeDir, "libqjs.so").getAbsolutePath(),

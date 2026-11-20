@@ -83,6 +83,7 @@ final class PreparedMusic implements AutoCloseable {
     interface Runtime {
         default void warm() throws Exception { }
         Result fetch(Track track, File scratch, Control control) throws Exception;
+        default void rememberSource(Track track, String providerId) { }
     }
     static final class ProviderRateLimited extends IOException {
         ProviderRateLimited() { super(RATE_LIMITED); }
@@ -361,6 +362,7 @@ final class PreparedMusic implements AutoCloseable {
                 try (FileOutputStream stream = new FileOutputStream(new File(complete, "recording.json"))) {
                     stream.write(new JSONObject().put("recording", track.json()).put("providerId", out.source).toString().getBytes(StandardCharsets.UTF_8));
                 }
+                boolean published = false;
                 synchronized (this) {
                     if (!control.cancelled && available() && wanted(track.key)) {
                         if (readyFile(track.key) != null) continue;
@@ -369,8 +371,14 @@ final class PreparedMusic implements AutoCloseable {
                         cached.put(track.key, track);
                         if (album.containsKey(track.key)) albumCompleted.add(track.key);
                         trimCache();
+                        published = true;
                         notifyAll();
                     }
+                }
+                // Hints never gate publication or change the queue/offline key. No media I/O under the monitor.
+                if (published && track.source.isEmpty()) {
+                    try { runtime.rememberSource(track, out.source); }
+                    catch (RuntimeException ignored) { /* A failed hint write cannot fail a prepared recording. */ }
                 }
             } catch (Exception | LinkageError error) {
                 rateLimited = error instanceof ProviderRateLimited;

@@ -21,6 +21,9 @@ if [[ "${BBX_VERIFY_PUBLIC_ONLY:-0}" == 1 ]]; then
 fi
 if [[ "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 ]]; then
     args+=(-e music_only yes)
+    if [[ "${BBX_VERIFY_UNPINNED_ONLY:-0}" == 1 ]]; then
+        args+=(-e unpinned_only yes)
+    fi
 fi
 if [[ "${BBX_VERIFY_PUBLIC_PREVIEW:-0}" == 1 ]]; then
     : "${BBX_PUBLIC_MEDIA_HASHES:?Provide the independently collected public file hashes}"

@@ -6,6 +6,10 @@ on:
         description: Require cold live playback and offline replay in the v90 player (separate from fixtures)
         type: boolean
         default: false
+      verify_live_unpinned:
+        description: Require a single unpinned v90 card to resolve, play, seek and replay offline
+        type: boolean
+        default: false
   push:
     branches: ['arena/**']
     paths:
@@ -102,8 +106,8 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
-      - name: Require live full recordings in the actual v90 Android player (not fixtures)
-        if: ${{ inputs.verify_live_music }}
+      - name: Require cold live recordings in the actual v90 Android player (not fixtures)
+        if: ${{ inputs.verify_live_music || inputs.verify_live_unpinned }}
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 35
@@ -114,4 +118,6 @@ jobs:
           script: |
             adb shell wm size 720x1560
             adb shell wm density 320
-            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_MUSIC_ONLY=1 bash android/tests/run_device.sh
+            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_MUSIC_ONLY=1 \
+            BBX_VERIFY_UNPINNED_ONLY=${{ inputs.verify_live_unpinned && !inputs.verify_live_music && '1' || '0' }} \
+            bash android/tests/run_device.sh
