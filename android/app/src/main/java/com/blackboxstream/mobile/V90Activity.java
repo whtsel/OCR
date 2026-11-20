@@ -17,6 +17,8 @@ import android.widget.LinearLayout;
 import android.widget.Toast;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -249,6 +251,17 @@ public final class V90Activity extends Activity {
             String path = req.getUrl().getEncodedPath();
             try {
                 if ("/".equals(path)) return response(200, "OK", "text/html", index());
+                // Read-only and same-origin. A missing prepared recording never invokes the downloader.
+                if (path != null && path.matches("/prepared-audio/[A-Za-z0-9_-]{11}\\.m4a")) {
+                    if (req.isForMainFrame()) return response(403, "Forbidden", "text/plain", new byte[0]);
+                    String id = path.substring("/prepared-audio/".length(), path.length() - 4);
+                    File prepared = api.preparedAudio(id);
+                    if (prepared != null) {
+                        Map<String, String> responseHeaders = new HashMap<>(headers());
+                        responseHeaders.put("Content-Length", Long.toString(prepared.length()));
+                        return new WebResourceResponse("audio/mp4", null, 200, "OK", responseHeaders, new FileInputStream(prepared));
+                    }
+                }
                 if (path != null && path.matches("/api/img/(w[0-9]{2,4}|original)/open/[a-z_]+\\.jpg")) {
                     String slug = path.substring(path.lastIndexOf('/') + 1, path.length() - 4).replace('_', '-');
                     Cinema.Film f = Cinema.fromSlug(slug);

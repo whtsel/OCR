@@ -1,0 +1,66 @@
+name: BlackBox v90 Music helper preview
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - '.github/workflows/blackbox-v90-helper.yml'
+      - '.github/ci/verify_blackbox_v90_helper.py'
+      - 'android/app/build.gradle'
+      - 'android/app/src/musicHelper/**'
+      - 'android/app/src/main/java/**/PreparedMusic.java'
+      - 'android/app/src/main/assets/v90-mobile/android-music.js'
+permissions:
+  contents: read
+concurrency:
+  group: blackbox-v90-helper-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  assemble:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          gradle-version: '8.9'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - name: Check pinned and preserved assets
+        run: |
+          (cd android/vendor && sha256sum -c ytdlp.sha256)
+          (cd android/app/src/main/assets/v90 && sha256sum -c ../../../../../V90-ASSETS.sha256)
+          node --check android/app/src/main/assets/v90-mobile/android-music.js
+      - name: Compile the actual v90 app with the helper and verify APK bytes
+        run: |
+          log=$(mktemp)
+          if ! (cd android && gradle :app:assembleDebug --no-daemon --console=plain -PbbxMusicHelper=true -PbbxHelperPreview=true) > "$log" 2>&1; then
+            tail -75 "$log"
+            message=$(grep -A10 -E 'What went wrong:|^e: ' "$log" | head -c 2700 || true)
+            printf '::error::%s\n' "${message//$'\n'/' / '}"
+            exit 1
+          fi
+          apk=android/app/build/outputs/apk/debug/app-debug.apk
+          python3 .github/ci/verify_blackbox_v90_helper.py "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
+          grep -q "^package: name='com.blackboxstream.mobile.helper'" "$RUNNER_TEMP/badging.txt"
+          grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
+          hash=$(sha256sum "$apk")
+          echo "::notice::ARM64 v90 candidate SHA-256 ${hash%% *} ($(stat -c %s "$apk") bytes)"
+          cp "$apk" "$RUNNER_TEMP/BlackBox-Stream-v90-Helper-Preview-ARM64.apk"
+      - name: Retain the side-by-side candidate (not a release)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: BlackBox-Stream-v90-Helper-Preview-ARM64
+          path: ${{ runner.temp }}/BlackBox-Stream-v90-Helper-Preview-ARM64.apk
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

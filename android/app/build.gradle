@@ -2,6 +2,14 @@ plugins {
     id 'com.android.application'
 }
 
+// The helper-enabled v90 build includes an official, byte-pinned zipapp and the tested Android runtime.
+// The dependency-free baseline/standalone build remains available.
+def musicHelper = providers.gradleProperty('bbxMusicHelper').getOrElse('false') == 'true'
+def helperAbi = providers.gradleProperty('bbxHelperAbi').getOrElse('arm64-v8a')
+def preview = providers.gradleProperty('bbxHelperPreview').getOrElse('false') == 'true'
+def helperRaw = layout.buildDirectory.dir('generated/musicHelper/res')
+def previewRes = layout.buildDirectory.dir('generated/musicHelperPreview/res')
+
 android {
     namespace 'com.blackboxstream.mobile'
     compileSdk 35
@@ -13,6 +21,12 @@ android {
         versionCode 6
         versionName '1.4.1'
         testInstrumentationRunner 'com.blackboxstream.mobile.BlackBoxSmoke'
+        if (musicHelper) {
+            versionCode 7
+            versionName '1.4.2-helper'
+            if (!(helperAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException('Unsupported helper ABI: ' + helperAbi)
+            ndk { abiFilters += [helperAbi] }
+        }
     }
 
     compileOptions {
@@ -20,8 +34,52 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
 
+    if (musicHelper) {
+        sourceSets.main.java.srcDir('src/musicHelper/java')
+        sourceSets.main.res.srcDir(helperRaw)
+        packaging {
+            jniLibs.useLegacyPackaging = true // libpython/libffmpeg are app executables and need their install paths.
+            resources.merges += ['META-INF/LICENSE*', 'META-INF/NOTICE*', 'META-INF/DEPENDENCIES']
+        }
+        if (preview) {
+            buildTypes.debug.applicationIdSuffix = '.helper'
+            sourceSets.debug.res.srcDir(previewRes)
+        }
+    }
+
     androidResources {
         // MediaPlayer needs seekable, uncompressed Android resource descriptors.
         noCompress += ['mp4', 'm4a']
+    }
+}
+
+if (musicHelper) {
+    def zipapp = rootProject.file('vendor/ytdlp')
+    tasks.register('stagePinnedMusicHelper') {
+        inputs.file(zipapp)
+        outputs.dir(helperRaw)
+        if (preview) outputs.dir(previewRes)
+        doLast {
+            def bytes = zipapp.bytes
+            def hash = java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
+            if (bytes.length != 3073072 || hash != 'e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3') {
+                throw new GradleException('yt-dlp does not match the phone-tested 2026.10.26 pin.')
+            }
+            def raw = helperRaw.get().file('raw/ytdlp').asFile
+            raw.parentFile.mkdirs()
+            raw.bytes = bytes
+            if (preview) {
+                def label = previewRes.get().file('values/strings.xml').asFile
+                label.parentFile.mkdirs()
+                label.text = '<resources><string name="app_name">BlackBox Stream Helper Preview</string></resources>'
+            }
+        }
+    }
+    tasks.named('preBuild') { dependsOn('stagePinnedMusicHelper') }
+    dependencies {
+        implementation 'io.github.junkfood02.youtubedl-android:library:0.18.1'
+        implementation 'io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1'
+        implementation 'io.github.junkfood02.youtubedl-android:common:0.18.1'
+        implementation 'org.apache.commons:commons-compress:1.12'
     }
 }

@@ -71,3 +71,7 @@
 .bbx-android .android-music-source::backdrop { background:rgba(0,0,0,.68); }
 .bbx-android .android-music-source input { width:100%; min-width:0; margin:6px 0; padding:12px; background:#0d111b; color:#eee; border:1px solid #465167; border-radius:8px; font:inherit; }
 .bbx-android .android-music-source h2,.bbx-android .android-music-source p { overflow-wrap:anywhere; }
+/* Prepared audio uses the existing v90 player/seek and queue rather than an external player. */
+.bbx-android .android-audio-library[hidden] { display:none; }
+.bbx-android.bbx-prepared-player #bgAudioBar:not([hidden]) { display:flex !important; }
+.bbx-android.bbx-prepared-player #bgAudioBar { max-width:calc(100vw - 20px); }

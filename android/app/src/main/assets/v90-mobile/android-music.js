@@ -168,18 +168,184 @@
   const desktopQueueIdentity = queueIdentity;
   queueIdentity = item => item?.catalogTrackId || (item?.album && title(item) ? identity(item) : desktopQueueIdentity(item));
   ensureQueueLookahead = () => 0;
-  queueItemStatus = (item, i) => `${i === musicQueue.idx ? 'Selected · ' : ''}${savedSource(item) ? 'Linked source' : official(item) ? 'Official · online only' : 'Source needed'}`;
+  // The helper is optional and disabled until the listener opts in. Queueing/browsing alone never contacts the provider.
+  const HELPER = '/api/mobile/music-helper';
+  let helper = {available:false, enabled:false, tracks:{}};
+  let selection = 0, planSequence = 0, playingPrepared = null, currentBlob = '', windowKey = '';
+  let helperTimer, helperPanel, helperNote, helperToggle, helperClear, preparedRows;
+  const matchHelper = item => item && !savedSource(item) ? (official(item)?.youtube || '') : '';
+  const presentState = result => {
+    helper = result;
+    updateHelperPanel();
+    renderMusicQueue();
+    return result;
+  };
+  const refreshHelper = async () => presentState(await read(HELPER));
+  function plan(selected, upcoming = [], retry = false) {
+    return read(`${HELPER}/plan`, {sequence:++planSequence, selected, upcoming, retry});
+  }
+  function releasePreparedAudio() {
+    playingPrepared = null;
+    document.documentElement.classList.remove('bbx-prepared-player');
+    windowKey = '';
+    clearTimeout(helperTimer);
+    if (!currentBlob) return;
+    const audio = byId('bgAudio');
+    if (audio?.src === currentBlob) {
+      musicBgLoadSeq++;
+      musicBgPendingFinish?.({ok:false, stale:true});
+      audio.pause(); audio.removeAttribute('src'); audio.load();
+      byId('bgAudioBar').hidden = true;
+    }
+    URL.revokeObjectURL(currentBlob);
+    currentBlob = '';
+  }
+  function stillSelected(number, item) { return number === selection && musicQueue.list[musicQueue.idx] === item; }
+  function followPreparation(number) {
+    clearTimeout(helperTimer);
+    helperTimer = setTimeout(async () => {
+      if (selection !== number || !playingPrepared) return;
+      try {
+        const result = await read(HELPER);
+        if (selection !== number) return;
+        presentState(result);
+        if (Object.values(helper.tracks).some(t => t.state === 'preparing' || result.unmetered && t.state === 'queued')) followPreparation(number);
+      } catch { /* A status failure must not interrupt audio that is already playing. */ }
+    }, 1100);
+  }
+  function prepareUpcoming() {
+    const live = playingPrepared;
+    if (!helper.enabled || !live || live.number !== selection || musicQueue.list[musicQueue.idx] !== live.item) return;
+    // Do not fill holes further down the queue, resolve guesses, or change the original queue order.
+    const next = musicQueue.list.slice(musicQueue.idx + 1, musicQueue.idx + 3).map(matchHelper);
+    const key = JSON.stringify([live.id, ...next]);
+    if (key === windowKey) return;
+    windowKey = key;
+    plan(live.id, next).then(result => {
+      if (selection !== live.number || windowKey !== key) return;
+      presentState(result);
+      if (next.some(Boolean)) followPreparation(live.number);
+    }).catch(() => { if (windowKey === key) windowKey = ''; });
+  }
+  async function playPrepared(item, id, number, options) {
+    const started = Date.now();
+    try {
+      let result = await plan(id, [], true);
+      while (stillSelected(number, item)) {
+        presentState(result);
+        const track = result.tracks?.[id];
+        if (!result.enabled || !track) return;
+        if (track.state === 'ready') break;
+        if (track.state === 'failed') throw new Error(track.message);
+        const seconds = Math.floor((Date.now() - started) / 1000);
+        if (seconds > 190) throw new Error('This recording is taking too long to prepare.');
+        setMusicPlaybackStatus(`Preparing ${title(item)} · ${seconds}s`, '#e9c979');
+        await new Promise(resolve => setTimeout(resolve, 760));
+        if (!stillSelected(number, item)) return;
+        result = await read(HELPER);
+      }
+      if (!stillSelected(number, item)) return;
+      // Read the complete app-private copy once. A blob gives the existing player local seeking
+      // without exposing app files, a loopback server, or media URLs from the provider.
+      const file = await fetch(`/prepared-audio/${id}.m4a`, {cache:'no-store'});
+      if (!file.ok || !file.headers.get('Content-Type')?.startsWith('audio/mp4')) throw new Error('The prepared file is no longer on this phone.');
+      const blob = await file.blob();
+      if (!stillSelected(number, item)) return;
+      if (!blob.size || blob.size > 24 * 1024 * 1024) throw new Error('The prepared file has an invalid size.');
+      const player = ensureBgAudio();
+      if (!player) throw new Error('The Music player is unavailable.');
+      currentBlob = URL.createObjectURL(blob);
+      document.documentElement.classList.add('bbx-prepared-player');
+      const played = () => {
+        if (!stillSelected(number, item) || player.audio.src !== currentBlob || !currentBlob) return;
+        playingPrepared = {item, id, number};
+        setMusicPlaybackStatus(`${display(item)} · playing from this phone`, '#65ddbc');
+        prepareUpcoming();
+      };
+      player.audio.addEventListener('playing', played, {once:true});
+      const outcome = await playBgAudio(currentBlob, {title:title(item), artist:artist(item), artwork:item.artwork || item.thumbnail});
+      if (!stillSelected(number, item)) { player.audio.removeEventListener('playing', played); return; }
+      if (!outcome.ok) {
+        player.audio.removeEventListener('playing', played);
+        throw new Error('The prepared recording could not start.');
+      }
+      if (outcome.needsTap) setMusicPlaybackStatus(`${title(item)} is prepared · tap Play in the player`, '#e9c979');
+    } catch (error) {
+      if (!stillSelected(number, item)) return;
+      releasePreparedAudio();
+      plan('').catch(() => {});
+      setMusicPlaybackStatus(`${error.message || 'Could not prepare the exact recording.'} Use Source for selected track for other options.`, '#ff7785');
+    } finally {
+      if (stillSelected(number, item)) finishMusicPlaybackFeedback(true, options.feedbackId || 0);
+    }
+  }
+  queueItemStatus = (item, i) => {
+    const match = matchHelper(item), state = helper.enabled && helper.tracks?.[match]?.state;
+    const keep = state === 'ready' ? 'Ready on this phone' : state === 'preparing' ? 'Preparing exact audio'
+      : state === 'queued' ? (helper.unmetered ? 'Preparation queued' : 'Waiting for unmetered network')
+      : state === 'failed' ? 'Preparation failed' : match ? (helper.enabled ? 'Verified source' : 'Official · online only') : 'Source needed';
+    return `${i === musicQueue.idx ? 'Selected · ' : ''}${savedSource(item) ? 'Linked source' : keep}`;
+  };
   proactivelyWarmMusicLanding = async () => [];
-  preloadNextTwo = () => {};
-  queuePlayCurrent = async () => {
+  preloadNextTwo = prepareUpcoming;
+  queuePlayCurrent = async (options = {}) => {
     const item = musicQueue.list[musicQueue.idx];
     if (!item || !title(item)) return;
-    const source = savedSource(item);
+    const number = ++selection;
+    releasePreparedAudio();
+    const source = savedSource(item), match = official(item);
+    if (!source && match && helper.enabled && helper.tracks?.[match.youtube]) return playPrepared(item, match.youtube, number, options);
+    if (helper.enabled) plan('').catch(() => {});
+    finishMusicPlaybackFeedback(true, options.feedbackId || 0);
     if (source) { setMusicPlaybackStatus(display(item)); return bbxAndroidOpen(source.type, source.id); }
-    const match = official(item);
     if (match) { setMusicPlaybackStatus(display(item)); return bbxAndroidOpen('music-video', match.id); }
     showTrackSource(item);
   };
+  const renderQueue = renderMusicQueue;
+  renderMusicQueue = function (...args) {
+    const result = renderQueue.apply(this, args);
+    prepareUpcoming(); // Also handles removal and reordering of already queued entries.
+    return result;
+  };
+  function updateHelperPanel() {
+    if (!helperPanel) return;
+    helperPanel.hidden = !helper.available;
+    helperToggle.textContent = helper.enabled ? 'Turn off music preparation' : 'Enable music preparation';
+    helperNote.textContent = helper.enabled ? `Helper ${helper.version} · next two matched tracks prepare on unmetered connections.`
+      : 'Use the on-device helper for recordings you may download. Once prepared, tracks can replay in Music without a connection.';
+    helperClear.hidden = !helper.enabled;
+    preparedRows.replaceChildren();
+    for (const [id, track] of Object.entries(helper.tracks || {})) {
+      const match = officialSources.find(source => source.youtube === id);
+      if (!match || track.state !== 'ready') continue;
+      preparedRows.append(button(`Play prepared: ${track.title}`, () => {
+        const item = {track:track.title, artist:track.artist, album:match.albums[0], duration:track.seconds};
+        playMusicList([item], 0, 'audio');
+      }, 'ghost'));
+    }
+  }
+  function confirmHelper(clear) {
+    const dialog = el('dialog', 'android-music-source');
+    dialog.id = 'androidMusicHelperConsent';
+    const heading = el('h2', '', clear ? 'Clear prepared tracks?' : 'Prepare music on this phone?');
+    heading.id = 'androidMusicHelperTitle';
+    dialog.setAttribute('aria-labelledby', heading.id);
+    dialog.append(heading, el('p', 'sub', clear ? 'This removes the private copies and turns off preparation.'
+      : 'Only use this for recordings you may download. The first play prepares the full file. BlackBox keeps the audio in the app and prepares up to the next two exact matches on unmetered connections.'),
+      button(clear ? 'Clear and turn off' : 'Enable on this phone', () => { dialog.close(); changeHelper(!clear, clear); }, 'primary'),
+      button('Cancel', () => dialog.close(), 'ghost'));
+    openDialog?.close();
+    openDialog = dialog;
+    dialog.addEventListener('close', () => { if (openDialog === dialog) openDialog = null; dialog.remove(); }, {once:true});
+    document.body.append(dialog); dialog.showModal();
+  }
+  async function changeHelper(enable, clear = false) {
+    if (!enable || clear) { selection++; releasePreparedAudio(); }
+    helperToggle.disabled = true;
+    try { presentState(await read(`${HELPER}/options`, {enabled:enable, clear})); }
+    catch (error) { toast(error.message); }
+    finally { helperToggle.disabled = false; }
+  }
   warmMusicTrack = async () => '';
   warmMusicLiveSource = async () => null;
   proactivelyWarmMusicItems = () => {};
@@ -221,7 +387,11 @@
   const show = showView;
   showView = function (next) { const result = show.call(this, next); if (next === 'music') refreshAudioRows(); return result; };
   const resume = window.bbxAndroidResume;
-  window.bbxAndroidResume = () => { resume?.(); if (state.view === 'music') refreshAudioRows(); };
+  window.bbxAndroidResume = () => {
+    resume?.();
+    if (state.view === 'music') refreshAudioRows();
+    if (helperPanel) refreshHelper().catch(() => {});
+  };
   const back = window.bbxAndroidBack;
   window.bbxAndroidBack = () => {
     if (openDialog?.open) { openDialog.close(); return true; }
@@ -249,7 +419,18 @@
       button('Import audio / playlists', () => bbxAndroidOpen('library')),
       button('Playback queue', () => openMusicQueuePanel()),
       button('Source for selected track', chooseSelectedSource), rows);
-    shelf.append(own);
+    helperPanel = el('section', 'android-audio-library'); helperPanel.hidden = true;
+    helperNote = el('p', 'sub android-music-note');
+    helperToggle = button('Enable music preparation', () => helper.enabled ? changeHelper(false) : confirmHelper(false));
+    helperClear = button('Clear prepared tracks', () => confirmHelper(true), 'ghost');
+    preparedRows = el('div', 'android-audio-library');
+    helperPanel.append(el('p', 'sub android-music-note', 'Music preparation'), helperNote, helperToggle, helperClear, preparedRows);
+    shelf.append(own, helperPanel);
+    byId('bgClose')?.addEventListener('click', () => {
+      selection++; releasePreparedAudio();
+      if (helper.enabled) plan('').catch(() => {});
+    });
+    refreshHelper().catch(() => {});
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', controls, {once:true});
   else controls();

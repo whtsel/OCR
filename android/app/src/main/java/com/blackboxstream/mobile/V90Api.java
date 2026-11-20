@@ -24,6 +24,7 @@ final class V90Api {
     private final LibraryStore db;
     private final SharedPreferences prefs;
     private final V90Online online;
+    private final PreparedMusic music;
     private final ExecutorService resolver = Executors.newFixedThreadPool(2);
     private final Map<String, Resolve> jobs = new LinkedHashMap<>();
     private volatile String key;
@@ -49,13 +50,17 @@ final class V90Api {
         app = context.getApplicationContext(); db = LibraryStore.get(app);
         prefs = app.getSharedPreferences("catalogue", Context.MODE_PRIVATE);
         key = prefs.getString("key", ""); online = new V90Online();
+        music = PreparedMusic.builtIn(app);
     }
 
     void close() {
         closed = true;
         synchronized (this) { for (Resolve job : jobs.values()) job.cancelled = true; jobs.clear(); }
         resolver.shutdownNow();
+        music.close();
     }
+
+    File preparedAudio(String id) { return closed || expired() ? null : music.read(id); }
 
     static boolean expired() { return System.currentTimeMillis() >= EXPIRES_AT; }
     private static Reply ok(JSONObject value) { return new Reply(200, value); }
@@ -114,6 +119,17 @@ final class V90Api {
                 return select(parts[3], Integer.parseInt(parts[5]), selection.optString("job"), selection.optString("title"));
             }
             if (get && path.equals("/api/mobile/library")) return library();
+            if (get && path.equals("/api/mobile/music-helper")) return ok(music.state());
+            if (!get && path.equals("/api/mobile/music-helper/options")) {
+                JSONObject data = new JSONObject(body);
+                music.options(data.optBoolean("enabled"), data.optBoolean("clear"));
+                return ok(music.state());
+            }
+            if (!get && path.equals("/api/mobile/music-helper/plan")) {
+                JSONObject data = new JSONObject(body);
+                music.plan(data.getInt("sequence"), data.getString("selected"), data.getJSONArray("upcoming"), data.optBoolean("retry"));
+                return ok(music.state());
+            }
             if (get && path.equals("/api/mobile/music")) {
                 JSONArray tracks = new JSONArray();
                 String query = V90Online.searchText(param(uri, "q", ""));
