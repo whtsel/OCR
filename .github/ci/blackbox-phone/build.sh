@@ -28,7 +28,7 @@ mkdir "$work/dex"
 grep -q "Class descriptor .*Lorg/apache/commons/compress/archivers/zip/ZipFile;" "$work/dependency.txt"
 
 "$tools/aapt2" link -I "$platform" -I "$original" --manifest "$dir/AndroidManifest.xml" \
-  --min-sdk-version 24 --target-sdk-version 34 --version-code 1 --version-name '0.2-helper-search' -o "$work/manifest.apk"
+  --min-sdk-version 24 --target-sdk-version 34 --version-code 2 --version-name '0.2.1-helper-search' -o "$work/manifest.apk"
 extra=()
 case "$abi" in
   arm64-v8a) ;;

@@ -50,7 +50,8 @@ async function tester(respond, duration = Number(second.duration)) {
       const [code, payload] = url === '/api/ytdlp/status'
         ? [200, {installed:true, state:'ready', cookies:false}]
         : await respond(url, options);
-      return {status:code, json:async () => payload};
+      const raw = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      return {status:code, text:async () => raw, json:async () => JSON.parse(raw)};
     },
   });
   await new Promise(resolve => setImmediate(resolve));
@@ -79,6 +80,43 @@ test('arbitrary query; one explicit result; exact same-origin audio; forwards se
   assert.match(app.nodes['audio-status'].textContent, /^Audio playing · Full length 3:45/);
   await app.nodes.seek.emit('click');
   assert.equal(app.audio.currentTime, 150);
+});
+
+// Reproduce the strings emitted by the archived Android wrapper, not an idealized API fixture.
+const p11Rows = (...rows) => `{"ok":true,"results":[${rows.map(({ytId, title, channel, duration}) =>
+  `{"ytId":${JSON.stringify(ytId)},"title":${JSON.stringify(title)},"channel":${JSON.stringify(channel)},"duration":${duration}","thumbnail":"https://i.ytimg.com/vi/${ytId}/hqdefault.jpg"}`
+).join(',')}]}`;
+
+test('reads the archived search envelope including quoted and Unicode metadata', async () => {
+  const title = 'Échos ","duration":999"\\ライブ';
+  const raw = p11Rows({...first, title}, {...second, duration:'0'}, second);
+  assert.throws(() => JSON.parse(raw), SyntaxError);
+  const app = await tester(async url => url === `${search}/fetch`
+    ? [200, {ok:true, id:second.ytId, bytes:300000}]
+    : [200, raw]);
+  await app.search('Échos');
+  assert.match(app.nodes['search-status'].textContent, /^Search returned 2 YouTube results/);
+  const controls = app.nodes.results.querySelectorAll('button');
+  assert.deepEqual(controls.map(button => button['aria-label']), [`Play ${title}`, `Play ${second.title}`]);
+  assert.equal(app.requests.length, 2, 'reading search does not prepare audio');
+  await controls[1].emit('click');
+  assert.deepEqual(JSON.parse(app.requests.at(-1).options.body), {id:second.ytId, kind:'audio'});
+  assert.equal(app.audio.src, `${search}/file/${second.ytId}?kind=audio`);
+  app.audio.currentTime = 2;
+  await app.audio.emit('timeupdate');
+  assert.match(app.nodes['audio-status'].textContent, /^Audio playing · Full length 3:45/);
+});
+
+test('rejects incomplete or unexpected legacy search envelopes', async () => {
+  const raw = p11Rows(first);
+  for (const payload of [raw.slice(0, -1), raw.replace('/hqdefault.jpg', '/other.jpg'), raw.replace('}]}', '},]}')]) {
+    const app = await tester(async () => [200, payload]);
+    await app.search('A real query');
+    assert.match(app.nodes['search-status'].textContent, /^Could not read the helper/);
+    assert.equal(app.nodes.results.querySelectorAll('button').length, 0);
+    assert.equal(app.requests.length, 2);
+    assert.equal(app.nodes.search.disabled, false);
+  }
 });
 
 test('provider refusal is reported after search without playing a different result', async () => {

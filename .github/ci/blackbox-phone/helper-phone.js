@@ -19,13 +19,40 @@ function controls() {
   for (const button of results.querySelectorAll('button')) button.disabled = !ready || busy;
 }
 
-async function request(path, timeout, options) {
+async function request(path, timeout, options, read = response => response.json()) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(path, {...options, cache:'no-store', redirect:'error', signal:controller.signal});
-    return [response.status, await response.json()];
+    return [response.status, await read(response)];
   } finally { clearTimeout(timer); }
+}
+
+async function readSearch(response) {
+  if (response.status !== 200) return response.json();
+  const raw = await response.text();
+  try { return JSON.parse(raw); } catch (error) {
+    // p11 writes `"duration":186","thumbnail":...`, omitting the opening quote.
+    // Read only that exact legacy shape, without changing the archived helper or rewriting titles.
+    const start = '{"ok":true,"results":[';
+    const end = ']}';
+    if (raw.length > 64 * 1024 || !raw.startsWith(start) || !raw.endsWith(end)) throw error;
+    const chars = String.raw`(?:[^"\\\u0000-\u001f]|\\["\\])*`;
+    const row = new RegExp(String.raw`(\{"ytId":"(${chars})","title":"${chars}","channel":"${chars}","duration":)(0|[1-9][0-9]{0,18})(","thumbnail":"https://i\.ytimg\.com/vi/\2/hqdefault\.jpg"\})`, 'y');
+    const rows = [];
+    const limit = raw.length - end.length;
+    let cursor = start.length;
+    while (cursor < limit && rows.length < 8) {
+      row.lastIndex = cursor;
+      const match = row.exec(raw);
+      if (!match) throw error;
+      rows.push(`${match[1]}"${match[3]}${match[4]}`);
+      cursor = row.lastIndex;
+      if (cursor === limit) return JSON.parse(start + rows.join(',') + end);
+      if (raw[cursor++] !== ',') throw error;
+    }
+    throw error;
+  }
 }
 
 // Show only fixed reasons. Provider error text may contain media URLs or app-private paths.
@@ -117,8 +144,8 @@ form.addEventListener('submit', async event => {
   const start = performance.now();
   message.textContent = 'Searching YouTube…';
   try {
-    const [code, answer] = await request(`${api}?q=${encodeURIComponent(value)}`, 40000);
-    if (code !== 200 || answer.ok !== true || !Array.isArray(answer.results)) {
+    const [code, answer] = await request(`${api}?q=${encodeURIComponent(value)}`, 40000, undefined, readSearch);
+    if (code !== 200 || answer?.ok !== true || !Array.isArray(answer.results)) {
       message.textContent = `Search failed (${elapsed(start)}). ${reason(answer)}`;
       return;
     }
