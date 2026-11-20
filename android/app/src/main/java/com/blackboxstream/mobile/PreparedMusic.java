@@ -13,8 +13,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONArray;
@@ -89,6 +91,9 @@ final class PreparedMusic implements AutoCloseable {
     private final Runtime runtime;
     private final Network network;
     private final Map<String, Track> desired = new LinkedHashMap<>(), cached = new LinkedHashMap<>();
+    // Explicit album downloads are separate from the two automatic lookahead slots.
+    private final Map<String, Track> album = new LinkedHashMap<>();
+    private final Set<String> albumCompleted = new HashSet<>();
     private final Map<String, String> failures = new LinkedHashMap<>();
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private boolean dispatching, closed, loaded;
@@ -137,6 +142,8 @@ final class PreparedMusic implements AutoCloseable {
         if (!available() || !key.matches("[a-f0-9]{64}")) return;
         loadCache();
         desired.remove(key);
+        album.remove(key);
+        albumCompleted.remove(key);
         failures.remove(key);
         if (active != null && key.equals(running)) active.cancel();
         deleteScratch(entry(key));
@@ -160,11 +167,28 @@ final class PreparedMusic implements AutoCloseable {
         loadCache();
         epoch = sequence;
         if (retry) failures.remove(key);
-        failures.keySet().retainAll(next.keySet());
-        if (active != null && (!next.containsKey(running) || !requested.equals(key)
+        failures.keySet().removeIf(id -> !next.containsKey(id) && !album.containsKey(id));
+        if (active != null && (!next.containsKey(running) && !album.containsKey(running) || !key.isEmpty() && !requested.equals(key)
                 && !key.equals(running) && readyFile(key) == null)) active.cancel();
         requested = key;
         desired.clear(); desired.putAll(next);
+        return state();
+    }
+
+    synchronized JSONObject downloadAlbum(JSONArray tracks) throws JSONException {
+        if (!available()) return state();
+        if (tracks.length() > CACHE_TRACKS) throw new IllegalArgumentException("Album exceeds offline cache capacity.");
+        Map<String, Track> next = new LinkedHashMap<>();
+        for (int i = 0; i < tracks.length(); i++) {
+            Track track = new Track(tracks.getJSONObject(i));
+            next.putIfAbsent(track.key, track);
+        }
+        loadCache();
+        if (active != null && !desired.containsKey(running) && !next.containsKey(running)) active.cancel();
+        album.clear(); album.putAll(next);
+        albumCompleted.clear();
+        failures.keySet().removeIf(key -> !desired.containsKey(key));
+        for (String key : album.keySet()) if (readyFile(key) != null) albumCompleted.add(key);
         return state();
     }
 
@@ -175,12 +199,13 @@ final class PreparedMusic implements AutoCloseable {
         if (on) {
             dispatch();
             Map<String, Track> entries = new LinkedHashMap<>(cached);
+            entries.putAll(album);
             entries.putAll(desired);
             for (Track track : entries.values()) {
                 String key = track.key;
                 boolean prepared = readyFile(key) != null;
                 String state = prepared ? "ready" : key.equals(running) && !active.cancelled ? "working"
-                        : failures.containsKey(key) ? "failed" : desired.containsKey(key) ? "queued" : "idle";
+                        : failures.containsKey(key) || albumCompleted.contains(key) ? "failed" : "queued";
                 rows.put(key, new JSONObject().put("state", state).put("recording", track.json())
                         .put("message", "failed".equals(state) ? failures.get(key) : ""));
             }
@@ -225,16 +250,18 @@ final class PreparedMusic implements AutoCloseable {
     }
 
     private Track nextJob() {
-        if (!available() || failures.containsKey(requested)) return null;
-        for (Track track : desired.values()) {
+        if (!available()) return null;
+        if (!failures.containsKey(requested)) for (Track track : desired.values()) {
             if (readyFile(track.key) != null || failures.containsKey(track.key)) continue;
             boolean background = !track.key.equals(requested);
             if (network.allowed(background)) return track;
             if (!background) {
                 failures.put(track.key, "Not prepared yet. Connect to the internet to prepare this recording.");
-                return null;
+                break;
             }
         }
+        if (network.allowed(true)) for (Track track : album.values())
+            if (!albumCompleted.contains(track.key) && !failures.containsKey(track.key) && readyFile(track.key) == null) return track;
         return null;
     }
 
@@ -275,11 +302,12 @@ final class PreparedMusic implements AutoCloseable {
                     stream.write(new JSONObject().put("recording", track.json()).put("providerId", out.source).toString().getBytes(StandardCharsets.UTF_8));
                 }
                 synchronized (this) {
-                    if (!control.cancelled && available() && desired.containsKey(track.key)) {
+                    if (!control.cancelled && available() && wanted(track.key)) {
                         if (readyFile(track.key) != null) continue;
                         deleteScratch(entry(track.key));
                         if (!complete.renameTo(entry(track.key))) throw new IOException("Unable to store the prepared recording.");
                         cached.put(track.key, track);
+                        if (album.containsKey(track.key)) albumCompleted.add(track.key);
                         trimCache();
                     }
                 }
@@ -288,13 +316,15 @@ final class PreparedMusic implements AutoCloseable {
             } finally {
                 deleteScratch(scratch);
                 synchronized (this) {
-                    if (failure != null && !control.cancelled && desired.containsKey(track.key)) failures.put(track.key, failure);
+                    if (failure != null && !control.cancelled && wanted(track.key)) failures.put(track.key, failure);
                     running = null;
                     active = null;
                 }
             }
         }
     }
+
+    private boolean wanted(String key) { return desired.containsKey(key) || album.containsKey(key); }
 
     private void trimCache() {
         long bytes = 0;
@@ -341,7 +371,7 @@ final class PreparedMusic implements AutoCloseable {
     }
 
     private void clearPlan() {
-        desired.clear(); failures.clear(); requested = "";
+        desired.clear(); album.clear(); albumCompleted.clear(); failures.clear(); requested = "";
         if (active != null) active.cancel();
     }
     @Override public synchronized void close() {

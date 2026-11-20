@@ -115,6 +115,9 @@ final class V90Api {
                 music.forget(new JSONObject(body).getString("key"));
                 return ok(music.state());
             }
+            if (!get && path.equals("/api/mobile/music-helper/album")) {
+                return ok(music.downloadAlbum(new JSONObject(body).getJSONArray("tracks")));
+            }
             if (!get && path.equals("/api/mobile/music-helper/plan")) {
                 JSONObject data = new JSONObject(body);
                 return ok(music.plan(data.getInt("sequence"), data.isNull("selected") ? null : data.getJSONObject("selected"),

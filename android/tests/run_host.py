@@ -184,7 +184,7 @@ def main():
         thread.start()
         cleanup.callback(server.shutdown)
         run(java, '-Djavax.net.ssl.trustStore=' + str(trust), '-Djavax.net.ssl.trustStorePassword=fixture-password',
-            '-cp', str(classes), 'com.blackboxstream.mobile.HostChecks', base, str(RAW), str(temp), info_hash, timeout=60)
+            '-cp', str(classes), 'com.blackboxstream.mobile.HostChecks', base, str(FIXTURES), str(temp), info_hash, timeout=60)
 
 
 if __name__ == '__main__':

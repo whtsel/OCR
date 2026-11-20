@@ -65,5 +65,3 @@
   .bbx-android #bgAudioBar:not(.collapsed) #bgFrequencyWrap { flex:1; }
   .bbx-android #bgSeek { min-width:40px; }
 }
-.bbx-android #viewMusic .music-ad-info-v49,
-.bbx-android [data-album-download-v63] { display:none !important; }

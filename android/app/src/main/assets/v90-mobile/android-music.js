@@ -71,7 +71,7 @@
   };
 
   let session = null, sequence = 0, requestId = 0, lastSnapshot = 0;
-  let cached = new Set();
+  let cached = new Set(), albumJob = null;
   async function read(path = '', data, signal) {
     const id = ++requestId;
     const response = await fetch(engine + path, {signal, cache:'no-store',
@@ -116,6 +116,44 @@
   removeMusicDownload = key => {
     removeSaved(key);
     if (keyPattern.test(key)) read('/forget', {key}).catch(() => {});
+  };
+
+  // Keep the existing album download action. It is explicit and lower priority than a Play tap
+  // or its two upcoming tracks. It does not set a playback plan or show a new helper surface.
+  downloadMusicAlbumV63 = async (album, control) => {
+    if (albumJob) return;
+    const items = musicAlbumTracksV63(album), specs = items.map(recording);
+    const tracks = specs.filter(Boolean);
+    if (!tracks.length || tracks.length > 64) return;
+    const job = albumJob = {}, until = Date.now() + 20 * 60 * 1000;
+    if (control) { setMusicElementLoading(control, true); delete control.dataset.loadingLabel; }
+    try {
+      let snapshot = await read('/album', {tracks});
+      while (snapshot.available) {
+        const rows = new Map(Object.entries(snapshot.tracks).map(([key, row]) => [recordingKey(row.recording), {...row, key}]));
+        const matches = specs.map(track => track && rows.get(recordingKey(track)));
+        if (Date.now() >= until || matches.every(row => !row || row.state === 'ready' || row.state === 'failed')) {
+          const ready = matches.filter(row => row?.state === 'ready');
+          if (ready.length) {
+            const collection = ensureAlbumCollectionV63(album, []);
+            matches.forEach((row, idx) => { if (row?.state === 'ready') remember(items[idx], specs[idx], row.key, null); });
+            const ids = ready.map(row => row.key);
+            collection.ids = [...new Set([...ids, ...collection.ids])];
+            saveMusicDownloads(); saveMusicCollections(false); renderMusicDownloads();
+          }
+          musicAlbumJobsV63.set(album.id, {active:false, total:items.length, saved:ready.length, failed:items.length - ready.length});
+          refreshMusicAlbumJobUiV63(album);
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 2200));
+        snapshot = await read();
+      }
+    } catch { /* Leave the original action retryable without a helper popup. */ }
+    finally {
+      await read('/album', {tracks:[]}).catch(() => {});
+      if (albumJob === job) albumJob = null;
+      if (control) setMusicElementLoading(control, false);
+    }
   };
 
   function plan(selected, upcoming = [], retry = false, signal) {
