@@ -231,7 +231,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             seedPreparedFixture(cache, spec("pick:3579685431", "The Fate of Ophelia", "Taylor Swift", "The Life of a Showgirl", 226, ""));
             JSONObject lockedRecording = spec("pick:62724015", "Locked out of Heaven", "Bruno Mars", "Unorthodox Jukebox", 233, "");
             seedPreparedFixture(cache, lockedRecording);
-            String savedPlay = "#musicDownloadedList [data-libplay='" + new PreparedMusic.Track(lockedRecording).key + "']";
+            String savedPlay = "#musicDownloadedList [data-musicid='" + new PreparedMusic.Track(lockedRecording).key + "'] [data-libplay]";
             desktop = launch(V90Activity.class, null);
             Activity shown = desktop;
             WebView web = ui(() -> findWeb(shown.getWindow().getDecorView()));
