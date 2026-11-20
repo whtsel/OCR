@@ -47,10 +47,14 @@ final class V90Api {
     }
 
     V90Api(Context context) {
+        this(context, PreparedMusic.builtIn(context.getApplicationContext()));
+    }
+
+    V90Api(Context context, PreparedMusic music) {
         app = context.getApplicationContext(); db = LibraryStore.get(app);
         prefs = app.getSharedPreferences("catalogue", Context.MODE_PRIVATE);
         key = prefs.getString("key", ""); online = new V90Online();
-        music = PreparedMusic.builtIn(app);
+        this.music = music;
     }
 
     void close() {

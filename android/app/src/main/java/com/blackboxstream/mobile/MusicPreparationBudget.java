@@ -28,6 +28,8 @@ final class MusicPreparationBudget {
         return next;
     }
 
+    synchronized Phase currentPhase() { return phase; }
+
     synchronized void sawBytes(long size, long now) {
         if (size <= highWater) return;
         highWater = size;

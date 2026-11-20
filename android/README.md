@@ -12,11 +12,10 @@ As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 
 - **Music:** Tap the existing Play control. Its loading circle stays until the exact audio starts
   on the original player. There is no setup, source picker, progress panel, embed, or video
-  fallback. The helper initializes locally when you enter Music. If it cannot verify/open the
-  recording, or if startup takes more than 45 seconds, the ring clears and the original toast
-  reports the reason. A failed selection never starts another recording. The same 14 genres,
-  searches, albums, ordered tracks, queue and library
-  are still used. The catalogue contains metadata, not the songs themselves.
+  fallback. The helper initializes locally when you enter Music. If lookup, download, or opening
+  the file fails or reaches its deadline, the ring clears and a message tells you what happened.
+  A failed selection never starts another recording. The same 14 genres, searches, albums, ordered
+  tracks, queue and library are still used. The catalogue contains metadata, not the songs themselves.
 - **Streaming:** Add your **TMDB** v3 API key or Read Access Token in Settings for movies, series,
   and anime. No sample or archive titles are injected into the home page, search, or title details.
   TMDB supplies metadata, artwork and official watch listings, **not movie streams**. Choosing a
@@ -52,8 +51,8 @@ is off by default. Turning it on allows just the immediate next track (up to six
 metered connection; Android Data Saver still takes precedence. An empty, long, or duplicate first
 slot does not pull a later song into that mobile slot. A complete queued file plays locally, and
 an in-flight file is promoted without restarting when it becomes current. If the next track isn't
-ready, the app waits for that same track, not a replacement. Closing or changing the queue cancels
-irrelevant work. **Download album** remains a separate, lower-priority action on unmetered connections.
+ready, the app waits for that same track, not a replacement. Closing the player or changing the queue
+cancels irrelevant work. **Download album** remains a separate, lower-priority action on unmetered connections.
 
 Completed files are reused when you play the same recording again, including in airplane mode.
 Previously played songs appear in the existing Music downloads, not in a new preparation shelf.

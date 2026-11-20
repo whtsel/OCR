@@ -236,34 +236,51 @@ public final class BlackBoxSmoke extends Instrumentation {
             verifyProviderCooldown(scratch);
             verifySourceHints(app, instance, runtime);
 
-            // Seed only the disposable test package. These files prove local playback, NOT live recording availability.
-            assertPass("Preview cache starts empty", cache.mkdir());
-            seedPreparedFixture(cache, spec("pick:3579685431", "The Fate of Ophelia", "Taylor Swift", "The Life of a Showgirl", 226, ""));
-            JSONObject lockedRecording = spec("pick:62724015", "Locked out of Heaven", "Bruno Mars", "Unorthodox Jukebox", 233, "");
-            seedPreparedFixture(cache, lockedRecording);
-            String savedPlay = "#musicDownloadedList [data-musicid='" + new PreparedMusic.Track(lockedRecording).key + "'] [data-libplay]";
+            // No ready-file seed: the real bridge and scheduler publish two complete fixture files.
+            assertPass("Preview cache starts empty", !cache.exists());
+            JSONObject lockedRecording = spec("pick:62724015", "Locked out of Heaven", "Bruno Mars", "Unorthodox Jukebox", 24, "");
+            String nextKey = new PreparedMusic.Track(lockedRecording).key;
+            String savedPlay = "#musicDownloadedList [data-musicid='" + nextKey + "'] [data-libplay]";
+            java.util.List<String> prepared = new java.util.concurrent.CopyOnWriteArrayList<>();
+            java.util.concurrent.atomic.AtomicReference<PreparedMusic.Link> link =
+                    new java.util.concurrent.atomic.AtomicReference<>(PreparedMusic.Link.METERED);
+            java.util.concurrent.CountDownLatch firstFile = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch nextFile = new java.util.concurrent.CountDownLatch(1);
+            PreparedMusic fixtureQueue = new PreparedMusic(cache, (track, work, control) -> {
+                prepared.add(track.ref);
+                java.util.concurrent.CountDownLatch allowed;
+                if (track.ref.equals("pick:3579685431")) allowed = firstFile;
+                else if (track.key.equals(nextKey)) allowed = nextFile;
+                else throw new java.io.IOException("Unexpected fixture recording.");
+                long until = SystemClock.elapsedRealtime() + 95_000;
+                while (!allowed.await(100, TimeUnit.MILLISECONDS)) {
+                    if (control.cancelled) return null;
+                    if (SystemClock.elapsedRealtime() >= until) throw new java.io.IOException("Fixture gate was not released.");
+                }
+                File complete = new File(work, "audio.m4a");
+                copyFixture("orbit.m4a", complete);
+                return new PreparedMusic.Result(complete, "aaaaaaaaaaa");
+            }, link::get);
             desktop = launch(V90Activity.class, null);
+            installFixtureMusic(desktop, fixtureQueue);
             Activity shown = desktop;
             WebView web = ui(() -> findWeb(shown.getWindow().getDecorView()));
             checkKeylessHome(web);
+            // Keep the original cards and order. Use the lengths of the test-only tones for validation.
+            js(web, "for(const row of MUSIC_GENRES_V50[0].results)if(['3579685431','62724015'].includes(row.id))row.duration=24");
             tapWeb(web, "#navMusic");
             String ophelia = "#music-shelf-trending-now [title='Play The Fate of Ophelia']";
             await("Original Music has fourteen genres and its original downloads, not a preparation shelf", 10000,
                     () -> jsTrue(web, "!document.querySelector('#viewMusic').hidden && !!document.querySelector(" + JSONObject.quote(ophelia) + ")"
                             + " && document.querySelectorAll('#musicGenreChips button').length===14 && document.querySelector('#musicDownloadedList')"
                             + " && !document.querySelector('#androidMusicHelper,#androidAudioLibrary,#androidPreparedMusic')"));
-            // Hold the actual bridge reply long past a transient user gesture, while keeping the
-            // production transport, spinner and audio decoder. No second tap is permitted.
-            js(web, "window.planLog=[];window.holdNextPlan=true;window.releasePlan=null;window.delayFixtureWait=false;window.releaseFile=null;"
+            // Record the actual plan, and optionally hold a response to verify late-reply cancellation.
+            js(web, "window.planLog=[];window.holdNextPlan=false;window.releasePlan=null;"
                     + "(()=>{const fetchLive=window.fetch;window.fetch=(url,options)=>{const result=fetchLive(url,options);"
-                    + "if (typeof url==='string' && url.startsWith('/api/mobile/music-helper/await?') && window.delayFixtureWait) {"
-                    + "return result.then(reply=>new Promise(resolve=>{window.releaseFile=()=>resolve(reply)}));}"
                     + "if (url!=='/api/mobile/music-helper/plan') return result;"
                     + "const plan=JSON.parse(options.body);planLog.push(plan);"
                     + "if (plan.selected && window.holdNextPlan) {window.holdNextPlan=false;return result.then(reply=>new Promise(resolve=>{"
-                    + "window.releasePlan=async()=>{if(!window.delayFixtureWait){resolve(reply);return}"
-                    + "const data=await reply.json();data.tracks[data.selected].state='working';"
-                    + "resolve(new Response(JSON.stringify(data),{status:reply.status}));};}));}return result}})()");
+                    + "window.releasePlan=()=>resolve(reply)}))}return result}})()");
             shell("cmd connectivity airplane-mode enable");
             shell("svc wifi disable"); shell("svc data disable");
             try {
@@ -273,20 +290,17 @@ public final class BlackBoxSmoke extends Instrumentation {
                 String missing = "#music-shelf-trending-now [title='Play NUEVAYoL']";
                 js(web, "window.musicMessageBeforePlay=document.querySelector('#musicMsg').textContent");
                 tapWeb(web, ophelia);
-                await("The original Play control shows only its loading ring while audio is pending", 7000,
-                        () -> jsTrue(web, spinnerOnly(ophelia) + " && window.releasePlan && document.querySelector('#bgAudioBar').hidden"));
-                SystemClock.sleep(6200);
-                assertPass("The wait does not open a video, panel, or progress message", jsTrue(web, spinnerOnly(ophelia)
-                        + " && document.querySelector('#bgAudioBar').hidden && document.querySelector('#bgAudio').paused"));
+                await("The original Play control waits for real worker output with only its loading ring", 7000,
+                        () -> prepared.equals(Arrays.asList("pick:3579685431")) && jsTrue(web, spinnerOnly(ophelia)
+                                + " && document.querySelector('#bgAudioBar').hidden"));
                 assertPass("One plan preserves the next two queue slots and does not contact a later entry", jsTrue(web,
                         "planLog.length===1 && !planLog[0].playing && !planLog[0].mobileLookahead && planLog[0].selected.title==='The Fate of Ophelia' && planLog[0].upcoming.map(x=>x?.title).join('|')==='Locked out of Heaven|NUEVAYoL'"));
-                js(web, "musicQueue.list[musicQueue.idx]={...musicQueue.list[musicQueue.idx]};renderMusicQueue();"
-                        + "window.delayFixtureWait=true;window.releasePlan();window.releasePlan=null");
-                await("The original Play is waiting for the selected full file", 7000, () -> jsTrue(web, "!!window.releaseFile"));
-                SystemClock.sleep(46000); // Exceed the old 45 s total guard; no live provider call.
-                assertPass("A slow first recording can still finish without a retry after the former cutoff",
-                        jsTrue(web, spinnerOnly(ophelia) + " && document.querySelector('#bgAudioBar').hidden && planLog.length===1"));
-                js(web, "window.delayFixtureWait=false;window.releaseFile();window.releaseFile=null");
+                js(web, "musicQueue.list[musicQueue.idx]={...musicQueue.list[musicQueue.idx]};renderMusicQueue()");
+                SystemClock.sleep(46_000); // Wait past the old UI cutoff with real /await slices and no live provider call.
+                assertPass("A slow first recording is still pending after the former cutoff, with no second tap or dialog",
+                        prepared.size() == 1 && jsTrue(web, spinnerOnly(ophelia)
+                                + " && document.querySelector('#bgAudioBar').hidden && document.querySelector('#bgAudio').paused && planLog.length===1"));
+                firstFile.countDown();
                 awaitPreparedFixture(web, "The Fate of Ophelia", 1); // Same exact row, new JS object.
                 assertPass("One tap survives a queue rebuild and starts lookahead only after playing", jsTrue(web,
                         "planLog.length===2 && planLog[1].playing && !planLog[1].retry && planLog[1].selected.title===planLog[0].selected.title"
@@ -296,12 +310,22 @@ public final class BlackBoxSmoke extends Instrumentation {
                                 + " && document.querySelector('#bgQueueToggle').offsetWidth>0 && document.querySelector('#bgSeek').offsetWidth>0"));
                 assertPass("The original queue is still in order and includes previously unlisted v90 tracks", jsTrue(web,
                         "musicQueue.list[musicQueue.idx+1].track==='Locked out of Heaven' && musicQueue.list[musicQueue.idx+2].track==='NUEVAYoL'"));
-                js(web, "document.querySelector('#bbxMusicMobileLookahead').click()");
+                assertPass("On a metered link the app does not prepare ahead without permission", prepared.size() == 1);
+                tapWeb(web, "#bgQueueToggle");
+                tapWeb(web, "#bbxMusicMobileLookahead");
                 assertPass("The queue's mobile opt-in updates the same active plan, not the track order", jsTrue(web,
                         "planLog.at(-1)?.playing && planLog.at(-1)?.mobileLookahead"
                                 + " && localStorage.getItem('bbxAndroidMusicMobileLookahead')==='1'"
                                 + " && planLog.at(-1).upcoming[0].title==='Locked out of Heaven'"));
-                js(web, "document.querySelector('#bbxMusicMobileLookahead').click()");
+                await("The exact next file starts while the current recording is still playing", 7000,
+                        () -> prepared.equals(Arrays.asList("pick:3579685431", "pick:62724015")) && fixtureQueue.read(nextKey) == null
+                                && jsTrue(web, "document.querySelector('#bgTitle').textContent==='The Fate of Ophelia' && !document.querySelector('#bgAudio').paused"));
+                tapWeb(web, "#bgQueueClose");
+                nextFile.countDown();
+                await("Next queued file finishes and validates before the current song ends", 7000,
+                        () -> fixtureQueue.read(nextKey) != null && jsTrue(web, "!document.querySelector('#bgAudio').ended"));
+                link.set(PreparedMusic.Link.OFFLINE);
+                fixtureQueue.networkChanged();
                 js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
                 awaitPreparedFixture(web, "The Fate of Ophelia", 16.3);
                 tapWeb(web, "#bgPlayBtn");
@@ -310,8 +334,9 @@ public final class BlackBoxSmoke extends Instrumentation {
                 awaitPreparedFixture(web, "The Fate of Ophelia", 17);
                 js(web, "document.querySelector('#bgAudio').currentTime = document.querySelector('#bgAudio').duration - 0.25");
                 awaitPreparedFixture(web, "Locked out of Heaven", 1);
-                assertPass("The automatic handoff uses the saved next recording without retrying the provider", jsTrue(web,
-                        "planLog.some(p=>p.selected?.title==='Locked out of Heaven' && !p.playing && !p.retry)"));
+                assertPass("The automatic handoff works offline with the newly prepared song, without another worker call",
+                        prepared.equals(Arrays.asList("pick:3579685431", "pick:62724015")) && jsTrue(web,
+                                "planLog.some(p=>p.selected?.title==='Locked out of Heaven' && !p.playing && !p.retry)"));
 
                 js(web, "window.holdNextPlan=true");
                 tapWeb(web, ophelia);
@@ -391,6 +416,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         PreparedMusic.Track c = new PreparedMusic.Track(spec("test:C", "C", "Fixture", "Album", 14, ""));
         PreparedMusic.Track d = new PreparedMusic.Track(spec("test:D", "D", "Fixture", "Album", 14, "ddddddddddd"));
         PreparedMusic.Track e = new PreparedMusic.Track(spec("test:E", "E", "Fixture", "Album", 14, ""));
+        PreparedMusic.Track f = new PreparedMusic.Track(spec("test:F", "F", "Fixture", "Album", 14, ""));
         java.util.List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
         java.util.concurrent.atomic.AtomicReference<PreparedMusic.Link> link =
                 new java.util.concurrent.atomic.AtomicReference<>(PreparedMusic.Link.METERED);
@@ -421,14 +447,14 @@ public final class BlackBoxSmoke extends Instrumentation {
             queue.downloadAlbum(new JSONArray().put(e.json()).put(c.json()));
             assertPass("An explicit album request does not displace the current two-slot plan", calls.equals(Arrays.asList("A", "B")));
             queue.plan(3, b.json(), new JSONArray().put(c.json()), true, false, false); // Promote rather than restart B.
-            queue.plan(5, d.json(), new JSONArray().put(c.json()).put(a.json()), true, false, false); // Cancel B when no longer wanted.
+            queue.plan(5, d.json(), new JSONArray().put(c.json()).put(f.json()), true, false, false); // Cancel B when no longer wanted.
             queue.plan(4, a.json(), new JSONArray().put(b.json()), true, true, false); // Delayed stale bridge message.
             await("Foreground jumps ahead of lookahead and album work", 9000, () -> queue.read(d.key) != null);
             assertPass("Album work does not fill the gap before the new track starts", calls.equals(Arrays.asList("A", "B", "D")));
-            queue.plan(6, d.json(), new JSONArray().put(c.json()).put(a.json()), false, true, false);
-            await("The actual next slots run before the explicit album", 9000, () -> queue.read(c.key) != null && queue.read(e.key) != null);
+            queue.plan(6, d.json(), new JSONArray().put(c.json()).put(f.json()), false, true, false);
+            await("The actual next slots run before the explicit album", 9000, () -> queue.read(c.key) != null && queue.read(f.key) != null && queue.read(e.key) != null);
             assertPass("Cancelled output never commits; kept files deduplicate across plans and album",
-                    queue.read(b.key) == null && calls.equals(Arrays.asList("A", "B", "D", "C", "E")));
+                    queue.read(b.key) == null && calls.equals(Arrays.asList("A", "B", "D", "C", "F", "E")));
             try {
                 queue.plan(7, a.json(), new JSONArray().put(b.json()).put(c.json()).put(d.json()), true, false, false);
                 throw new AssertionError("Three upcoming items accepted");
@@ -436,7 +462,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
         try (PreparedMusic reopened = new PreparedMusic(dir, fixture, () -> PreparedMusic.Link.OFFLINE)) {
             reopened.plan(1, a.json(), new JSONArray(), true, false, false);
-            assertPass("Completed catalogue recording is reused across instances when offline", reopened.read(a.key) != null && calls.size() == 5);
+            assertPass("Completed catalogue recording is reused across instances when offline", reopened.read(a.key) != null && calls.size() == 6);
             PreparedMusic.Track otherRelease = new PreparedMusic.Track(spec("test:A", "A", "Fixture", "Another album", 14, ""));
             assertPass("Another release of the same title cannot read the cached recording", reopened.read(otherRelease.key) == null);
             reopened.forget(a.key);
@@ -557,13 +583,16 @@ public final class BlackBoxSmoke extends Instrumentation {
                 .put("seconds", seconds).put("source", source);
     }
 
-    private void seedPreparedFixture(File cache, JSONObject recording) throws Exception {
-        File entry = new File(cache, new PreparedMusic.Track(recording).key);
-        if (!entry.mkdir()) throw new java.io.IOException("Could not seed prepared fixture");
-        try (FileOutputStream out = new FileOutputStream(new File(entry, "recording.json"))) {
-            out.write(new JSONObject().put("recording", recording).put("providerId", "aaaaaaaaaaa").toString().getBytes(StandardCharsets.UTF_8));
-        }
-        copyFixture("orbit.m4a", new File(entry, "audio.m4a"));
+    private void installFixtureMusic(Activity screen, PreparedMusic prepared) throws Exception {
+        // Instrumentation only: inject an in-process runtime before a Play tap. There is no fixture bridge route.
+        java.lang.reflect.Field field = V90Activity.class.getDeclaredField("api");
+        field.setAccessible(true);
+        ui(() -> {
+            V90Api previous = (V90Api) field.get(screen);
+            field.set(screen, new V90Api(getTargetContext(), prepared));
+            previous.close();
+            return null;
+        });
     }
 
     private void copyFixture(String resource, File target) throws Exception {
@@ -681,9 +710,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 + "if(row){const t=row.recording.title,old=liveMusicResult[t];"
                 + "liveMusicResult[t]={key,state:row.state,message:row.message,source:row.recording.source,"
                 + "initialState:plan?.selected && plan.retry ? row.state : old?.initialState};}} return response;};})()");
-        js(web, "window.liveMusicToast='';const musicToast=document.querySelector('#toast');"
-                + "new MutationObserver(()=>{if(musicToast.classList.contains('on'))window.liveMusicToast=musicToast.textContent})"
-                + ".observe(musicToast,{attributes:true,childList:true,subtree:true,characterData:true});");
+        js(web, "window.liveMusicToast='';(()=>{const show=toast;toast=text=>{window.liveMusicToast=text;return show(text)}})()");
         tapWeb(web, "#navMusic");
         await("Original Music shelves contain 14 genres and the original Trending Now card", 10000,
                 () -> jsTrue(web, "document.querySelectorAll('#musicGenreChips button').length===14 "

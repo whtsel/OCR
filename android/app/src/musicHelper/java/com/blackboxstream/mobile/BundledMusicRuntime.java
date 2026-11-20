@@ -218,7 +218,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             reader.join(2000);
             if (control.cancelled) return "";
             String output = captured.toString();
-            if (child.exitValue() != 0) throw providerFailure(output);
+            if (child.exitValue() != 0) throw providerFailure(output, budget.currentPhase());
             return output;
         } finally {
             child.destroy();
@@ -226,14 +226,17 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         }
     }
 
-    private static IOException providerFailure(String output) {
+    private static IOException providerFailure(String output, MusicPreparationBudget.Phase phase) {
         String message = output.toLowerCase(Locale.ROOT);
         if (message.contains("http error 429") || message.contains("too many requests") || message.contains("bbx_provider_limited")) return new PreparedMusic.ProviderRateLimited();
         String reason;
         if (message.contains("bbx_no_exact_recording")) reason = "No exact full recording could be verified. Nothing else was played.";
         else if (message.contains("sign in") || message.contains("not a bot")) reason = "The provider requires sign-in. No account session was used.";
         else if (message.contains("http error 403") || message.contains("video unavailable")) reason = "The provider did not allow this recording.";
-        else if (message.contains("timed out") || message.contains("resolve") || message.contains("no address")) reason = "Could not complete the connection to the provider.";
+        else if (message.contains("timed out") || message.contains("failed to resolve") || message.contains("no address")) {
+            reason = phase == MusicPreparationBudget.Phase.TRANSFER ? "Could not complete the connection while downloading audio. Nothing played."
+                    : "Could not complete the connection while finding the recording. Nothing played.";
+        }
         else reason = "The helper could not prepare this exact recording.";
         return new IOException(reason);
     }
