@@ -1,0 +1,23 @@
+name: Stage the pinned BlackBox helper input
+on:
+  push:
+    branches: ['arena/ce05ef92-ocr']
+    paths: ['.github/workflows/vendor-blackbox-music-helper.yml']
+permissions:
+  contents: write
+jobs:
+  vendor-pin:
+    if: github.ref == 'refs/heads/arena/ce05ef92-ocr'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify and stage the exact upstream build input
+        run: |
+          mkdir -p android/vendor
+          python3 -B .github/ci/check_blackbox_p11.py download-refreshed android/vendor/ytdlp
+          printf '%s  ytdlp\n' 'e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3' > android/vendor/ytdlp.sha256
+          (cd android/vendor && sha256sum -c ytdlp.sha256)
+          git add android/vendor/ytdlp android/vendor/ytdlp.sha256
+          git -c user.name='BlackBox build' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'Vendor the exact yt-dlp 2026.10.26 build input'
+          git push origin HEAD:refs/heads/arena/ce05ef92-ocr
