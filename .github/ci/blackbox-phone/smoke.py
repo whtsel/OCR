@@ -1,6 +1,7 @@
 """Boot the helper-only Android APK; optionally exercise a fresh live search in its own screen."""
 from pathlib import Path
 import argparse
+import os
 import re
 
 import check_blackbox_p11 as p11
@@ -131,6 +132,10 @@ def main():
     args = parser.parse_args()
     try:
         screen = smoke(args.apk)
+        output = os.environ.get('GITHUB_OUTPUT')
+        if output:
+            with Path(output).open('a', encoding='utf-8') as result:
+                result.write('startup_ok=true\n')
         if args.live:
             live_search(screen)
     except Exception as error:
