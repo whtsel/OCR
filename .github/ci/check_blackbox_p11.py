@@ -109,7 +109,7 @@ def host(work, apk=None):
             if digest(copy.read_bytes()) != digest(fixture.read_bytes()):
                 raise RuntimeError('control audio did not match source bytes')
             seconds = verify_audio(copy, 4, 2)
-            print(f'PASS control: identical audio bytes, {seconds:.2f}s, decoded at start and 2s (not a catalogue test)')
+            print(f'::notice::PASS host control: identical audio bytes, {seconds:.2f}s, decoded at start and 2s (not a catalogue test)')
         finally:
             server.shutdown()
     failures = []
@@ -192,16 +192,38 @@ def try_player(track, duration):
         raise RuntimeError('could not locate the Music tab via Android accessibility')
     tap(music)
     time.sleep(6)  # The stock first-use Music source explainer closes automatically.
-    control = wait_ui(lambda nodes: find(nodes, f'Play {track}', track), 10)
+    def play_control(nodes):
+        exact = find(nodes, f'Play {track}')
+        if exact is not None:
+            return exact
+        # Catalogue result rows use the same generic 'Play this exact track' button.
+        title = find(nodes, track)
+        if title is not None and label(title)[2] != 'bgTitle':
+            l, t, r, b = bounds(title)
+            return next((n for n in nodes if n.get('package') == PKG and
+                         ('Play this exact track' in label(n) or ('▶' in label(n) and label(n)[2] != 'bgPlayBtn'))
+                         and bounds(n)[2] >= r and bounds(n)[1] <= (t + b) // 2 <= bounds(n)[3]), None)
+        return None
+
+    control = wait_ui(play_control, 5)
     if control is None:
         query = wait_ui(lambda nodes: find(nodes, 'musicQuery', 'Search a song, artist or album'), 12)
         if query is None:
             raise RuntimeError('could not find the original Music card or search field')
+        clear = find(ui_nodes(), 'musicClear')
+        if clear is not None:
+            tap(clear)
+            query = wait_ui(lambda nodes: find(nodes, 'musicQuery', 'Search a song, artist or album'), 5)
+            if query is None:
+                raise RuntimeError('search field disappeared after resetting the query')
         tap(query)
         adb('shell', 'input', 'text', track.replace(' ', '%s'))
         adb('shell', 'input', 'keyevent', 'KEYCODE_ENTER')
         time.sleep(1)
-        control = wait_ui(lambda nodes: find(nodes, f'Play {track}', track), 18)
+        control = wait_ui(play_control, 12)
+        if control is None:
+            adb('shell', 'input', 'swipe', '900', '1320', '900', '720', '300')
+            control = wait_ui(play_control, 8)
     if control is None:
         raise RuntimeError(f'could not select {track} in the original Music screen')
     tap(control)
@@ -288,8 +310,9 @@ def android(apk, work, original=None):
              ('ro.build.version.sdk', 'ro.product.cpu.abilist', 'ro.dalvik.vm.native.bridge')}
     print(f'Android test environment: {props}')
     print(adb('install', '-g', apk, timeout=65))
-    adb('shell', 'wm', 'size', '1080x2100')
-    adb('shell', 'wm', 'density', '320')
+    # Keep all of p11's desktop-style navigation visible on the test display.
+    adb('shell', 'wm', 'size', '1280x1800')
+    adb('shell', 'wm', 'density', '160')
     print(adb('shell', 'am', 'start', '-W', '-n', f'{PKG}/.MainActivity'))
     pid = adb('shell', 'pidof', PKG)
     try:
@@ -303,7 +326,7 @@ def android(apk, work, original=None):
                 if status.get('installed') or status.get('state') not in ('', 'starting', None):
                     break
                 time.sleep(2)
-            print(f'Android helper status: {diagnostic(json.dumps(status, ensure_ascii=False))}')
+            print(f'::notice::Android helper status: {diagnostic(json.dumps(status, ensure_ascii=False))}')
             if not status.get('installed'):
                 raise RuntimeError(f'Android API {props["ro.build.version.sdk"]} helper startup did not pass: '
                                    f'{status.get("state")} — {status.get("message")}')

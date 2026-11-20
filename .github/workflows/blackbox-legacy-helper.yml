@@ -67,9 +67,7 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
-          script: |
+          script: >-
             if [ '${{ matrix.variant }}' = 'zip-dependency' ]; then
-              python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-probe.apk" --original "$RUNNER_TEMP/blackbox-p11.apk"
-            else
-              python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-p11.apk"
-            fi
+            python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-probe.apk" --original "$RUNNER_TEMP/blackbox-p11.apk";
+            else python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-p11.apk"; fi
