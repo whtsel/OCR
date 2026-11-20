@@ -256,7 +256,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         run.setAccessible(true);
         File root = app.getNoBackupFilesDir();
         File scratch = new File(root, "helper-smoke");
-        File cache = new File(root, "prepared-music-" + PreparedMusic.VERSION);
+        File cache = PreparedMusic.cacheDirectory(app);
         android.content.SharedPreferences prefs = app.getSharedPreferences("music-preparation", Context.MODE_PRIVATE);
         assertPass("Prepare a fresh test directory", scratch.mkdir());
         Activity desktop = null;
@@ -278,8 +278,8 @@ public final class BlackBoxSmoke extends Instrumentation {
 
             // Seed only the disposable test package. These files prove local playback, NOT live recording availability.
             assertPass("Preview cache starts empty", cache.mkdir());
-            copyRaw(app, R.raw.orbit, new File(cache, "51zjlMhdSTE.m4a"));
-            copyRaw(app, R.raw.orbit, new File(cache, "Hb6I7GoTvzI.m4a"));
+            seedPreparedFixture(app, cache, spec("pick:3579685431", "The Fate of Ophelia", "Taylor Swift", "The Life of a Showgirl", 226, ""));
+            seedPreparedFixture(app, cache, spec("pick:62724015", "Locked out of Heaven", "Bruno Mars", "Unorthodox Jukebox", 233, ""));
             desktop = launch(V90Activity.class, null);
             Activity shown = desktop;
             WebView web = ui(() -> findWeb(shown.getWindow().getDecorView()));
@@ -296,18 +296,19 @@ public final class BlackBoxSmoke extends Instrumentation {
             try {
                 android.net.ConnectivityManager network = app.getSystemService(android.net.ConnectivityManager.class);
                 await("Test device is offline", 14000, () -> network.getActiveNetwork() == null);
-                tapWeb(web, "#music-shelf-trending-now [title='Play Espresso']");
-                awaitPreparedFixture(web, "Espresso", 1);
+                tapWeb(web, "#music-shelf-trending-now [title='Play The Fate of Ophelia']");
+                awaitPreparedFixture(web, "The Fate of Ophelia", 1);
+                assertPass("The original queue is still in order and includes arbitrary v90 tracks", jsTrue(web,
+                        "musicQueue.list[musicQueue.idx+1].track==='Locked out of Heaven' && musicQueue.list[musicQueue.idx+2].track==='NUEVAYoL'"));
                 js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
-                awaitPreparedFixture(web, "Espresso", 16.3);
+                awaitPreparedFixture(web, "The Fate of Ophelia", 16.3);
                 tapWeb(web, "#bgPlayBtn");
                 await("Pause is available in the visible original player", 6000, () -> jsTrue(web, "document.querySelector('#bgAudio').paused"));
                 tapWeb(web, "#bgPlayBtn");
-                awaitPreparedFixture(web, "Espresso", 17);
-                // Queue the two canonical rows without any online search, and let playback completion advance.
-                js(web, "queueSet([musicQueue.list[musicQueue.idx],{title:'Kwaku the Traveller',artist:'Black Sherif',album:'The Villain I Never Was',duration:185}],0,'Fixture only')");
+                awaitPreparedFixture(web, "The Fate of Ophelia", 17);
+                // Completion advances to the next actual catalogue row without swapping the queue.
                 js(web, "document.querySelector('#bgAudio').currentTime = document.querySelector('#bgAudio').duration - 0.25");
-                awaitPreparedFixture(web, "Kwaku the Traveller", 1);
+                awaitPreparedFixture(web, "Locked out of Heaven", 1);
                 closeScreen(desktop);
                 desktop = launch(V90Activity.class, null);
                 Activity reopened = desktop;
@@ -315,10 +316,11 @@ public final class BlackBoxSmoke extends Instrumentation {
                 await("Preview relaunches with networking still off", 18000,
                         () -> jsTrue(offline, "window.bbxAndroidOpen && document.querySelector('#rows .card')"));
                 tapWeb(offline, "#navMusic");
-                await("Kwaku fixture is still available from the committed cache", 10000,
+                await("Both unpinned catalogue tracks remain available after relaunch", 10000,
                         () -> jsTrue(offline, "document.querySelectorAll('#androidPreparedMusic button').length===2"));
-                tapWeb(offline, "#androidPreparedMusic button:last-child");
-                awaitPreparedFixture(offline, "Kwaku the Traveller", 1);
+                js(offline, "Array.from(document.querySelectorAll('#androidPreparedMusic button')).find(b=>b.textContent.includes('Locked out of Heaven')).id='smokePrepared'");
+                tapWeb(offline, "#smokePrepared");
+                awaitPreparedFixture(offline, "Locked out of Heaven", 1);
             } finally {
                 shell("cmd connectivity airplane-mode disable"); shell("svc data enable"); shell("svc wifi enable");
             }
@@ -344,51 +346,70 @@ public final class BlackBoxSmoke extends Instrumentation {
     }
 
     private void verifyPreparationQueue(Context app, File scratch, File audio) throws Exception {
-        String a = "aaaaaaaaaaa", b = "bbbbbbbbbbb", c = "ccccccccccc", d = "ddddddddddd";
-        PreparedMusic.Track[] tracks = {new PreparedMusic.Track(a, "A", "Fixture", 14), new PreparedMusic.Track(b, "B", "Fixture", 14),
-                new PreparedMusic.Track(c, "C", "Fixture", 14), new PreparedMusic.Track(d, "D", "Fixture", 14)};
+        PreparedMusic.Track a = new PreparedMusic.Track(spec("test:A", "A", "Fixture", "Album", 14, ""));
+        PreparedMusic.Track b = new PreparedMusic.Track(spec("test:B", "B", "Fixture", "Album", 14, ""));
+        PreparedMusic.Track c = new PreparedMusic.Track(spec("test:C", "C", "Fixture", "Album", 14, ""));
+        PreparedMusic.Track d = new PreparedMusic.Track(spec("test:D", "D", "Fixture", "Album", 14, "ddddddddddd"));
         java.util.List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
         java.util.concurrent.atomic.AtomicBoolean unmetered = new java.util.concurrent.atomic.AtomicBoolean(false);
         PreparedMusic.Runtime fixture = (track, work, control) -> {
-            calls.add(track.id);
-            if (track.id.equals(b)) while (!control.cancelled) Thread.sleep(10);
+            calls.add(track.title);
+            if (track.key.equals(b.key)) while (!control.cancelled) Thread.sleep(10);
             File local = new File(work, "audio.m4a");
             try (InputStream in = new FileInputStream(audio); FileOutputStream out = new FileOutputStream(local)) {
                 byte[] bytes = new byte[8192];
                 for (int n; (n = in.read(bytes)) != -1;) out.write(bytes, 0, n);
             }
-            return local;
+            return new PreparedMusic.Result(local, track.key.equals(d.key) ? "ddddddddddd" : "aaaaaaaaaaa");
         };
         File dir = new File(scratch, "queue");
         android.content.SharedPreferences prefs = app.getSharedPreferences("helper-fixture-unit", Context.MODE_PRIVATE);
-        try (PreparedMusic queue = new PreparedMusic(dir, prefs, fixture, background -> !background || unmetered.get(), tracks)) {
-            queue.plan(1, a, new JSONArray().put(b).put(c), true);
-            assertPass("Opt-out prevents queueing and access", calls.isEmpty() && queue.read(a) == null);
+        try (PreparedMusic queue = new PreparedMusic(dir, prefs, fixture, background -> !background || unmetered.get())) {
+            queue.plan(1, a.json(), new JSONArray().put(b.json()).put(c.json()), true);
+            assertPass("Opt-out prevents queueing and access", calls.isEmpty() && queue.read(a.key) == null);
             queue.options(true, false);
-            queue.plan(1, a, new JSONArray().put(b).put(c), true);
-            await("Selected audio prepares on a metered connection", 7000, () -> queue.read(a) != null);
-            assertPass("Metered prefetch waits for an unmetered connection", calls.equals(Arrays.asList(a))
-                    && "queued".equals(queue.state().getJSONObject("tracks").getJSONObject(b).getString("state")));
+            queue.plan(1, a.json(), new JSONArray().put(b.json()).put(c.json()), true);
+            await("Any catalogue row can prepare, without a fixed ID table", 7000, () -> queue.read(a.key) != null);
+            assertPass("Metered prefetch waits for an unmetered connection", calls.equals(Arrays.asList("A"))
+                    && "queued".equals(queue.state().getJSONObject("tracks").getJSONObject(b.key).getString("state")));
             unmetered.set(true);
             queue.state();
-            await("First actual upcoming entry starts", 7000, () -> calls.contains(b));
-            assertPass("Only one job runs at once", calls.equals(Arrays.asList(a,b)));
-            queue.plan(2, b, new JSONArray().put(c), true); // Promote rather than restart B.
-            queue.plan(4, d, new JSONArray().put(c).put(a), true); // Cancel B when it's no longer wanted.
-            queue.plan(3, a, new JSONArray().put(b), true); // Delayed stale bridge message.
-            await("New foreground jumps ahead; still-relevant second entry prepares", 9000, () -> queue.read(d) != null && queue.read(c) != null);
-            assertPass("Cancelled output never commits; kept files deduplicate", queue.read(b) == null && calls.equals(Arrays.asList(a,b,d,c)));
+            await("First actual upcoming entry starts", 7000, () -> calls.contains("B"));
+            assertPass("Only one job runs at once", calls.equals(Arrays.asList("A", "B")));
+            queue.plan(2, b.json(), new JSONArray().put(c.json()), true); // Promote rather than restart B.
+            queue.plan(4, d.json(), new JSONArray().put(c.json()).put(a.json()), true); // Cancel B when no longer wanted.
+            queue.plan(3, a.json(), new JSONArray().put(b.json()), true); // Delayed stale bridge message.
+            await("New linked foreground jumps ahead; still-relevant second entry prepares", 9000,
+                    () -> queue.read(d.key) != null && queue.read(c.key) != null);
+            assertPass("Cancelled output never commits; kept files deduplicate",
+                    queue.read(b.key) == null && calls.equals(Arrays.asList("A", "B", "D", "C")));
             try {
-                queue.plan(5, a, new JSONArray().put(b).put(c).put(d), true);
+                queue.plan(5, a.json(), new JSONArray().put(b.json()).put(c.json()).put(d.json()), true);
                 throw new AssertionError("Three upcoming items accepted");
             } catch (IllegalArgumentException expected) { checks++; }
         }
-        try (PreparedMusic reopened = new PreparedMusic(dir, prefs, fixture, background -> false, tracks)) {
-            reopened.plan(1, a, new JSONArray(), true);
-            assertPass("Completed file is reused across instances when offline", reopened.read(a) != null && calls.size() == 4);
+        try (PreparedMusic reopened = new PreparedMusic(dir, prefs, fixture, background -> false)) {
+            reopened.plan(1, a.json(), new JSONArray(), true);
+            assertPass("Completed catalogue recording is reused across instances when offline", reopened.read(a.key) != null && calls.size() == 4);
+            PreparedMusic.Track otherRelease = new PreparedMusic.Track(spec("test:A", "A", "Fixture", "Another album", 14, ""));
+            assertPass("Another release of the same title cannot read the cached recording", reopened.read(otherRelease.key) == null);
             reopened.options(false, true);
-            assertPass("Clearing the cache leaves no ready file", reopened.read(a) == null && !new File(dir, a + ".m4a").exists());
+            assertPass("Clearing the cache leaves no ready file", reopened.read(a.key) == null && !new File(dir, a.key).exists());
         } finally { prefs.edit().clear().commit(); }
+    }
+
+    private static JSONObject spec(String ref, String title, String artist, String album, int seconds, String source) throws Exception {
+        return new JSONObject().put("ref", ref).put("title", title).put("artist", artist).put("album", album)
+                .put("seconds", seconds).put("source", source);
+    }
+
+    private static void seedPreparedFixture(Context app, File cache, JSONObject recording) throws Exception {
+        File entry = new File(cache, new PreparedMusic.Track(recording).key);
+        if (!entry.mkdir()) throw new java.io.IOException("Could not seed prepared fixture");
+        try (FileOutputStream out = new FileOutputStream(new File(entry, "recording.json"))) {
+            out.write(new JSONObject().put("recording", recording).put("providerId", "aaaaaaaaaaa").toString().getBytes(StandardCharsets.UTF_8));
+        }
+        copyRaw(app, R.raw.orbit, new File(entry, "audio.m4a"));
     }
 
     private static void copyRaw(Context app, int resource, File target) throws Exception {

@@ -13,6 +13,7 @@ on:
       - 'android/app/src/main/assets/v90-mobile/**'
       - 'android/app/src/androidTest/**'
       - 'android/tests/run_device.sh'
+      - 'android/tests/test_catalogue_music.py'
       - 'android/vendor/**'
 permissions:
   contents: read
@@ -42,6 +43,7 @@ jobs:
           (cd android/vendor && sha256sum -c ytdlp.sha256)
           (cd android/app/src/main/assets/v90 && sha256sum -c ../../../../../V90-ASSETS.sha256)
           node --check android/app/src/main/assets/v90-mobile/android-music.js
+          python3 -B android/tests/test_catalogue_music.py
       - name: Compile the actual v90 app with the helper and verify APK bytes
         run: |
           log=$(mktemp)

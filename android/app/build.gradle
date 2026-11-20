@@ -22,8 +22,8 @@ android {
         versionName '1.4.1'
         testInstrumentationRunner 'com.blackboxstream.mobile.BlackBoxSmoke'
         if (musicHelper) {
-            versionCode 7
-            versionName '1.4.2-helper'
+            versionCode 8
+            versionName '1.4.3-helper'
             if (!(helperAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException('Unsupported helper ABI: ' + helperAbi)
             ndk { abiFilters += [helperAbi] }
         }
@@ -36,6 +36,7 @@ android {
 
     if (musicHelper) {
         sourceSets.main.java.srcDir('src/musicHelper/java')
+        sourceSets.main.res.srcDir('src/musicHelper/res')
         sourceSets.main.res.srcDir(helperRaw)
         packaging {
             jniLibs.useLegacyPackaging = true // libpython/libffmpeg are app executables and need their install paths.
@@ -71,7 +72,7 @@ if (musicHelper) {
             if (preview) {
                 def label = previewRes.get().file('values/strings.xml').asFile
                 label.parentFile.mkdirs()
-                label.text = '<resources><string name="app_name">BlackBox Stream Helper Preview</string></resources>'
+                label.text = '<resources><string name="app_name">BlackBox Stream v90 Music Preview</string></resources>'
             }
         }
     }

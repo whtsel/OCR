@@ -252,7 +252,7 @@ public final class V90Activity extends Activity {
             try {
                 if ("/".equals(path)) return response(200, "OK", "text/html", index());
                 // Read-only and same-origin. A missing prepared recording never invokes the downloader.
-                if (path != null && path.matches("/prepared-audio/[A-Za-z0-9_-]{11}\\.m4a")) {
+                if (path != null && path.matches("/prepared-audio/[a-f0-9]{64}\\.m4a")) {
                     if (req.isForMainFrame()) return response(403, "Forbidden", "text/plain", new byte[0]);
                     String id = path.substring("/prepared-audio/".length(), path.length() - 4);
                     File prepared = api.preparedAudio(id);

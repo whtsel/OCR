@@ -23,6 +23,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
     private final Context app;
     private final File root, nativeDir, script;
     private boolean ready;
+    private String companion;
 
     BundledMusicRuntime(Context app) {
         this.app = app;
@@ -48,6 +49,9 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                 if (!matches(tmp) || !tmp.renameTo(script)) throw new IOException("Music helper checksum verification failed.");
             } finally { tmp.delete(); }
         }
+        try (InputStream in = app.getResources().openRawResource(R.raw.catalogue_music)) {
+            companion = new String(TorrentMeta.slurp(in, 16 * 1024), StandardCharsets.UTF_8);
+        }
         ready = true;
     }
 
@@ -63,35 +67,56 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         return PIN.contentEquals(actual);
     }
 
-    @Override public File fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control) throws Exception {
+    @Override public PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control) throws Exception {
         if (control.cancelled) return null;
-        // URL comes from a validated ID in the native recording table, never a search or shell argument supplied by a page.
-        run(control, scratch, "--no-playlist", "--no-progress", "--socket-timeout", "12", "--retries", "1",
-                "--fragment-retries", "1", "--max-filesize", "24M", "--match-filters", "id = " + track.id,
-                "-f", "bestaudio[ext=m4a]/bestaudio",
-                "-x", "--audio-format", "m4a", "--audio-quality", "0", "-o", new File(scratch, "audio.%(ext)s").getAbsolutePath(),
-                "https://www.youtube.com/watch?v=" + track.id);
-        return new File(scratch, "audio.m4a");
+        ArrayList<String> options = new ArrayList<>(Arrays.asList("--no-playlist", "--no-progress", "--socket-timeout", "12",
+                "--retries", "1", "--fragment-retries", "1", "--max-filesize", "24M", "-f", "bestaudio[ext=m4a]/bestaudio",
+                "-x", "--audio-format", "m4a", "--audio-quality", "0", "-o", new File(scratch, "audio.%(ext)s").getAbsolutePath()));
+        File audio = new File(scratch, "audio.m4a");
+        if (!track.source.isEmpty()) {
+            int min = Math.max(1, track.seconds - 6);
+            int max = track.seconds == 0 ? PreparedMusic.MAX_SECONDS : track.seconds + 6;
+            options.addAll(Arrays.asList("--match-filters", "id = " + track.source + " & !is_live & !was_live & duration >= " + min + " & duration <= " + max,
+                    "https://www.youtube.com/watch?v=" + track.source));
+            run(control, scratch, options.toArray(new String[0]));
+            return new PreparedMusic.Result(audio, track.source);
+        }
+        // The companion is bundled code. Recording text is passed only as positional arguments.
+        options.addAll(0, Arrays.asList(track.title, track.artist, track.album, Integer.toString(track.seconds)));
+        execute(control, scratch, true, options.toArray(new String[0]));
+        if (control.cancelled) return null;
+        try (FileInputStream in = new FileInputStream(new File(scratch, "source-id"))) {
+            return new PreparedMusic.Result(audio, new String(TorrentMeta.slurp(in, 16), StandardCharsets.US_ASCII));
+        }
     }
 
-    String runtimeVersion(File scratch) throws Exception { return run(new PreparedMusic.Control(), scratch, "--version").trim(); }
-
     private String run(PreparedMusic.Control control, File scratch, String... args) throws Exception {
+        return execute(control, scratch, false, args);
+    }
+
+    private String execute(PreparedMusic.Control control, File scratch, boolean discover, String... args) throws Exception {
         try { start(); }
         catch (Exception | LinkageError failed) { throw new IOException("The bundled music helper could not start on this device."); }
         if (control.cancelled) return "";
         File python = new File(root, "packages/python/usr"), ffmpeg = new File(root, "packages/ffmpeg/usr");
-        ArrayList<String> command = new ArrayList<>(Arrays.asList(new File(nativeDir, "libpython.so").getAbsolutePath(),
-                script.getAbsolutePath(), "--ignore-config", "--no-update", "--no-cache-dir", "--no-plugin-dirs",
+        ArrayList<String> command = new ArrayList<>();
+        command.add(new File(nativeDir, "libpython.so").getAbsolutePath());
+        if (discover) command.addAll(Arrays.asList("-c", companion));
+        command.add(script.getAbsolutePath());
+        int positional = discover ? 4 : 0;
+        command.addAll(Arrays.asList(args).subList(0, positional));
+        command.addAll(Arrays.asList("--ignore-config", "--no-update", "--no-cache-dir", "--no-plugin-dirs",
                 "--no-remote-components", "--js-runtimes", "quickjs:" + new File(nativeDir, "libqjs.so").getAbsolutePath(),
                 "--ffmpeg-location", new File(nativeDir, "libffmpeg.so").getAbsolutePath()));
-        command.addAll(Arrays.asList(args));
+        command.addAll(Arrays.asList(args).subList(positional, args.length));
         ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true).directory(scratch);
         Map<String, String> env = builder.environment();
         env.put("LD_LIBRARY_PATH", python + "/lib:" + ffmpeg + "/lib");
         env.put("PYTHONHOME", python.getAbsolutePath());
         env.put("SSL_CERT_FILE", python + "/etc/tls/cert.pem");
         env.put("HOME", scratch.getAbsolutePath());
+        env.put("PYTHONDONTWRITEBYTECODE", "1");
+        env.put("PYTHONUTF8", "1");
         env.put("TMPDIR", scratch.getAbsolutePath());
         env.put("PATH", "/system/bin:" + nativeDir.getAbsolutePath());
         Process child;
@@ -111,11 +136,13 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         reader.start();
         try {
             long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(PreparedMusic.PREPARE_TIMEOUT_SECONDS);
+            File match = discover ? new File(scratch, "source-id") : null;
             for (;;) {
                 try { child.exitValue(); break; }
                 catch (IllegalThreadStateException stillRunning) { Thread.sleep(200); }
                 if (control.cancelled) return "";
                 if (System.nanoTime() >= until) throw new IOException("The recording took too long to prepare.");
+                if (match != null && match.isFile()) control.phase = "preparing";
                 File[] files = scratch.listFiles();
                 if (files != null) for (File f : files) if (f.length() > PreparedMusic.MAX_AUDIO)
                     throw new IOException("This recording is above the preparation size limit.");
@@ -136,6 +163,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         if (message.contains("sign in") || message.contains("not a bot")) return "The provider requires sign-in. No account session was used.";
         if (message.contains("http error 429")) return "The provider rate-limited this recording. Try again later.";
         if (message.contains("http error 403") || message.contains("unavailable")) return "The provider did not allow this recording.";
+        if (message.contains("bbx_no_exact_recording")) return "No exact full recording could be verified. Link its exact source.";
         if (message.contains("timed out") || message.contains("resolve") || message.contains("no address")) return "Could not complete the connection to the provider.";
         return "The helper could not prepare this exact recording.";
     }

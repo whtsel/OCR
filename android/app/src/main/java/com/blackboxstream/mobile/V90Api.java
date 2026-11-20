@@ -127,8 +127,8 @@ final class V90Api {
             }
             if (!get && path.equals("/api/mobile/music-helper/plan")) {
                 JSONObject data = new JSONObject(body);
-                music.plan(data.getInt("sequence"), data.getString("selected"), data.getJSONArray("upcoming"), data.optBoolean("retry"));
-                return ok(music.state());
+                return ok(music.plan(data.getInt("sequence"), data.isNull("selected") ? null : data.getJSONObject("selected"),
+                        data.getJSONArray("upcoming"), data.optBoolean("retry")));
             }
             if (get && path.equals("/api/mobile/music")) {
                 JSONArray tracks = new JSONArray();
