@@ -12,8 +12,7 @@ As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 
 - **Music:** Tap the existing Play control. Its loading circle stays until the exact audio starts
   on the original player. There is no setup, source picker, progress panel, embed, or video
-  fallback. The helper initializes locally in the background without looking up or downloading
-  music. If lookup, download, or opening
+  fallback. The helper initializes locally when you enter Music. If lookup, download, or opening
   the file fails or reaches its deadline, the ring clears and a message tells you what happened.
   A failed selection never starts another recording. The same 14 genres, searches, albums, ordered
   tracks, queue and library are still used. The catalogue contains metadata, not the songs themselves.
@@ -46,20 +45,14 @@ gets a separate download budget (up to 145 seconds, or 40 seconds without new by
 25 seconds to finish the file. Provider refusal and no-match errors still end the request without
 trying another recording. The existing Play ring clears with a stage-specific message on failure.
 
-The selected track takes priority. Once it starts, one worker prepares the next **two actual queue
-slots** on unmetered connections. The Queue button remains available with the player minimized and
-shows what is ready or waiting for a connection. To prepare those two slots on a metered network,
-turn on **Prepare the next two on mobile data** in Queue (off by default; each song up to six
-minutes and 24 MiB). The previous one-song permission is not upgraded automatically. Android Data
-Saver still takes precedence. An empty, long, or duplicate slot does not add an extra track outside
-this window. **Download album** stays a separate lower-priority action on unmetered connections.
-
-**Queue all** and **Queue album** replace what comes next, keeping the current song in front of the
-new list. Tapping Play in a new genre prepares that selection while the old song continues. If it
-fails, the old song and queue are still there. A ready next file plays locally; an in-flight next
-file becomes the selected job without starting over. If auto-next cannot play the exact recording,
-the player leaves Play, Next, and Queue available rather than silently substituting a song. An
-uncached first song still needs lookup and a full download; browsing alone doesn't fetch songs.
+The selected track takes priority. Once it starts, a single worker prepares the next **two actual
+queue slots** on unmetered connections. In the player’s queue, **Prepare one next song on mobile data**
+is off by default. Turning it on allows just the immediate next track (up to six minutes) on a
+metered connection; Android Data Saver still takes precedence. An empty, long, or duplicate first
+slot does not pull a later song into that mobile slot. A complete queued file plays locally, and
+an in-flight file is promoted without restarting when it becomes current. If the next track isn't
+ready, the app waits for that same track, not a replacement. Closing the player or changing the queue
+cancels irrelevant work. **Download album** remains a separate, lower-priority action on unmetered connections.
 
 Completed files are reused when you play the same recording again, including in airplane mode.
 Previously played songs appear in the existing Music downloads, not in a new preparation shelf.

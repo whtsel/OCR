@@ -119,7 +119,7 @@ final class PreparedMusic implements AutoCloseable {
     private boolean dispatching, closed, loaded, warming, started, mobileLookahead;
     private long retryProviderAt;
     private int epoch;
-    private String requested = "", running;
+    private String requested = "", firstUpcoming = "", running;
     private Control active;
 
     static PreparedMusic builtIn(Context app) {
@@ -201,13 +201,14 @@ final class PreparedMusic implements AutoCloseable {
         if (!available() || sequence <= epoch) return state();
         if (upcoming.length() > 2) throw new IllegalArgumentException("Only the next two queue entries may be prepared.");
         Map<String, Track> next = new LinkedHashMap<>();
-        String key = "";
+        String key = "", firstKey = "";
         if (selected != null) {
             Track first = new Track(selected);
             key = first.key;
             next.put(key, first);
             for (int i = 0; i < upcoming.length(); i++) if (!upcoming.isNull(i)) {
                 Track track = new Track(upcoming.getJSONObject(i));
+                if (i == 0 && !key.equals(track.key)) firstKey = track.key;
                 next.putIfAbsent(track.key, track);
             }
         }
@@ -216,6 +217,7 @@ final class PreparedMusic implements AutoCloseable {
         if (retry) failures.remove(key);
         failures.keySet().removeIf(id -> !next.containsKey(id) && !album.containsKey(id));
         requested = key;
+        firstUpcoming = firstKey;
         started = playing && !key.isEmpty() && readyFile(key) != null;
         mobileLookahead = allowMobile;
         desired.clear(); desired.putAll(next);
@@ -279,8 +281,7 @@ final class PreparedMusic implements AutoCloseable {
             }
         }
         return new JSONObject().put("available", on).put("selected", requested).put("sequence", epoch)
-                .put("selectionWaitMs", SELECTION_WAIT_MS).put("link", on ? network.current().name() : "OFFLINE")
-                .put("mobileMaxSeconds", MOBILE_LOOKAHEAD_SECONDS).put("tracks", rows);
+                .put("selectionWaitMs", SELECTION_WAIT_MS).put("tracks", rows);
     }
 
     synchronized File read(String key) {
@@ -333,10 +334,10 @@ final class PreparedMusic implements AutoCloseable {
             failures.put(requested, "Not prepared yet. Connect to the internet to prepare this recording.");
         }
         // A play tap alone does not start lookahead. The original player confirms that it started.
-        // Both networks use the same two real slots. Metered work needs consent and short tracks.
+        // On metered networks require opt-in, and never fill a missing/duplicate first slot with a later track.
         if (started && selected != null && readyFile(requested) != null) for (Track track : desired.values()) {
             if (readyFile(track.key) != null || failures.containsKey(track.key)) continue;
-            if (link == Link.UNMETERED || link == Link.METERED && mobileLookahead
+            if (link == Link.UNMETERED || link == Link.METERED && mobileLookahead && track.key.equals(firstUpcoming)
                     && track.seconds > 0 && track.seconds <= MOBILE_LOOKAHEAD_SECONDS) return track;
         }
         if (link == Link.UNMETERED && (selected == null || started || failures.containsKey(requested))) for (Track track : album.values())
@@ -468,7 +469,7 @@ final class PreparedMusic implements AutoCloseable {
 
     private void clearPlan() {
         desired.clear(); album.clear(); albumCompleted.clear(); failures.clear();
-        requested = "";
+        requested = firstUpcoming = "";
         started = false;
         if (active != null) active.cancel();
     }
