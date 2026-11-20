@@ -1,14 +1,17 @@
 """Boot the helper-only Android APK; optionally exercise a fresh live search in its own screen."""
 from pathlib import Path
 import argparse
+import json
 import os
 import re
+from urllib.parse import urlencode
 
 import check_blackbox_p11 as p11
 
 
 p11.PKG = 'com.blackbox.stream.helpersearch'
 ACTIVITY = 'com.blackbox.stream.MainActivity'
+LIVE_QUERY = 'Kevin MacLeod Carefree'
 
 
 def visible_text(nodes):
@@ -61,10 +64,42 @@ def smoke(apk):
     return screen
 
 
+def report_search_boundary():
+    """If WebView cannot read the answer, independently check the app's loopback route."""
+    forwarded = None
+    try:
+        pid = p11.adb('shell', 'pidof', p11.PKG).split()[0]
+        log = p11.adb('logcat', '-d', '--pid', pid, '-v', 'brief', '-s', 'BlackBoxStream:I')
+        ports = re.findall(r'engine on 127\.0\.0\.1:(\d{1,5})\b', log)
+        if not ports:
+            print('::notice::The helper app did not report a live loopback listener.')
+            return
+        forwarded = p11.adb('forward', 'tcp:0', f'tcp:{ports[-1]}')
+        code, raw = p11.request(f'http://127.0.0.1:{forwarded}', '/api/music/youtube?' + urlencode({'q': LIVE_QUERY}), timeout=35)
+        try:
+            data = json.loads(raw)
+        except (UnicodeError, ValueError):
+            print(f'::notice::Helper search endpoint sent HTTP {code} with {len(raw)} bytes of unreadable JSON.')
+            return
+        rows = data.get('results') if isinstance(data, dict) else None
+        if isinstance(rows, list):
+            print(f'::notice::Helper search endpoint sent HTTP {code} and {len(rows)} result rows directly.')
+        else:
+            failure = str(data.get('message', '')).lower() if isinstance(data, dict) else ''
+            reason = ('rate-limited' if '429' in failure else 'sign-in requested' if re.search(r'sign[ -]?in|not a bot', failure)
+                      else 'no result array')
+            print(f'::notice::Helper search endpoint sent HTTP {code} ({reason}).')
+    except Exception as failure:
+        print(f'::notice::Could not read the helper search at the Android loopback boundary ({type(failure).__name__}).')
+    finally:
+        if forwarded:
+            p11.adb('forward', '--remove', f'tcp:{forwarded}', check=False)
+
+
 def live_search(screen):
     # An independent query for an openly licensed recording, not a baked-in result or ID.
     p11.tap(query_field(screen))
-    p11.adb('shell', 'input', 'text', 'Kevin%sMacLeod%sCarefree')
+    p11.adb('shell', 'input', 'text', LIVE_QUERY.replace(' ', '%s'))
     search_button = p11.wait_ui(lambda nodes: p11.find(nodes, 'search', 'Search'), 10)
     if search_button is None:
         raise RuntimeError('Could not submit the typed search')
@@ -74,6 +109,8 @@ def live_search(screen):
         raise RuntimeError('No terminal search status: ' + ' | '.join(visible_text(p11.ui_nodes())))
     print('::notice::' + p11.diagnostic(searched))
     if not re.match(r'Search returned [1-8] YouTube result', searched):
+        if searched.startswith('Could not read the helper'):
+            report_search_boundary()
         raise RuntimeError('Live helper search did not return results to try')
     def first_result(nodes):
         direct = p11.find(nodes, 'play-result-1')
