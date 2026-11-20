@@ -75,3 +75,18 @@
   font-size: .85rem;
 }
 .bbx-mobile-lookahead input { flex: none; width: 18px; height: 18px; }
+
+.bbx-android #bgQueuePanel {
+  bottom: calc(var(--bbx-bar-height, 0px) + 8px);
+  max-height: min(58vh, calc(100vh - var(--bbx-bar-height, 0px) - 85px));
+}
+.bbx-android .bg-queue-note-v49 { display:block; }
+.bbx-android .bbx-music-transition:not([hidden]) {
+  color:#f2d696;
+  font-size:.77rem;
+  overflow-wrap:anywhere;
+}
+.bbx-android #bgQueueToggle { flex:none; white-space:nowrap; }
+@media (max-width: 520px) {
+  .bbx-android #bgQCount { display:none; }
+}

@@ -4,8 +4,9 @@
   if (!window.bbxAndroidOpen) return;
   const engine = '/api/mobile/music-helper';
   const planTimeout = 15_000, localOpenTimeout = 12_000;
-  const mobileLookaheadKey = 'bbxAndroidMusicMobileLookahead';
-  let mobileLookahead = false, helperAvailable = false, mobileSetting;
+  // Consent to one track in the previous build does not grant permission for two.
+  const mobileLookaheadKey = 'bbxAndroidMusicMobileQueue';
+  let mobileLookahead = false, helperAvailable = false, mobileSetting, queueNote, transition;
   try { mobileLookahead = localStorage.getItem(mobileLookaheadKey) === '1'; } catch { /* Keep opt-in off. */ }
   const byId = id => document.getElementById(id);
   const keyPattern = /^[a-f0-9]{64}$/;
@@ -143,7 +144,9 @@
     return results;
   };
 
-  let session = null, sequence = 0, requestId = 0, lastSnapshot = 0;
+  // The requested selection and the audio already on the player can differ during a switch.
+  let session = null, audible = null, sequence = 0, requestId = 0, lastSnapshot = 0;
+  let queueRows = new Map(), link = 'OFFLINE', mobileMaxSeconds = 360, queueFingerprint = '';
   let primed = false;
   function primeHelper() {
     if (primed) return;
@@ -162,8 +165,13 @@
       lastSnapshot = id;
       helperAvailable = result.available === true;
       if (mobileSetting) mobileSetting.hidden = !helperAvailable;
-      cached = new Set(Object.keys(result.tracks || {}).filter(key => result.tracks[key].state === 'ready'));
+      const rows = Object.entries(result.tracks || {});
+      cached = new Set(rows.filter(([, row]) => row.state === 'ready').map(([key]) => key));
+      queueRows = new Map(rows.map(([, row]) => [recordingKey(row.recording), row]));
+      link = result.link;
+      mobileMaxSeconds = result.mobileMaxSeconds || 360;
       refreshSaved();
+      refreshQueueStatus();
     }
     return result;
   }
@@ -265,31 +273,75 @@
     const windowKey = JSON.stringify([live.started, mobileLookahead, upcoming]);
     if (!retry && live.windowKey === windowKey) return;
     live.windowKey = windowKey;
-    return plan(live.track, upcoming, retry, live.controller.signal, live.started);
+    return plan(live.track, upcoming, retry, live.controller.signal, live.started).catch(error => {
+      if (live.windowKey === windowKey) live.windowKey = null;
+      throw error;
+    });
   }
   preloadNextTwo = () => { if (session?.track && stillSelected(session)) planQueue(session)?.catch(() => {}); };
 
-  function release(live, hideBar) {
-    session = null;
+  function setTransition(message = '') {
+    if (!transition) return;
+    transition.textContent = message;
+    transition.hidden = !message;
+  }
+
+  function cancelWork(live) {
+    if (!live) return;
     clearTimeout(live.deadline);
     live.controller.abort();
     clearMusicPlaybackFeedback('cancel', live.feedbackId);
+  }
+
+  function clearAudio(live) {
     musicAutoAdvanceBlocked = true;
     live.audio.pause();
     live.audio.removeAttribute('src');
     live.audio.load();
     if (live.blob) URL.revokeObjectURL(live.blob);
-    if (hideBar) live.bar.hidden = true;
     closeMusicFrequency();
   }
-  function stop(live) {
-    if (session !== live) return;
-    release(live, true);
+
+  function stop() {
+    const current = session || audible;
+    if (!current) return;
+    cancelWork(session);
+    if (audible !== session) cancelWork(audible);
+    clearAudio(audible || current);
+    session = audible = null;
+    current.bar.hidden = true;
+    setTransition();
     plan(null).catch(() => {});
   }
+
+  function retainQueue(live) {
+    live.queue = {...musicQueue, list:musicQueue.list.slice(), original:musicQueue.original.slice(),
+      history:musicQueue.history.slice(), failed:new Set(musicQueue.failed)};
+  }
+
   function fail(live, message) {
     if (session !== live) return;
-    stop(live);
+    if (audible && audible !== live && live.intent !== 'auto-ended') {
+      // A failed manual selection leaves the song and queue the user was listening to intact.
+      cancelWork(live);
+      session = audible;
+      Object.assign(musicQueue, audible.queue);
+      audible.windowKey = null;
+      setTransition();
+      updateQCount();
+    } else {
+      stop();
+      if (live.intent === 'auto-ended') {
+        // Keep Retry (Play), Next and Queue available when an upcoming recording fails.
+        byId('bgTitle').textContent = title(live.item);
+        byId('bgArtist').textContent = artist(live.item);
+        byId('bgArt').removeAttribute('src');
+        byId('bgTime').textContent = '';
+        byId('bgSeek').value = 0;
+        live.bar.hidden = false;
+        setTransition(message + ' Tap Play to retry or Next to skip.');
+      }
+    }
     if (live.intent !== 'cached-restore') toast(message);
   }
   const persist = persistMusicPlaybackSession;
@@ -331,10 +383,18 @@
       if (!blob.size || blob.size > 24 * 1024 * 1024) throw new Error('Invalid cached audio');
       // Use the original audio node and its normal seek, pause and end handlers. The WebView's
       // local-only configuration lets this one tap start playback after asynchronous preparation.
+      if (audible) {
+        cancelWork(audible);
+        clearAudio(audible);
+        audible = null;
+      }
       live.audio.src = live.blob = URL.createObjectURL(blob);
       await live.audio.play();
       if (!stillSelected(live)) return;
+      audible = live;
       live.started = true;
+      retainQueue(live);
+      setTransition();
       musicAutoAdvanceBlocked = false;
       preloadNextTwo(); // Only after the current track actually starts, on its existing queue plan.
       byId('bgTitle').textContent = title(live.item);
@@ -356,7 +416,7 @@
       clearTimeout(live.deadline);
       // A queue rebuild can replace the selected object while the bridge reply is in flight.
       // Never leave that abandoned request's ring attached to the original button.
-      if (!live.started && session === live) stop(live);
+      if (!live.started && session === live) fail(live, 'The selected recording changed.');
     }
   }
 
@@ -388,28 +448,98 @@
     if (!options.intent || options.intent === 'user' || options.intent === 'resume') primeMusicFrequencyAnalyser();
     const control = options.control;
     const fromQueue = control?.matches('.bg-queue-row-v49');
-    if (session) release(session, false);
     const track = recording(item);
+    if (session && session !== audible) {
+      cancelWork(session);
+      if (session.blob) clearAudio(session); // A stale local open must not revive its decoder.
+    }
+    // Selecting the song already playing (e.g. from another collection) only updates its queue.
+    if (audible && track && recordingKey(track) === audible.recordingKey && !player.audio.ended) {
+      session = audible;
+      audible.item = item;
+      retainQueue(audible);
+      audible.windowKey = null;
+      setTransition();
+      preloadNextTwo();
+      persistMusicPlaybackSession();
+      if (player.audio.paused) return resumeExistingMusicAudio(player.audio, control);
+      return;
+    }
     const live = session = {...player, item, track, recordingKey:track ? recordingKey(track) : '',
       fromQueue, intent:options.intent, started:false, tapped:performance.now(), controller:new AbortController()};
     live.feedbackId = attachSpinner(fromQueue ? document.querySelector('#bgQueueList .playing') : control);
+    setTransition(audible || !live.bar.hidden ? `Preparing ${title(item)}…` : '');
     deadline(live, planTimeout, 'The Music helper did not respond. Tap Play to retry.');
     live.playing = play(live);
     return live.playing;
   };
-  queueItemStatus = (_item, idx) => idx === musicQueue.idx ? (session?.started && !session.audio.paused ? 'Playing now' : 'Current') : 'Up next';
+  function rowFor(item) {
+    const track = recording(item);
+    return track && queueRows.get(recordingKey(track));
+  }
+  queueItemStatus = (item, idx) => {
+    const track = recording(item), row = rowFor(item);
+    if (track && audible && recordingKey(track) === audible.recordingKey && !audible.audio.ended)
+      return audible.audio.paused ? 'Paused' : 'Playing now';
+    if (row?.state === 'ready') return 'Ready offline';
+    if (row?.state === 'failed') return 'Unavailable · tap to retry';
+    if (row?.state === 'working') return 'preparing';
+    if (idx === musicQueue.idx) return session && !session.started ? 'Waiting for audio' : 'Selected';
+    if (idx < musicQueue.idx || idx > musicQueue.idx + 2) return 'Queued';
+    if (!track) return 'Exact recording unavailable';
+    if (link === 'OFFLINE') return 'Waiting for a connection';
+    if (link === 'RESTRICTED') return 'Data Saver · waiting for Wi-Fi';
+    if (link === 'METERED' && (!mobileLookahead || track.seconds > mobileMaxSeconds)) return 'Waiting for Wi-Fi';
+    return 'Up next';
+  };
+
   const originalRenderQueue = renderMusicQueue;
-  renderMusicQueue = function () {
+  function drawQueue() {
     originalRenderQueue();
-    if (!session) return;
-    if (!musicQueue.list.length || !session.started && !stillSelected(session)) stop(session);
-    else if (stillSelected(session)) {
-      if (session.fromQueue && !session.started && !musicPlaybackActionElement?.isConnected) {
-        session.feedbackId = attachSpinner(document.querySelector('#bgQueueList .playing'));
-      }
+    if (session?.fromQueue && !session.started && stillSelected(session) && !musicPlaybackActionElement?.isConnected)
+      session.feedbackId = attachSpinner(document.querySelector('#bgQueueList .playing'));
+    if (queueNote && helperAvailable) {
+      const end = musicQueue.idx + 1, next = musicQueue.list.slice(end, end + 2);
+      const ready = next.filter(item => rowFor(item)?.state === 'ready').length;
+      const policy = link === 'METERED' && !mobileLookahead ? 'Mobile preparation is off.'
+        : link === 'RESTRICTED' ? 'Android Data Saver is on.'
+        : link === 'OFFLINE' ? 'Offline. Ready tracks can still play.'
+        : 'Only the next two tracks prepare while you listen.';
+      queueNote.textContent = `${next.length ? `${ready} of ${next.length} up next ready. ` : ''}${policy}`;
+    }
+  }
+  function refreshQueueStatus() {
+    if (byId('bgQueuePanel')?.hidden) return;
+    const fingerprint = JSON.stringify([link, mobileLookahead, musicQueue.list.map(queueItemStatus)]);
+    if (fingerprint !== queueFingerprint) { queueFingerprint = fingerprint; drawQueue(); }
+  }
+  renderMusicQueue = function () {
+    drawQueue();
+    if (!musicQueue.list.length) { stop(); return; }
+    if (session && stillSelected(session)) {
+      if (session.started) retainQueue(session);
       preloadNextTwo();
     }
   };
+
+  const originalOpenQueue = openMusicQueuePanel;
+  openMusicQueuePanel = () => {
+    // Queue all / Queue album replaces the list without a Play request. Keep the actual
+    // current song at the front so its end advances into the newly queued recordings.
+    if (session && !stillSelected(session)) {
+      if (audible && musicQueue.list.length) {
+        if (session !== audible) cancelWork(session);
+        session = audible;
+        audible.windowKey = null;
+        setTransition();
+        queueSet([audible.item, ...musicQueue.list], 0, musicQueue.genre);
+        persistMusicPlaybackSession();
+      } else stop();
+    }
+    originalOpenQueue();
+    read().catch(() => {});
+  };
+
   const originalNext = queueNext;
   queueNext = options => {
     if (options?.intent === 'auto-ended' && (!session?.started || !session.audio.ended || !stillSelected(session))) return;
@@ -428,11 +558,31 @@
   };
   document.addEventListener('DOMContentLoaded', () => {
     byId('navMusic')?.addEventListener('click', primeHelper, {passive:true});
+    // Local unpack and checksum only. Start it during idle time, not on the first Play tap.
+    if (window.requestIdleCallback) requestIdleCallback(primeHelper, {timeout:2500});
+    else setTimeout(primeHelper, 500);
     byId('bgSeek').setAttribute('aria-label', 'Track position');
-    byId('bgClose').addEventListener('click', () => { if (session) stop(session); });
-    const note = document.querySelector('.bg-queue-note-v49');
-    if (note) {
-      note.textContent = 'The next two queued tracks can prepare on Wi-Fi after playback starts.';
+    byId('bgClose').addEventListener('click', () => { stop(); setTransition(); });
+    const bar = byId('bgAudioBar'), panel = byId('bgQueuePanel');
+    transition = document.createElement('div');
+    transition.className = 'bbx-music-transition';
+    transition.setAttribute('role', 'status');
+    transition.hidden = true;
+    byId('bgAudioControls').append(transition);
+    // Queue stays reachable with the mini-player collapsed and the panel doesn't sit behind it.
+    document.querySelector('.bg-audio-main-v69').append(byId('bgQueueToggle'));
+    if (window.ResizeObserver) new ResizeObserver(() => {
+      panel.style.setProperty('--bbx-bar-height', `${bar.offsetHeight}px`);
+    }).observe(bar);
+    let readingQueue = false;
+    setInterval(() => {
+      if (panel.hidden || readingQueue) return;
+      readingQueue = true;
+      read().catch(() => {}).finally(() => { readingQueue = false; });
+    }, 1500);
+    queueNote = panel.querySelector('.bg-queue-note-v49');
+    if (queueNote) {
+      queueNote.textContent = 'Play or remove a track without changing the order of the others.';
       mobileSetting = document.createElement('label');
       mobileSetting.className = 'bbx-mobile-lookahead';
       mobileSetting.hidden = !helperAvailable;
@@ -444,9 +594,10 @@
         mobileLookahead = toggle.checked;
         try { localStorage.setItem(mobileLookaheadKey, mobileLookahead ? '1' : '0'); } catch { /* Session only. */ }
         preloadNextTwo();
+        refreshQueueStatus();
       });
-      mobileSetting.append(toggle, document.createTextNode('Prepare one next song on mobile data (up to 6 minutes)'));
-      note.after(mobileSetting);
+      mobileSetting.append(toggle, document.createTextNode('Prepare the next two on mobile data (songs up to 6 min)'));
+      queueNote.after(mobileSetting);
     }
   }, {once:true});
 })();

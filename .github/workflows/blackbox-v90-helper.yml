@@ -66,7 +66,7 @@ jobs:
           python3 .github/ci/verify_blackbox_v90_helper.py "$apk"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
-          grep -q "^package: name='com.blackboxstream.mobile.music' versionCode='11' versionName='1.4.6-music'" "$RUNNER_TEMP/badging.txt"
+          grep -q "^package: name='com.blackboxstream.mobile.music' versionCode='12' versionName='1.4.7-music'" "$RUNNER_TEMP/badging.txt"
           grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
           hash=$(sha256sum "$apk")
           echo "::notice::ARM64 v90 candidate SHA-256 ${hash%% *} ($(stat -c %s "$apk") bytes)"

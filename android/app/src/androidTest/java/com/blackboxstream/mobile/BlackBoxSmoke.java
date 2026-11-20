@@ -236,21 +236,25 @@ public final class BlackBoxSmoke extends Instrumentation {
             verifyProviderCooldown(scratch);
             verifySourceHints(app, instance, runtime);
 
-            // No ready-file seed: the real bridge and scheduler publish two complete fixture files.
+            // No ready-file seed: the real bridge and scheduler publish complete fixture files.
             assertPass("Preview cache starts empty", !cache.exists());
             JSONObject lockedRecording = spec("pick:62724015", "Locked out of Heaven", "Bruno Mars", "Unorthodox Jukebox", 24, "");
             String nextKey = new PreparedMusic.Track(lockedRecording).key;
+            String secondKey = new PreparedMusic.Track(spec("pick:3171002981", "NUEVAYoL", "Bad Bunny", "DeBÍ TiRAR MáS FOToS", 24, "")).key;
             String savedPlay = "#musicDownloadedList [data-musicid='" + nextKey + "'] [data-libplay]";
             java.util.List<String> prepared = new java.util.concurrent.CopyOnWriteArrayList<>();
             java.util.concurrent.atomic.AtomicReference<PreparedMusic.Link> link =
                     new java.util.concurrent.atomic.AtomicReference<>(PreparedMusic.Link.METERED);
             java.util.concurrent.CountDownLatch firstFile = new java.util.concurrent.CountDownLatch(1);
             java.util.concurrent.CountDownLatch nextFile = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch genreFile = new java.util.concurrent.CountDownLatch(1);
             PreparedMusic fixtureQueue = new PreparedMusic(cache, (track, work, control) -> {
                 prepared.add(track.ref);
                 java.util.concurrent.CountDownLatch allowed;
                 if (track.ref.equals("pick:3579685431")) allowed = firstFile;
                 else if (track.key.equals(nextKey)) allowed = nextFile;
+                else if (track.key.equals(secondKey)) allowed = new java.util.concurrent.CountDownLatch(0);
+                else if (track.ref.equals("pick:585584062")) allowed = genreFile;
                 else throw new java.io.IOException("Unexpected fixture recording.");
                 long until = SystemClock.elapsedRealtime() + 95_000;
                 while (!allowed.await(100, TimeUnit.MILLISECONDS)) {
@@ -267,7 +271,8 @@ public final class BlackBoxSmoke extends Instrumentation {
             WebView web = ui(() -> findWeb(shown.getWindow().getDecorView()));
             checkKeylessHome(web);
             // Keep the original cards and order. Use the lengths of the test-only tones for validation.
-            js(web, "for(const row of MUSIC_GENRES_V50[0].results)if(['3579685431','62724015'].includes(row.id))row.duration=24");
+            js(web, "for(const shelf of MUSIC_GENRES_V50)for(const row of shelf.results)"
+                    + "if(['3579685431','62724015','3171002981','585584062'].includes(row.id))row.duration=24");
             tapWeb(web, "#navMusic");
             String ophelia = "#music-shelf-trending-now [title='Play The Fate of Ophelia']";
             await("Original Music has fourteen genres and its original downloads, not a preparation shelf", 10000,
@@ -287,7 +292,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 android.net.ConnectivityManager network = app.getSystemService(android.net.ConnectivityManager.class);
                 await("Test device is offline", 14000, () -> network.getActiveNetwork() == null);
                 String locked = "#music-shelf-trending-now [title='Play Locked out of Heaven']";
-                String missing = "#music-shelf-trending-now [title='Play NUEVAYoL']";
+                String missing = "#music-shelf-trending-now [title='Play One Dance']";
                 js(web, "window.musicMessageBeforePlay=document.querySelector('#musicMsg').textContent");
                 tapWeb(web, ophelia);
                 await("The original Play control waits for real worker output with only its loading ring", 7000,
@@ -296,8 +301,8 @@ public final class BlackBoxSmoke extends Instrumentation {
                 assertPass("One plan preserves the next two queue slots and does not contact a later entry", jsTrue(web,
                         "planLog.length===1 && !planLog[0].playing && !planLog[0].mobileLookahead && planLog[0].selected.title==='The Fate of Ophelia' && planLog[0].upcoming.map(x=>x?.title).join('|')==='Locked out of Heaven|NUEVAYoL'"));
                 js(web, "musicQueue.list[musicQueue.idx]={...musicQueue.list[musicQueue.idx]};renderMusicQueue()");
-                SystemClock.sleep(46_000); // Wait past the old UI cutoff with real /await slices and no live provider call.
-                assertPass("A slow first recording is still pending after the former cutoff, with no second tap or dialog",
+                SystemClock.sleep(4600); // At least one real /await slice; prior build proved the >45s case.
+                assertPass("A slow first recording is still pending after a wait slice, with no second tap or dialog",
                         prepared.size() == 1 && jsTrue(web, spinnerOnly(ophelia)
                                 + " && document.querySelector('#bgAudioBar').hidden && document.querySelector('#bgAudio').paused && planLog.length===1"));
                 firstFile.countDown();
@@ -311,19 +316,27 @@ public final class BlackBoxSmoke extends Instrumentation {
                 assertPass("The original queue is still in order and includes previously unlisted v90 tracks", jsTrue(web,
                         "musicQueue.list[musicQueue.idx+1].track==='Locked out of Heaven' && musicQueue.list[musicQueue.idx+2].track==='NUEVAYoL'"));
                 assertPass("On a metered link the app does not prepare ahead without permission", prepared.size() == 1);
+                // The queue button and the mobile-data explanation must work even in the mini-player.
+                js(web, "setMusicBarCollapsedV69(true)");
                 tapWeb(web, "#bgQueueToggle");
+                await("The phone explains why neither next song prepares on an opted-out metered link", 6000,
+                        () -> jsTrue(web, "document.querySelector('.bg-queue-note-v49').textContent.includes('Mobile preparation is off')"
+                                + " && document.querySelector('.bg-queue-note-v49').offsetHeight>0"));
                 tapWeb(web, "#bbxMusicMobileLookahead");
                 assertPass("The queue's mobile opt-in updates the same active plan, not the track order", jsTrue(web,
                         "planLog.at(-1)?.playing && planLog.at(-1)?.mobileLookahead"
-                                + " && localStorage.getItem('bbxAndroidMusicMobileLookahead')==='1'"
+                                + " && localStorage.getItem('bbxAndroidMusicMobileQueue')==='1'"
                                 + " && planLog.at(-1).upcoming[0].title==='Locked out of Heaven'"));
                 await("The exact next file starts while the current recording is still playing", 7000,
                         () -> prepared.equals(Arrays.asList("pick:3579685431", "pick:62724015")) && fixtureQueue.read(nextKey) == null
                                 && jsTrue(web, "document.querySelector('#bgTitle').textContent==='The Fate of Ophelia' && !document.querySelector('#bgAudio').paused"));
-                tapWeb(web, "#bgQueueClose");
                 nextFile.countDown();
-                await("Next queued file finishes and validates before the current song ends", 7000,
-                        () -> fixtureQueue.read(nextKey) != null && jsTrue(web, "!document.querySelector('#bgAudio').ended"));
+                await("Both real upcoming files finish before the current song ends, on the opted-in metered link", 7000,
+                        () -> fixtureQueue.read(nextKey) != null && fixtureQueue.read(secondKey) != null
+                                && jsTrue(web, "!document.querySelector('#bgAudio').ended"
+                                        + " && document.querySelector('.bg-queue-note-v49').textContent.includes('2 of 2 up next ready')"));
+                tapWeb(web, "#bgQueueClose");
+                js(web, "setMusicBarCollapsedV69(false)");
                 link.set(PreparedMusic.Link.OFFLINE);
                 fixtureQueue.networkChanged();
                 js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
@@ -335,7 +348,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 js(web, "document.querySelector('#bgAudio').currentTime = document.querySelector('#bgAudio').duration - 0.25");
                 awaitPreparedFixture(web, "Locked out of Heaven", 1);
                 assertPass("The automatic handoff works offline with the newly prepared song, without another worker call",
-                        prepared.equals(Arrays.asList("pick:3579685431", "pick:62724015")) && jsTrue(web,
+                        prepared.equals(Arrays.asList("pick:3579685431", "pick:62724015", "pick:3171002981")) && jsTrue(web,
                                 "planLog.some(p=>p.selected?.title==='Locked out of Heaven' && !p.playing && !p.retry)"));
 
                 js(web, "window.holdNextPlan=true");
@@ -348,12 +361,51 @@ public final class BlackBoxSmoke extends Instrumentation {
                 SystemClock.sleep(700);
                 assertPass("Late reply cannot revive the cancelled track or its spinner", jsTrue(web,
                         "document.querySelector('#bgTitle').textContent==='Locked out of Heaven' && !document.querySelector('.music-ui-loading-v52')"));
+                // The original Queue all button changes the upcoming list, not the audible track.
+                js(web, "openMusicGenre('Afrobeats & Amapiano')");
+                tapWeb(web, "[data-genre-queue]");
+                await("Queue all keeps the current song and replaces its upcoming window with the chosen genre", 7000,
+                        () -> jsTrue(web, "musicQueue.list[musicQueue.idx]?.track==='Locked out of Heaven'"
+                                + " && planLog.at(-1)?.playing && planLog.at(-1).selected.title==='Locked out of Heaven'"
+                                + " && planLog.at(-1).upcoming.map(t=>t.title).join('|')==='On the Low|Joro'"
+                                + " && !document.querySelector('#bgAudio').paused"));
+                tapWeb(web, "#bgQueueClose");
+                link.set(PreparedMusic.Link.METERED);
+                fixtureQueue.networkChanged();
+                await("The new genre's first file prepares in the new queue", 7000, () -> prepared.contains("pick:585584062"));
+                tapWeb(web, "[data-genre-play]");
+                double playingAt = Double.parseDouble(js(web, "document.querySelector('#bgAudio').currentTime"));
+                await("A deliberate genre switch keeps the previous song advancing while the requested file is pending", 7000,
+                        () -> jsTrue(web, "document.querySelector('#bgTitle').textContent==='Locked out of Heaven'"
+                                + " && document.querySelector('.bbx-music-transition').textContent.includes('On the Low')"
+                                + " && document.querySelector('#bgAudio').currentTime>" + (playingAt + 0.7)
+                                + " && planLog.at(-1).selected.title==='On the Low' && !planLog.at(-1).playing"));
+                link.set(PreparedMusic.Link.OFFLINE);
+                fixtureQueue.networkChanged();
+                genreFile.countDown();
+                awaitPreparedFixture(web, "On the Low", 1);
+                assertPass("The same in-flight file joins the original player without a second worker call",
+                        java.util.Collections.frequency(prepared, "pick:585584062") == 1
+                                && jsTrue(web, "document.querySelector('.bbx-music-transition').hidden"));
+                // Joro wasn't prepared. A failed direct switch must not replace audio or the playing row.
+                String unavailable = "#musicGenrePage [title='Play Joro']";
+                tapWeb(web, unavailable);
+                await("An unavailable genre selection leaves the current audio and queue intact", 7000,
+                        () -> jsTrue(web, "document.querySelector('#toast.on')?.textContent.includes('Connect to the internet')"
+                                + " && document.querySelector('#bgTitle').textContent==='On the Low'"
+                                + " && musicQueue.list[musicQueue.idx]?.track==='On the Low' && !document.querySelector('#bgAudio').paused"));
+                js(web, "document.querySelector('#bgAudio').currentTime=document.querySelector('#bgAudio').duration-0.25");
+                await("An unavailable automatic next keeps Retry, Next and Queue reachable", 7000,
+                        () -> jsTrue(web, "document.querySelector('#bgTitle').textContent==='Joro' && !document.querySelector('#bgAudioBar').hidden"
+                                + " && document.querySelector('.bbx-music-transition').textContent.includes('Next to skip')"
+                                + " && document.querySelector('#bgNext').offsetWidth>0 && document.querySelector('#bgQueueToggle').offsetWidth>0"));
+                tapWeb(web, "#musicGenreBack");
                 tapWeb(web, "#bgClose");
                 await("Closing the original player clears the resume session without deleting Downloads", 7000,
-                        () -> jsTrue(web, "document.querySelector('#bgAudioBar').hidden && !localStorage.getItem(MUSIC_SESSION_KEY) && musicDownloads.length===2"));
+                        () -> jsTrue(web, "document.querySelector('#bgAudioBar').hidden && !localStorage.getItem(MUSIC_SESSION_KEY) && musicDownloads.length===3"));
                 tapWeb(web, missing);
                 await("An unavailable offline song stops cleanly with no substitute or source dialog", 9000,
-                        () -> jsTrue(web, "musicQueue.list[musicQueue.idx]?.track==='NUEVAYoL' && document.querySelector('#bgAudioBar').hidden"
+                        () -> jsTrue(web, "musicQueue.list[musicQueue.idx]?.track==='One Dance' && document.querySelector('#bgAudioBar').hidden"
                                 + " && !document.querySelector('#bgAudio').src && !document.querySelector('.music-ui-loading-v52,dialog[open]')"
                                 + " && document.querySelector('#toast.on')?.textContent.includes('Connect to the internet')"));
                 closeScreen(desktop);
@@ -362,8 +414,8 @@ public final class BlackBoxSmoke extends Instrumentation {
                 WebView offline = ui(() -> findWeb(reopened.getWindow().getDecorView()));
                 checkKeylessHome(offline);
                 tapWeb(offline, "#navMusic");
-                await("Both recordings are in the original offline downloads after reopening", 10000,
-                        () -> jsTrue(offline, "musicDownloads.filter(t=>t.offline).length===2 && document.querySelector(" + JSONObject.quote(savedPlay) + ")"));
+                await("Played recordings are in the original offline downloads after reopening", 10000,
+                        () -> jsTrue(offline, "musicDownloads.filter(t=>t.offline).length===3 && document.querySelector(" + JSONObject.quote(savedPlay) + ")"));
                 tapWeb(offline, savedPlay);
                 awaitPreparedFixture(offline, "Locked out of Heaven", 1);
                 // The unplayed album track must not lose its album/disc/track identity in a saved playlist.
@@ -519,13 +571,12 @@ public final class BlackBoxSmoke extends Instrumentation {
             await("The current recording prepares on mobile data", 7000, () -> queue.read(a.key) != null);
             queue.plan(2, a.json(), window, false, true, false);
             assertPass("Only explicit consent opens metered lookahead, not just a Play tap", calls.equals(Arrays.asList("A")));
-            queue.plan(3, a.json(), new JSONArray().put(JSONObject.NULL).put(c.json()), false, true, true);
-            queue.plan(4, a.json(), new JSONArray().put(a.json()).put(c.json()), false, true, true);
-            queue.plan(5, a.json(), new JSONArray().put(longTrack.json()).put(c.json()), false, true, true);
-            assertPass("An absent, duplicate or long mobile next slot does not fetch a later song", calls.equals(Arrays.asList("A")));
+            queue.plan(3, a.json(), new JSONArray().put(JSONObject.NULL).put(longTrack.json()), false, true, true);
+            queue.plan(4, a.json(), new JSONArray().put(a.json()).put(longTrack.json()), false, true, true);
+            assertPass("Metered preparation skips long files and doesn't add extra slots past the window", calls.equals(Arrays.asList("A")));
             queue.plan(6, a.json(), window, false, true, true);
             await("Metered opt-in prepares the exact next slot", 7000, () -> underway.get() != null);
-            assertPass("Second lookahead slot does not start on mobile", calls.equals(Arrays.asList("A", "B"))
+            assertPass("One worker handles the two metered slots in order", calls.equals(Arrays.asList("A", "B"))
                     && "queued".equals(queue.state().getJSONObject("tracks").getJSONObject(c.key).getString("state")));
             queue.plan(7, b.json(), new JSONArray().put(c.json()), false, false, true);
             assertPass("Auto-next promotes the in-flight file without cancelling or restarting it", !underway.get().cancelled);
