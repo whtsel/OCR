@@ -600,9 +600,9 @@ public final class BlackBoxSmoke extends Instrumentation {
                     jsTrue(web, row + ".initialState!=='ready' && " + row + ".source" + (discoveryRequired ? "===''" : "!==''")));
             await(title + " receives a private full recording", 46000, () -> {
                 if (jsTrue(web, row + "?.state==='failed'")) {
-                    String reason = js(web, row + ".message");
+                    String reason = jsText(web, row + ".message");
                     await(title + " shows a failure reason and its Play ring clears", 4500,
-                            () -> jsTrue(web, "document.querySelector('#toast.on')?.textContent===" + JSONObject.quote(reason)
+                            () -> jsTrue(web, "document.querySelector('#toast.on')?.textContent===" + row + ".message"
                                     + " && !document.querySelector('.music-ui-loading-v52') && document.querySelector('#bgAudioBar').hidden"));
                     throw new AssertionError(title + ": " + reason);
                 }
@@ -614,7 +614,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             assertPass(title + " advances by the startup deadline", advancing <= 47000);
             js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
             awaitAudio(web, title, seconds, 6, seconds * 0.63, 10000);
-            String key = js(web, row + ".key");
+            String key = jsText(web, row + ".key");
             assertPass(title + " is saved under its exact cache key", key.matches("[a-f0-9]{64}"));
             tapWeb(web, "#bgClose");
             await("Original player closes without deleting " + title, 7000,
@@ -736,6 +736,11 @@ public final class BlackBoxSmoke extends Instrumentation {
 
     private boolean jsTrue(WebView web, String script) throws Exception {
         return "true".equals(js(web, "Boolean(" + script + ")"));
+    }
+
+    private String jsText(WebView web, String script) throws Exception {
+        // Android evaluateJavascript returns JSON, including the quotes around JS strings.
+        return new JSONArray("[" + js(web, script) + "]").getString(0);
     }
 
     private String js(WebView web, String script) throws Exception {
