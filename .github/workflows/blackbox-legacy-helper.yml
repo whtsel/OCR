@@ -1,0 +1,49 @@
+name: BlackBox legacy Music helper diagnostic
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - '.github/workflows/blackbox-legacy-helper.yml'
+      - '.github/ci/check_blackbox_p11.py'
+permissions:
+  contents: read
+concurrency:
+  group: blackbox-legacy-helper-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundled-script:
+    name: Original downloader bytes on host
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Control audio and exact original recordings
+        run: python3 -u .github/ci/check_blackbox_p11.py host
+  old-app:
+    name: Unmodified p11 on Android
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download and verify the archived APK
+        run: python3 -u .github/ci/check_blackbox_p11.py download "$RUNNER_TEMP/blackbox-p11.apk"
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test helper startup and real Music playback
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
+          script: python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-p11.apk"
