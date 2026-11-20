@@ -8,6 +8,7 @@ import http.server
 import json
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -286,30 +287,77 @@ def find_server(pid):
     raise RuntimeError('could not reach p11’s own loopback helper status endpoint')
 
 
-def verify_repair(original, probe):
+def check_native_control(work):
+    # This executes the installed fixture helper in the disposable emulator's shell.
+    # The real recording probes below separately exercise the app's own backend.
+    root = '/data/user/0/' + PKG + '/no_backup/youtubedl-android'
+    prefix = root + '/packages'
+    apk_path = adb('shell', 'pm', 'path', PKG).splitlines()[0].removeprefix('package:')
+    native = str(Path(apk_path).parent / 'lib/x86_64')
+    tmp = '/data/local/tmp/bbx-helper-control'
+    adc = work / 'fixture'
+    adc.mkdir()
+    run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=4',
+        '-c:a', 'pcm_s16le', adc / 'tone.wav')
+    handler = partial(http.server.SimpleHTTPRequestHandler, directory=adc)
+    with http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        port = f'tcp:{server.server_port}'
+        try:
+            adb('reverse', port, port)
+            adb('shell', 'mkdir', '-p', tmp)
+            runtime = ['env', f'LD_LIBRARY_PATH={prefix}/python/usr/lib:{prefix}/ffmpeg/usr/lib',
+                       f'PYTHONHOME={prefix}/python/usr', f'HOME={tmp}', f'TMPDIR={tmp}',
+                       f'SSL_CERT_FILE={prefix}/python/usr/etc/tls/cert.pem',
+                       f'{native}/libpython.so', f'{root}/yt-dlp/yt-dlp']
+            version = adb('shell', shlex.join(runtime + ['--ignore-config', '--version']))
+            opts = ['--ignore-config', '--no-cache-dir', '--no-progress', '--socket-timeout', '6',
+                    '--retries', '0', '--ffmpeg-location', f'{native}/libffmpeg.so',
+                    '-x', '--audio-format', 'm4a', '-o', f'{tmp}/control.%(ext)s',
+                    f'http://127.0.0.1:{server.server_port}/tone.wav']
+            adb('shell', shlex.join(runtime + opts), timeout=45)
+            output = work / 'android-control.m4a'
+            adb('pull', f'{tmp}/control.m4a', output)
+            seconds = verify_audio(output, 4, 2)
+            print(f'::notice::PASS Android x86_64 control: yt-dlp {version} and bundled FFmpeg '
+                  f'converted and decoded {seconds:.2f}s of fixture audio (not a catalogue track)')
+        finally:
+            adb('reverse', '--remove', port, check=False)
+            adb('shell', 'rm', '-rf', tmp, check=False)
+            server.shutdown()
+
+
+def verify_repair(original, probe, native_x86):
     verify_apk(original)
     with zipfile.ZipFile(original) as before, zipfile.ZipFile(probe) as after:
         original_names = {name for name in before.namelist() if not name.startswith('META-INF/')}
         probe_names = [name for name in after.namelist() if not name.startswith('META-INF/')]
-        if len(probe_names) != len(original_names) + 1 or set(probe_names) != original_names | {'classes2.dex'}:
+        expected = original_names | {'classes2.dex'}
+        if native_x86:
+            expected |= {name.replace('arm64-v8a', 'x86_64', 1) for name in original_names
+                         if name.startswith('lib/arm64-v8a/')}
+        if len(probe_names) != len(expected) or set(probe_names) != expected:
             raise RuntimeError('unexpected entries in test repaired APK')
         for name in sorted(original_names):
             if before.read(name) != after.read(name):
                 raise RuntimeError(f'test repaired APK modified app bytes in {name}')
-    print('Diagnostic APK: original app bytes match; only compression library DEX and test signature added')
+    description = 'ZIP dependency plus x86_64 runtime siblings' if native_x86 else 'ZIP dependency alone'
+    print(f'Diagnostic APK: original app bytes match; added {description} and a test signature')
 
 
-def android(apk, work, original=None):
+def android(apk, work, original=None, native_x86=False):
     if original is None:
         verify_apk(apk)
     else:
-        verify_repair(original, apk)
+        verify_repair(original, apk, native_x86)
     adb('root')  # Isolated, disposable emulator only; needed for process-owned socket diagnostics.
     adb('wait-for-device')
     props = {prop: adb('shell', 'getprop', prop) for prop in
              ('ro.build.version.sdk', 'ro.product.cpu.abilist', 'ro.dalvik.vm.native.bridge')}
     print(f'Android test environment: {props}')
-    print(adb('install', '-g', apk, timeout=65))
+    flags = ('--abi', 'x86_64') if native_x86 else ()
+    print(adb('install', '-g', *flags, apk, timeout=65))
     # Keep all of p11's desktop-style navigation visible on the test display.
     adb('shell', 'wm', 'size', '1280x1800')
     adb('shell', 'wm', 'density', '160')
@@ -331,8 +379,15 @@ def android(apk, work, original=None):
                 raise RuntimeError(f'Android API {props["ro.build.version.sdk"]} helper startup did not pass: '
                                    f'{status.get("state")} — {status.get("message")}')
 
+            control_ok = True
+            if native_x86:
+                try:
+                    check_native_control(work)
+                except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
+                    control_ok = False
+                    print(f'::warning::Android x86_64 fixture: {diagnostic(str(error)).replace(chr(10), " / ")}')
             ui_failures = []
-            for title, video_id, duration in SONGS:
+            for title, video_id, duration in (() if native_x86 else SONGS):
                 try:
                     try_player(title, duration)
                     # The app saves the selected recording in the background; confirm the expected ID
@@ -352,8 +407,9 @@ def android(apk, work, original=None):
                     print(f'::warning::Android UI {title}: {diagnostic(str(error)).replace(chr(10), " / ")}')
 
             # When the UI test fails, distinguish provider failure from UI/selection issues.
+            backend_failures = []
             for title, video_id, duration in SONGS:
-                if title not in ui_failures:
+                if not native_x86 and title not in ui_failures:
                     continue
                 try:
                     code, body = request(base, '/api/music/youtube/fetch', timeout=80,
@@ -368,12 +424,15 @@ def android(apk, work, original=None):
                     output = work / f'{video_id}.m4a'
                     output.write_bytes(media)
                     seconds = verify_audio(output, duration, duration * 2 // 3)
-                    print(f'PASS Android backend only: {title} ({video_id}), {seconds:.2f}s, decoded after seek')
+                    print(f'::notice::PASS Android backend only: {title} ({video_id}), {seconds:.2f}s, decoded after seek')
                 except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
+                    backend_failures.append(title)
                     print(f'::warning::Android backend {title} ({video_id}): '
                           f'{diagnostic(str(error)).replace(chr(10), " / ")}')
             if ui_failures:
                 raise RuntimeError('Android in-app playback not verified: ' + ', '.join(ui_failures))
+            if native_x86 and (backend_failures or not control_ok):
+                raise RuntimeError('Android x86_64 diagnostic did not pass the fixture and both exact recordings')
         finally:
             adb('forward', '--remove', f'tcp:{port}', check=False)
     finally:
@@ -389,10 +448,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('download', 'host', 'android'))
     parser.add_argument('apk', type=Path, nargs='?')
-    parser.add_argument('--original', type=Path, help='verified original for comparison with a ZIP-only test repair')
+    parser.add_argument('--original', type=Path, help='verified original for comparison with a test repair')
+    parser.add_argument('--native-x86', action='store_true',
+                        help='backend-only probe with the x86_64 sibling of the ARM helper')
     args = parser.parse_args()
     if args.mode != 'host' and args.apk is None:
         parser.error('APK path required')
+    if args.native_x86 and (args.mode != 'android' or not args.original):
+        parser.error('--native-x86 requires android mode and --original')
     try:
         with tempfile.TemporaryDirectory(prefix='bbx-p11-') as work:
             if args.mode == 'download':
@@ -400,7 +463,7 @@ def main():
             elif args.mode == 'host':
                 host(Path(work), args.apk)
             else:
-                android(args.apk, Path(work), args.original)
+                android(args.apk, Path(work), args.original, args.native_x86)
     except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
         print(f'::error::{diagnostic(str(error)).replace(chr(10), " ")}')
         sys.exit(1)

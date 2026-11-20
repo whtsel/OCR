@@ -3,6 +3,7 @@
 set -euo pipefail
 original=$1
 output=$2
+variant=${3:-zip-dependency}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 sdk=${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK is required}}
@@ -14,11 +15,18 @@ curl -fsSL --max-time 30 -o "$jar" \
   https://repo.maven.apache.org/maven2/org/apache/commons/commons-compress/1.12/commons-compress-1.12.jar
 mkdir "$work/dex"
 "$latest/d8" --min-api 24 --lib "$sdk/platforms/android-35/android.jar" --output "$work/dex" "$jar"
-python3 - "$original" "$work/dex/classes.dex" "$work/base.apk" <<'PY'
+runtime="$work/upstream.apk"
+if [[ "$variant" == native-x86 ]]; then
+  curl -fsSL --max-time 120 --max-filesize 70500000 -o "$runtime" \
+    https://github.com/yausername/youtubedl-android/releases/download/0.18.1/app-x86_64-debug.apk
+  echo "c6c8ece57600fe9022b91c026ddb3489fef80496b5627586e3e0fc46e0dcd866  $runtime" | sha256sum -c
+fi
+python3 - "$original" "$work/dex/classes.dex" "$work/base.apk" "$runtime" <<'PY'
+from pathlib import Path
 import sys
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
-original, dependency, target = sys.argv[1:]
+original, dependency, target, runtime = sys.argv[1:]
 with ZipFile(original) as archive, ZipFile(target, 'w') as output:
     for info in archive.infolist():
         if info.filename.startswith('META-INF/'):
@@ -30,6 +38,14 @@ with ZipFile(original) as archive, ZipFile(target, 'w') as output:
         entry.external_attr = info.external_attr
         output.writestr(entry, archive.read(info))
     output.write(dependency, 'classes2.dex', compress_type=ZIP_DEFLATED)
+    if Path(runtime).exists():
+        # Same source release; add only the x86_64 siblings of p11’s native helper
+        # binaries. The separate official sample app's code is not incorporated.
+        with ZipFile(runtime) as upstream:
+            for name in sorted(archive.namelist()):
+                if name.startswith('lib/arm64-v8a/'):
+                    x86_name = name.replace('arm64-v8a', 'x86_64', 1)
+                    output.writestr(x86_name, upstream.read(x86_name), compress_type=ZIP_DEFLATED)
 PY
 "$latest/zipalign" -f 4 "$work/base.apk" "$work/aligned.apk"
 keytool -genkeypair -keystore "$work/probe.p12" -storepass test-only -keypass test-only \

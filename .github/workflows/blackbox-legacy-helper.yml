@@ -38,6 +38,8 @@ jobs:
             variant: archived
           - api: 35
             variant: zip-dependency
+          - api: 35
+            variant: native-x86
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -48,12 +50,12 @@ jobs:
       - name: Install a host audio decoder
         run: bash .github/ci/install_audio_probe.sh
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
-        if: matrix.variant == 'zip-dependency'
+        if: matrix.variant != 'archived'
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-      - name: Make a temporary APK with the missing ZIP library
-        if: matrix.variant == 'zip-dependency'
-        run: bash .github/ci/prepare_blackbox_p11_repair.sh "$RUNNER_TEMP/blackbox-p11.apk" "$RUNNER_TEMP/blackbox-probe.apk"
+      - name: Make a temporary diagnostic APK
+        if: matrix.variant != 'archived'
+        run: bash .github/ci/prepare_blackbox_p11_repair.sh "$RUNNER_TEMP/blackbox-p11.apk" "$RUNNER_TEMP/blackbox-probe.apk" "${{ matrix.variant }}"
       - name: Enable emulator acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -68,6 +70,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
           script: >-
-            if [ '${{ matrix.variant }}' = 'zip-dependency' ]; then
-            python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-probe.apk" --original "$RUNNER_TEMP/blackbox-p11.apk";
-            else python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-p11.apk"; fi
+            if [ '${{ matrix.variant }}' = 'archived' ]; then
+            python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-p11.apk";
+            else python3 -u .github/ci/check_blackbox_p11.py android "$RUNNER_TEMP/blackbox-probe.apk" --original "$RUNNER_TEMP/blackbox-p11.apk"
+            ${{ matrix.variant == 'native-x86' && '--native-x86' || '' }}; fi
