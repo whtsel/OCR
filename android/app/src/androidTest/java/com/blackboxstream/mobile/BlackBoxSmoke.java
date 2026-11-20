@@ -423,10 +423,12 @@ public final class BlackBoxSmoke extends Instrumentation {
             JSONObject result = limited.awaitSelection(key).getJSONObject("tracks").getJSONObject(key);
             assertPass("A provider refusal wakes the selection waiter with a clear failure", "failed".equals(result.getString("state"))
                     && result.getString("message").contains("rate-limiting"));
-            JSONObject blocked = limited.plan(2, b, new JSONArray(), true);
-            String next = blocked.getString("selected");
+            String next = limited.plan(2, b, new JSONArray(), true).getString("selected");
+            // The first waiter can return while the worker is still draining. Observe the terminal
+            // state, not the immediate plan reply, in both worker schedules.
+            JSONObject blocked = limited.awaitSelection(next).getJSONObject("tracks").getJSONObject(next);
             assertPass("Cooldown makes the next unprepared selection fail without another provider call",
-                    "failed".equals(blocked.getJSONObject("tracks").getJSONObject(next).getString("state")) && attempts.get() == 1);
+                    "failed".equals(blocked.getString("state")) && attempts.get() == 1);
         }
     }
 
