@@ -1,0 +1,56 @@
+name: BlackBox v90 helper film and anime compatibility
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths: ['.github/workflows/blackbox-v90-public-preview.yml']
+permissions:
+  contents: read
+jobs:
+  public-media:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          gradle-version: '8.9'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - name: Build the helper preview and public media instrumentation
+        working-directory: android
+        run: >-
+          gradle :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console=plain
+          -PbbxMusicHelper=true -PbbxHelperPreview=true -PbbxHelperAbi=x86_64
+      - name: Independently checksum both complete public files
+        run: |
+          python3 -m venv "$RUNNER_TEMP/media-tests"
+          "$RUNNER_TEMP/media-tests/bin/pip" install --only-binary=:all: 'libtorrent==2.1.1'
+          "$RUNNER_TEMP/media-tests/bin/python" android/tests/check_playable_media.py | base64 -w0 > "$RUNNER_TEMP/public-file-hashes"
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Play, seek, download and reopen the full film and anime offline with the helper enabled
+        env:
+          BBX_TEST_PACKAGE: com.blackboxstream.mobile.helper
+          BBX_VERIFY_PUBLIC_PREVIEW: '1'
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
+          script: |
+            adb shell wm size 720x1560
+            adb shell wm density 320
+            BBX_PUBLIC_MEDIA_HASHES="$(cat "$RUNNER_TEMP/public-file-hashes")" bash android/tests/run_device.sh

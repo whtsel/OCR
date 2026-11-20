@@ -66,6 +66,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             if (fixtures != null && "yes".equals(fixtures.getString("helper_fixture"))) verifyHelperFixtures();
             else if (fixtures != null && "yes".equals(fixtures.getString("music_only"))) verifyMusicCandidate();
             else if (fixtures != null && "yes".equals(fixtures.getString("public_only"))) verifyCandidate();
+            else if (fixtures != null && "yes".equals(fixtures.getString("public_preview"))) verifyPublicPreview();
             else verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
                     + (liveVerified ? "PASS v90 Android: original search and source picker opened full Sintel, rendered and sought to 2:30 before the transfer finished\n" : "")
@@ -413,6 +414,24 @@ public final class BlackBoxSmoke extends Instrumentation {
         Context app = getTargetContext();
         assertPass("Standalone media acceptance does not depend on debug fixtures",
                 (app.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0);
+        verifyPublicWithPlayer(app);
+    }
+
+    private void verifyPublicPreview() throws Exception {
+        Context app = getTargetContext();
+        assertPass("Preview check does not replace the release acceptance gate", app.getPackageName().endsWith(".helper"));
+        V90Api api = new V90Api(app);
+        try {
+            assertPass("Music preparation can stay enabled during film and anime playback",
+                    api.call("POST", "/api/mobile/music-helper/options", "{\"enabled\":true}").value.optBoolean("enabled"));
+            verifyPublicWithPlayer(app);
+        } finally {
+            api.call("POST", "/api/mobile/music-helper/options", "{\"enabled\":false}");
+            api.close();
+        }
+    }
+
+    private void verifyPublicWithPlayer(Context app) throws Exception {
         boolean bound = ui(() -> app.bindService(new Intent(app, PlaybackService.class), binding, Context.BIND_AUTO_CREATE));
         assertPass("Standalone native playback service binds", bound);
         try {

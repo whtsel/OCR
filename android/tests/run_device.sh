@@ -25,6 +25,10 @@ fi
 if [[ "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 ]]; then
     args+=(-e music_only yes)
 fi
+if [[ "${BBX_VERIFY_PUBLIC_PREVIEW:-0}" == 1 ]]; then
+    : "${BBX_PUBLIC_MEDIA_HASHES:?Provide the independently collected public file hashes}"
+    args+=(-e public_preview yes)
+fi
 if [[ "${BBX_VERIFY_HELPER_FIXTURE:-0}" == 1 ]]; then
     args+=(-e helper_fixture yes)
 fi

@@ -4,7 +4,9 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Install and use
 
-Install **BlackBox-Stream-Android-1.4.1.apk**. It targets Android 15, supports Android 7.0+ with an up-to-date Android System WebView, and updates earlier Android ports when signed by the same key. p11 is a separate app. This is a signed sideload, not a Play Store release. As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
+**1.4.1 is a candidate, not a verified release.** The [Android acceptance run](https://github.com/whtsel/OCR/actions/runs/44453268585) verified the original Music navigation, artist search, album and queue. For *Espresso*, YouTube refused the embed, and the SoundCloud widget resolved the correct duration and recording ID but did not advance. Do not distribute the candidate as a playback fix until a full original recording passes the release test.
+
+If building for testing, the APK is named **BlackBox-Stream-Android-1.4.1.apk**. It targets Android 15, supports Android 7.0+ with an up-to-date Android System WebView, and updates earlier Android ports when signed by the same key. p11 is a separate app. This is a signed sideload, not a Play Store release. As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 
 1. In **Settings**, add your TMDB v3 API key or Read Access Token for v90 movie/series artwork, catalogue, search, and details. **Remember on this device** is optional. **My List** stores your choices locally.
 2. No key required: try **Search → Sintel → Play in BlackBox**, **Anime → Playable anime → The Dull Sword**, or **Music → Trending Now → Espresso**. For downloadable sources, use **Download** to save a complete file, then **Library → Offline copy → Play/Resume** to reopen it without a network connection. Use Wi-Fi for large video downloads.
@@ -16,8 +18,8 @@ Install **BlackBox-Stream-Android-1.4.1.apk**. It targets Android 15, supports A
 | **Online sources** | Search the selected title or episode through Knaben and Torrents-CSV. The provider results are candidates, not a promise of playable seeds or download rights. No media starts from a search result until you explicitly choose a source. The selected job, v1 info hash, and file index must agree. |
 | **Open/import** | **Settings → Open a torrent directly** accepts a magnet, HTTPS `.torrent`, or direct HTTPS media. **Choose .torrent file** supports local descriptors. **Import M3U or phone media** opens the device library with Android's file picker. Magnet intents fill the picker but do not start downloads. |
 | **Player and offline** | Android's native player opens direct HTTPS files, phone media and verified torrent pieces. **Download** queues a saved copy without starting the player. **Library** shows progress, cancellation, and retry; completed copies are reopened locally. Large films can use hundreds of MB. |
-| **Music** | The original 14 genres, artist search, album art, ordered tracklists, playlists and queue. A title with a matched official recording opens the visible provider player **inside BlackBox**. Other recordings need an authorized source. Select their exact audio file on your phone or link an authorized direct HTTPS file, and optionally save a private offline copy through Library. |
-| **Anime and trailers** | The playable archive shelf uses identified full Wikimedia Commons files. Other anime listings need a working episode source or your own file; Jikan/AniList only supply metadata. Optional **Find official trailer** is labeled separately and opens a browser. Windows-only embedded anime hosts, `yt-dlp`, and browser-cookie access are not included. |
+| **Music** | The original 14 genres, artist search, album art, ordered tracklists, playlists and queue. A title with a matched official recording opens the visible provider player **inside BlackBox** by default. The opt-in helper build can prepare some exact matches in the Music queue instead. Other recordings need an authorized source. Select their exact audio file on your phone or link an authorized direct HTTPS file, and optionally save a private offline copy through Library. |
+| **Anime and trailers** | The playable archive shelf uses identified full Wikimedia Commons files. Other anime listings need a working episode source or your own file; Jikan/AniList only supply metadata. Optional **Find official trailer** is labeled separately and opens a browser. Windows-only embedded anime hosts and browser-cookie access are not included. The optional helper is for Music only. |
 | **Local Share and rooms** | **Local Share** opens the Android secure Wi-Fi sharing protocol. **Settings → Community rooms** supports private encrypted recommendations through your own HTTPS relay. They are not compatible with the Windows binary's network protocols. Sponsored boxes and public peer votes are off in the port. |
 
 ## Original Music playback
@@ -26,7 +28,35 @@ The bundled index lists **2,620 albums and 35,995 track rows**. It does not incl
 
 For any unlinked title, **Play** opens its source controls. To use your own authorized recording for a title that already has a link, use **Source for selected track** after selecting it. Choose the matching audio file on your phone, link a direct HTTPS file, or provide the official YouTube link for online listening. Native audio uses normal Android playback and Library; supported direct files and phone files can be copied offline. The app cannot independently verify the identity or rights of files you attach. MusicBrainz is a metadata fallback, not a streaming service. The Windows downloader and automatic genre radio are not part of this port.
 
-The app's catalogue stays in a network-restricted WebView. Only explicit online playback opens a separate, visible Android WebView without the catalogue's native bridge. The [official SoundCloud widget](https://developers.soundcloud.com/docs/api/html5-widget) or [YouTube IFrame player](https://developers.google.com/youtube/iframe_api_reference) receives the selected recording ID. Their respective [SoundCloud](https://soundcloud.com/pages/privacy) and [Google](https://policies.google.com/privacy) privacy policies apply. Leaving that screen stops online playback.
+The app's catalogue stays in a network-restricted WebView. The official-player option opens a separate, visible Android WebView without the catalogue's native bridge. The [official SoundCloud widget](https://developers.soundcloud.com/docs/api/html5-widget) or [YouTube IFrame player](https://developers.google.com/youtube/iframe_api_reference) receives the selected recording ID. Their respective [SoundCloud](https://soundcloud.com/pages/privacy) and [Google](https://policies.google.com/privacy) privacy policies apply. Leaving that screen stops online playback.
+
+### Music preparation preview (ARM64)
+
+The **BlackBox Stream Helper Preview** is the v90 Android app in a separate test package
+(`com.blackboxstream.mobile.helper`). It installs alongside the previous port and the p11 helper
+diagnostic. It does not import the diagnostic's audio or overwrite your main app. Do not use its
+test signature for a release.
+
+1. In **Music → Music preparation**, choose **Enable music preparation**. Only prepare recordings
+   you are permitted to download. No Google account, cookies, or remote helper updates are used.
+2. For a queue test on Wi-Fi, play **Espresso** from **Trending Now**. The next two entries in that
+   original queue are **bad guy** and **Blinding Lights**. **Queue** shows their progress. They are
+   ready when they say **Ready on this phone**; the first uncached play and an early skip can still
+   wait. Linked files retain priority. An unmatched or refused track is never replaced and does not
+   cause the helper to look farther down the queue.
+3. For an offline test, play **Kwaku the Traveller** from **Ghana Essentials** first. Listen, seek,
+   and pause/resume. After a full copy is prepared, close the app, turn on airplane mode, reopen it
+   and choose **Play prepared: Kwaku the Traveller** under **Music preparation**. The track is
+   available without starting another download. **Clear prepared tracks** removes the private copies.
+
+The preview matches five pinned YouTube audio IDs against the original catalogue's recording,
+release, and duration. The full track must be available and its returned audio must pass a duration
+check before it appears as ready. One worker prioritizes the selected song; up to the next two
+actual queue entries are eligible on an unmetered connection. Completed audio stays app-private
+and is not in Library export, Local Share, the APK, or the helper backup. The official player and
+authorized file options are still available from **Source for selected track**. Provider access and
+hardware support may differ from the diagnostic phone. A successful fixture test is not acceptance
+of live recordings or the physical phone build.
 
 ## What the sources support
 
@@ -82,7 +112,26 @@ gradle :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-There are no external Android library dependencies. `./tools/build_apk.sh` builds and test-signs the standalone release APK using AAPT2, javac, D8 and apksigner. Set `ANDROID_SDK_ROOT` and `JAVA_HOME` if needed. The default output is `build/BlackBox-Stream-Android-1.4.1.apk`. Only an APK signed with the same key can update an installed copy. Use release signing for distribution; no private keys or SDK binaries belong in Git. `python3 tools/make_samples.py` recreates the original samples (Pillow, DejaVu fonts, FFmpeg with libx264/AAC).
+The default (non-helper) app has no external Android library dependencies. `./tools/build_apk.sh` builds and test-signs the standalone release APK using AAPT2, javac, D8 and apksigner. Set `ANDROID_SDK_ROOT` and `JAVA_HOME` if needed. The default output is `build/BlackBox-Stream-Android-1.4.1.apk`. Only an APK signed with the same key can update an installed copy. Use release signing for distribution; no private keys or SDK binaries belong in Git. `python3 tools/make_samples.py` recreates the original samples (Pillow, DejaVu fonts, FFmpeg with libx264/AAC).
+
+For the v90 Music helper preview:
+
+```sh
+(cd vendor && sha256sum -c ytdlp.sha256)
+gradle :app:assembleDebug -PbbxMusicHelper=true -PbbxHelperPreview=true
+```
+
+`vendor/ytdlp` is the exact official **2026.10.26** zipapp tested on the diagnostic phone. The
+helper build includes the youtubedl-android **0.18.1** runtime and Commons Compress. See the
+[upstream Android wrapper source](https://github.com/yausername/youtubedl-android/tree/d725d5c9a18c3a99a13ee0308bf78275dc310760)
+and the [pinned extractor release](https://github.com/yt-dlp/yt-dlp/releases/tag/2026.10.26) for
+source and licensing. The Gradle task, on-device loader, and APK verification check the pin. CI
+also compares the six ARM64 runtime files with the exact diagnostic binaries. For a test on an
+x86_64 Android emulator, add `-PbbxHelperAbi=x86_64`, build `:app:assembleDebugAndroidTest` as well,
+and run `BBX_TEST_PACKAGE=com.blackboxstream.mobile.helper BBX_VERIFY_HELPER_FIXTURE=1 ./tests/run_device.sh`.
+That test exercises the helper runtime, local audio conversion, prioritized preparation, seek,
+completion, and offline reuse with bundled fixtures. It does not replace the live film/anime or
+exact Music acceptance gates below.
 
 ## Tests
 
