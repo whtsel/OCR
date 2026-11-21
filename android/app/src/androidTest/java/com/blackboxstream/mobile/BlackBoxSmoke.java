@@ -203,6 +203,19 @@ public final class BlackBoxSmoke extends Instrumentation {
                 V90_READY + " && document.title.includes('BlackBox Stream v90') && window.DOMPurify?.isSupported && !document.querySelector('#rows .card')"));
     }
 
+    private void openMusicTab(WebView web) throws Exception {
+        // Navigation is setup. Keep real touchscreen events for the Play/queue controls being measured.
+        js(web, "document.querySelector('#navMusic').click()");
+        try {
+            await("The original Music tab opens", 10_000, () -> jsTrue(web,
+                    "state.view==='music' && !document.querySelector('#viewMusic').hidden"));
+        } catch (AssertionError failed) {
+            throw new AssertionError(failed.getMessage() + ": " + js(web,
+                    "JSON.stringify({view:state.view,genres:document.querySelectorAll('#musicGenreChips button').length,"
+                            + "hidden:document.querySelector('#viewMusic').hidden,engine:document.querySelector('#engineDot').className})"), failed);
+        }
+    }
+
     /** Tests the real helper loader, isolated queue worker, and actual v90 WebView using only built-in fixture media. */
     private void verifyHelperFixtures() throws Exception {
         Context app = getTargetContext();
@@ -211,6 +224,9 @@ public final class BlackBoxSmoke extends Instrumentation {
         Object instance = runtime.getDeclaredConstructor(Context.class).newInstance(app);
         java.lang.reflect.Method run = runtime.getDeclaredMethod("run", PreparedMusic.Control.class, File.class, String[].class);
         run.setAccessible(true);
+        java.lang.reflect.Method offer = runtime.getDeclaredMethod("maybeOfferStream", String.class, boolean.class,
+                File.class, PreparedMusic.Control.class);
+        offer.setAccessible(true);
         File root = app.getNoBackupFilesDir();
         File scratch = new File(root, "helper-smoke");
         File cache = PreparedMusic.cacheDirectory(app);
@@ -255,11 +271,13 @@ public final class BlackBoxSmoke extends Instrumentation {
             java.util.concurrent.CountDownLatch firstFile = new java.util.concurrent.CountDownLatch(1);
             java.util.concurrent.CountDownLatch finishFirst = new java.util.concurrent.CountDownLatch(1);
             java.util.concurrent.CountDownLatch nextFile = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch finishFallback = new java.util.concurrent.CountDownLatch(1);
             PreparedMusic fixtureQueue = new PreparedMusic(cache, (track, work, control) -> {
                 prepared.add(track.ref);
                 java.util.concurrent.CountDownLatch allowed;
                 if (track.ref.equals("pick:3579685431")) allowed = firstFile;
                 else if (track.key.equals(nextKey)) allowed = nextFile;
+                else if (track.title.equals("NUEVAYoL")) allowed = new java.util.concurrent.CountDownLatch(0);
                 else throw new java.io.IOException("Unexpected fixture recording.");
                 long until = SystemClock.elapsedRealtime() + 95_000;
                 while (!allowed.await(100, TimeUnit.MILLISECONDS)) {
@@ -267,13 +285,19 @@ public final class BlackBoxSmoke extends Instrumentation {
                     if (SystemClock.elapsedRealtime() >= until) throw new java.io.IOException("Fixture gate was not released.");
                 }
                 File complete = new File(work, "audio.m4a");
-                if (allowed == firstFile) {
-                    File part = new File(work, "audio.m4a.part");
+                if (allowed != nextFile) {
+                    File part = new File(work, "audio.m4a.part"), matched = new File(work, "source-id");
+                    java.util.concurrent.CountDownLatch finish = allowed == firstFile ? finishFirst : finishFallback;
                     try (FileOutputStream out = new FileOutputStream(part)) {
                         int prefix = orbit.length / 2;
                         out.write(orbit, 0, prefix);
-                        control.offerStream(part, orbit.length, "aaaaaaaaaaa");
-                        while (!finishFirst.await(100, TimeUnit.MILLISECONDS)) {
+                        String marker = fixtureProgressMarker(orbit.length);
+                        try (FileOutputStream id = new FileOutputStream(matched)) { id.write("bbbbbbbbbbb".getBytes(StandardCharsets.US_ASCII)); }
+                        offer.invoke(null, marker, true, work, control);
+                        if (!control.cancelled && !control.wantsStream()) throw new java.io.IOException("Wrong fixture ID was accepted.");
+                        try (FileOutputStream id = new FileOutputStream(matched)) { id.write("aaaaaaaaaaa".getBytes(StandardCharsets.US_ASCII)); }
+                        offer.invoke(null, marker, true, work, control);
+                        while (!finish.await(100, TimeUnit.MILLISECONDS)) {
                             if (control.cancelled) return null;
                             if (SystemClock.elapsedRealtime() >= until) throw new java.io.IOException("Fixture transfer wasn't released.");
                         }
@@ -289,8 +313,8 @@ public final class BlackBoxSmoke extends Instrumentation {
             WebView web = ui(() -> findWeb(shown.getWindow().getDecorView()));
             checkKeylessHome(web);
             // Keep the original cards and order. Use the lengths of the test-only tones for validation.
-            js(web, "for(const row of MUSIC_GENRES_V50[0].results)if(['3579685431','62724015'].includes(row.id))row.duration=24");
-            tapWeb(web, "#navMusic");
+            js(web, "for(const row of MUSIC_GENRES_V50[0].results)if(['3579685431','62724015'].includes(row.id)||row.track==='NUEVAYoL')row.duration=24");
+            openMusicTab(web);
             String ophelia = "#music-shelf-trending-now [title='Play The Fate of Ophelia']";
             await("Original Music has fourteen genres and its original downloads, not a preparation shelf", 10000,
                     () -> jsTrue(web, "!document.querySelector('#viewMusic').hidden && !!document.querySelector(" + JSONObject.quote(ophelia) + ")"
@@ -336,10 +360,6 @@ public final class BlackBoxSmoke extends Instrumentation {
                 assertPass("The private stream cannot be opened with another recording key or a stale ticket",
                         fixtureQueue.readStream(nextKey, streamPath[3].substring(0, 32), null) == null
                                 && fixtureQueue.readStream(streamPath[2], "00000000000000000000000000000000", null) == null);
-                finishFirst.countDown();
-                await("Only the complete validated song enters Downloads, without restarting playback", 7000,
-                        () -> fixtureQueue.read(streamPath[2]) != null && jsTrue(web,
-                                "musicDownloads.length===1 && musicDownloads[0].offline && document.querySelector('#bgAudio').src===" + JSONObject.quote(playingUrl)));
                 assertPass("One tap survives a queue rebuild and starts lookahead only after playing", jsTrue(web,
                         "planLog.length===2 && planLog[1].playing && !planLog[1].retry && planLog[1].selected.title===planLog[0].selected.title"
                                 + " && JSON.stringify(planLog[1].upcoming)===JSON.stringify(planLog[0].upcoming)"));
@@ -355,6 +375,12 @@ public final class BlackBoxSmoke extends Instrumentation {
                         "planLog.at(-1)?.playing && planLog.at(-1)?.mobileLookahead"
                                 + " && localStorage.getItem('bbxAndroidMusicMobileLookahead')==='1'"
                                 + " && planLog.at(-1).upcoming[0].title==='Locked out of Heaven'"));
+                assertPass("Opt-in during streaming does not interrupt the selected transfer to fetch ahead",
+                        prepared.size() == 1 && fixtureQueue.read(streamPath[2]) == null);
+                finishFirst.countDown();
+                await("Only the complete validated song enters Downloads, without restarting playback", 7000,
+                        () -> fixtureQueue.read(streamPath[2]) != null && jsTrue(web,
+                                "musicDownloads.length===1 && musicDownloads[0].offline && document.querySelector('#bgAudio').src===" + JSONObject.quote(playingUrl)));
                 await("The exact next file starts while the current recording is still playing", 7000,
                         () -> prepared.equals(Arrays.asList("pick:3579685431", "pick:62724015")) && fixtureQueue.read(nextKey) == null
                                 && jsTrue(web, "document.querySelector('#bgTitle').textContent==='The Fate of Ophelia' && !document.querySelector('#bgAudio').paused"));
@@ -396,14 +422,31 @@ public final class BlackBoxSmoke extends Instrumentation {
                         () -> jsTrue(web, "musicQueue.list[musicQueue.idx]?.track==='NUEVAYoL' && document.querySelector('#bgAudioBar').hidden"
                                 + " && !document.querySelector('#bgAudio').src && !document.querySelector('.music-ui-loading-v52,dialog[open]')"
                                 + " && document.querySelector('#toast.on')?.textContent.includes('Connect to the internet')"));
+                // Make just the progressive URL fail. The same exact download is still in flight.
+                js(web, "window.fallbackWaiting=false;window.streamTried=false;(()=>{const original=window.fetch;"
+                        + "window.fetch=async (url,options)=>{if(typeof url==='string' && url.startsWith('/api/mobile/music-helper/await?')"
+                        + " && url.endsWith('&saved=1') && window.streamTried)window.fallbackWaiting=true;const r=await original(url,options);"
+                        + "if(window.streamTried||!r.ok||typeof url!=='string'||!url.startsWith('/api/mobile/music-helper/'))return r;"
+                        + "const b=await r.clone().json(), row=b.tracks?.[b.selected];if(row?.recording.title!=='NUEVAYoL'||!row.stream)return r;"
+                        + "window.streamTried=true;row.stream='0'.repeat(32);return new Response(JSON.stringify(b),{status:200})}})()");
+                link.set(PreparedMusic.Link.METERED);
+                fixtureQueue.networkChanged();
+                tapWeb(web, missing);
+                await("An unopenable stream falls back to waiting for the same in-flight file", 12000,
+                        () -> jsTrue(web, "window.fallbackWaiting && musicDownloads.length===2 && document.querySelector('#bgAudio').paused"));
+                assertPass("The fallback does not start another worker or switch tracks", prepared.size() == 3);
+                finishFallback.countDown();
+                awaitPreparedFixture(web, "NUEVAYoL", 0.6);
+                assertPass("The completed fallback starts on the initial tap and does not replace old downloads",
+                        prepared.size() == 3 && jsTrue(web, "document.querySelector('#bgAudio').src.startsWith('blob:') && musicDownloads.length===3"));
                 closeScreen(desktop);
                 desktop = launch(V90Activity.class, null);
                 Activity reopened = desktop;
                 WebView offline = ui(() -> findWeb(reopened.getWindow().getDecorView()));
                 checkKeylessHome(offline);
-                tapWeb(offline, "#navMusic");
-                await("Both recordings are in the original offline downloads after reopening", 10000,
-                        () -> jsTrue(offline, "musicDownloads.filter(t=>t.offline).length===2 && document.querySelector(" + JSONObject.quote(savedPlay) + ")"));
+                openMusicTab(offline);
+                await("All completed recordings are still in the original offline downloads after reopening", 10000,
+                        () -> jsTrue(offline, "musicDownloads.filter(t=>t.offline).length===3 && document.querySelector(" + JSONObject.quote(savedPlay) + ")"));
                 tapWeb(offline, savedPlay);
                 awaitPreparedFixture(offline, "Locked out of Heaven", 1);
                 assertPass("Reopened Downloads read only the complete private file, not the old stream URL",
@@ -457,8 +500,12 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
     }
 
+    private static String fixtureProgressMarker(int length) {
+        return "BBX_PREFIX:downloading:aaaaaaaaaaa:" + length + ":m4a:https:none:mp4a.40.2:False:" + length;
+    }
+
     private void verifyProgressiveRanges(File scratch, byte[] audio) throws Exception {
-        String marker = "BBX_PREFIX:downloading:aaaaaaaaaaa:" + audio.length + ":m4a:https:none:mp4a.40.2:False:" + audio.length;
+        String marker = fixtureProgressMarker(audio.length);
         ProgressiveMusicAudio.Candidate candidate = ProgressiveMusicAudio.candidate(marker);
         assertPass("Only exact-size direct non-DRM AAC can open a growing file",
                 candidate != null && candidate.length == audio.length && candidate.id.equals("aaaaaaaaaaa")
@@ -795,7 +842,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 + "liveMusicResult[t]={key,state:row.state,message:row.message,source:row.recording.source,"
                 + "initialState:plan?.selected && plan.retry ? row.state : old?.initialState};}} return response;};})()");
         js(web, "window.liveMusicToast='';(()=>{const show=toast;toast=text=>{window.liveMusicToast=text;return show(text)}})()");
-        tapWeb(web, "#navMusic");
+        openMusicTab(web);
         await("Original Music shelves contain 14 genres and the original Trending Now card", 10000,
                 () -> jsTrue(web, "document.querySelectorAll('#musicGenreChips button').length===14 "
                         + "&& document.querySelector('#music-shelf-trending-now [title=\"Play The Fate of Ophelia\"]')"));
@@ -891,7 +938,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             Activity reopened = desktop;
             WebView offline = ui(() -> findWeb(reopened.getWindow().getDecorView()));
             await("The original shell reopens offline", 18000, () -> jsTrue(offline, V90_READY));
-            tapWeb(offline, "#navMusic");
+            openMusicTab(offline);
             for (LiveTrack track : played) {
                 String control = "#musicDownloadedList [data-musicid='" + track.key + "'] [data-libplay]";
                 await(track.title + " has its exact Downloads row", 10000,

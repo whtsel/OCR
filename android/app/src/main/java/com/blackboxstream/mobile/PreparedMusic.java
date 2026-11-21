@@ -231,7 +231,9 @@ final class PreparedMusic implements AutoCloseable {
         if (!key.equals(requested)) closeStream();
         requested = key;
         firstUpcoming = firstKey;
-        started = playing && !key.isEmpty() && readyFile(key) != null;
+        // The WebView can confirm playback while the current file is still being transferred.
+        // Remember that confirmation; lookahead still waits for the first file to be committed.
+        started = playing && !key.isEmpty() && (readyFile(key) != null || stream != null);
         mobileLookahead = allowMobile;
         desired.clear(); desired.putAll(next);
         reconsiderActive();

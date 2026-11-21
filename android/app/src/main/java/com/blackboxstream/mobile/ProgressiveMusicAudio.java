@@ -87,7 +87,8 @@ final class ProgressiveMusicAudio implements Closeable {
             long size = header.getInt(0) & 0xffffffffL;
             int kind = header.getInt(4);
             if (pos == 0 && kind != 0x66747970 /* ftyp */ || size < 8 || size > total - pos) return false;
-            if (kind == 0x6d646174 /* mdat */) return metadata && available - pos - 8 >= Math.min(MIN_PAYLOAD, size - 8);
+            if (kind == 0x6d646174 /* mdat */)
+                return metadata && size > 8 && available - pos - 8 >= Math.min(MIN_PAYLOAD, size - 8);
             if (pos + size > end) return false;
             if (kind == 0x6d6f6f76 /* moov */) metadata = true;
             pos += size;
