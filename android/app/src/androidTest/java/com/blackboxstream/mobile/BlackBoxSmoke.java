@@ -429,7 +429,9 @@ public final class BlackBoxSmoke extends Instrumentation {
                         + "if(window.streamTried||!r.ok||typeof url!=='string'||!url.startsWith('/api/mobile/music-helper/'))return r;"
                         + "const b=await r.clone().json(), row=b.tracks?.[b.selected];if(row?.recording.title!=='NUEVAYoL'||!row.stream)return r;"
                         + "window.streamTried=true;row.stream='0'.repeat(32);return new Response(JSON.stringify(b),{status:200})}})()");
-                link.set(PreparedMusic.Link.METERED);
+                // Data Saver allows the explicit tap but isolates this check from the previous
+                // opt-in's new lookahead call once the fallback starts playing.
+                link.set(PreparedMusic.Link.RESTRICTED);
                 fixtureQueue.networkChanged();
                 tapWeb(web, missing);
                 await("An unopenable stream falls back to waiting for the same in-flight file", 12000,
