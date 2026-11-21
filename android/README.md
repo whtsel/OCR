@@ -192,7 +192,13 @@ films back in Streaming. A live Music pass requires five cold plays from origina
 controls (three unpinned), full duration, audio progression, seeking past the preview window, and
 Downloads replay after reopening with all networking off. The GitHub Actions `verify_live_music`
 input runs this independent gate; `verify_live_unpinned=true` tests one cold, unpinned card.
-Provider refusals fail the gate, even if the separate fixture job and APK verification pass. The
-live gate measures advancing audio separately from offline publication; fixture timing is not a
-promise about live tracks or a phone's mobile data. The summary records sanitized stages and timings;
-no audio, account data, or provider links are saved as test results.
+`verify_live_known_album=true` runs only the no-account direct-ID probe for Olivia Rodrigo’s
+*stupid song*. Instrumentation supplies the [label's album audio ID](https://www.youtube.com/watch?v=P7VgXIZSN_w)
+to the original Pop Hits Play control. The standard album and full length agree with the catalogue;
+the longer video and the single upload are not probe inputs. This mode uses the existing native
+helper and player, without editing the shipped card, installing a new pin, or uploading an APK.
+It requires advancing audio, a saved full file, seek, and Downloads replay after reopening offline.
+Provider refusals fail the gate, even if separate fixture and APK verification pass. The live gate
+measures advancing audio separately from the first observed offline publication; fixture and CI
+network timing are not a promise about live tracks or a phone's mobile data. The summary records
+sanitized stages and timings; no audio, account data, or temporary media links are saved as results.

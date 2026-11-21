@@ -45,7 +45,7 @@ import org.json.JSONObject;
 public final class BlackBoxSmoke extends Instrumentation {
     private PlaybackService engine;
     private int checks;
-    private boolean publicMediaVerified, originalMusicVerified, unpinnedMusicVerified;
+    private boolean publicMediaVerified, originalMusicVerified, unpinnedMusicVerified, knownAlbumVerified;
 
     private static boolean musicPreview(Context app) {
         String id = app.getPackageName();
@@ -67,14 +67,16 @@ public final class BlackBoxSmoke extends Instrumentation {
         Bundle result = new Bundle();
         try {
             if (fixtures != null && "yes".equals(fixtures.getString("helper_fixture"))) verifyHelperFixtures();
-            else if (fixtures != null && "yes".equals(fixtures.getString("music_only"))) verifyMusicCandidate("yes".equals(fixtures.getString("unpinned_only")));
+            else if (fixtures != null && "yes".equals(fixtures.getString("music_only")))
+                verifyMusicCandidate("yes".equals(fixtures.getString("unpinned_only")), "yes".equals(fixtures.getString("known_album_only")));
             else if (fixtures != null && "yes".equals(fixtures.getString("public_only"))) verifyCandidate();
             else if (fixtures != null && "yes".equals(fixtures.getString("public_preview"))) verifyPublicWithPlayer(getTargetContext());
             else verify();
             result.putString("stream", "\nPASS BlackBox Android smoke (" + checks + " checks)\n"
                     + (publicMediaVerified ? "PASS Android imported media: Sintel and The Dull Sword matched public files and both played with networking off\n" : "")
                     + (originalMusicVerified ? "PASS Original v90 Music: five cold full recordings advanced and sought in the original player, with offline replay after reopening\n" : "")
-                    + (unpinnedMusicVerified ? "PASS Original v90 Music: unpinned card discovered a full recording, sought, and replayed offline after reopening\n" : ""));
+                    + (unpinnedMusicVerified ? "PASS Original v90 Music: unpinned card discovered a full recording, sought, and replayed offline after reopening\n" : "")
+                    + (knownAlbumVerified ? "PASS Original v90 Music: known album ID played, sought, and replayed offline after reopening\n" : ""));
             finish(Activity.RESULT_OK, result);
         } catch (Throwable bad) {
             result.putString("stream", "\nFAIL BlackBox Android smoke: " + android.util.Log.getStackTraceString(bad) + "\n");
@@ -739,7 +741,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
     }
 
-    private void verifyMusicCandidate(boolean unpinnedOnly) throws Exception {
+    private void verifyMusicCandidate(boolean unpinnedOnly, boolean knownAlbumOnly) throws Exception {
         Context app = getTargetContext();
         assertPass("Live tests use a fresh Music candidate, not an installed user library",
                 musicPreview(app) && !PreparedMusic.cacheDirectory(app).exists());
@@ -749,14 +751,18 @@ public final class BlackBoxSmoke extends Instrumentation {
             WebView web = ui(() -> findWeb(desktop.getWindow().getDecorView()));
             await("The v90 music shell is ready on a phone viewport", 18000,
                     () -> jsTrue(web, V90_READY + " && innerWidth <= 400"));
-            verifyOriginalMusic(web, results, unpinnedOnly);
+            observeLiveMusic(web);
+            openMusicTab(web);
+            if (knownAlbumOnly) verifyKnownAlbumSource(web, results);
+            else verifyOriginalMusic(web, results, unpinnedOnly);
         } finally { closeScreen(desktop); }
         if (!results.played.isEmpty()) verifyLiveOffline(app, results.played);
-        int required = unpinnedOnly ? 1 : 5;
+        int required = unpinnedOnly || knownAlbumOnly ? 1 : 5;
         assertPass(required + " cold catalogue recordings required: " + results.played.size() + " played. " + results.failures,
                 results.played.size() == required && results.failures.isEmpty());
-        unpinnedMusicVerified = unpinnedOnly;
-        originalMusicVerified = !unpinnedOnly;
+        knownAlbumVerified = knownAlbumOnly;
+        unpinnedMusicVerified = !knownAlbumOnly && unpinnedOnly;
+        originalMusicVerified = !knownAlbumOnly && !unpinnedOnly;
     }
 
     /** Run the same public media acceptance on the non-debuggable standalone app. */
@@ -838,21 +844,45 @@ public final class BlackBoxSmoke extends Instrumentation {
         LiveTrack(String title, String key, int seconds) { this.title = title; this.key = key; this.seconds = seconds; }
     }
 
-    private void verifyOriginalMusic(WebView web, LiveMusic results, boolean unpinnedOnly) throws Exception {
+    private void observeLiveMusic(WebView web) throws Exception {
         // Observe the actual Android bridge. This shim cannot supply source IDs or audio.
-        js(web, "window.liveMusicResult={}; (()=>{const live=window.fetch;window.fetch=async (url,options)=>{"
-                + "const plan = url==='/api/mobile/music-helper/plan' && JSON.parse(options.body);"
+        js(web, "window.liveMusicResult={}; document.addEventListener('click',e=>{"
+                + "if(window.liveMusicControl && e.target.closest?.(window.liveMusicControl)) window.liveMusicTap=performance.now();},true);"
+                + "(()=>{const live=window.fetch;window.fetch=async (url,options)=>{"
+                + "const plan = url==='/api/mobile/music-helper/plan' && JSON.parse(options.body), tap=window.liveMusicTap;"
                 + "const response=await live(url,options);if (response.ok && typeof url==='string' && url.startsWith('/api/mobile/music-helper')) {"
                 + "const result=await response.clone().json();const key=result.selected;const row=result.tracks?.[key];"
-                + "if(row){const t=row.recording.title,old=liveMusicResult[t];"
+                + "if(row){const t=row.recording.title, first=plan?.selected && plan.retry, old=first ? null : liveMusicResult[t];"
                 + "liveMusicResult[t]={key,state:row.state,message:row.message,source:row.recording.source,"
-                + "initialState:plan?.selected && plan.retry ? row.state : old?.initialState};}} return response;};})()");
+                + "initialState:first ? row.state : old?.initialState,"
+                + "readyMs:old?.readyMs ?? (row.state==='ready' && tap!=null ? Math.round(performance.now()-tap) : null)};}} return response;};})()");
         js(web, "window.liveMusicToast='';(()=>{const show=toast;toast=text=>{window.liveMusicToast=text;return show(text)}})()");
-        openMusicTab(web);
+    }
+
+    private void verifyKnownAlbumSource(WebView web, LiveMusic results) throws Exception {
+        String title = "stupid song", id = "P7VgXIZSN_w";
+        String control = "#music-shelf-pop-hits [title='Play stupid song']";
+        JSONObject track = spec("pick:4078104881", title, "Olivia Rodrigo", "you seem pretty sad for a girl so in love", 209, id);
+        await("Original Pop Hits Play control is visible", 10000,
+                () -> jsTrue(web, "!!document.querySelector(" + JSONObject.quote(control) + ")"));
+        // Only the test APK supplies the label's public album ID. Keep the existing card, tap,
+        // WebView, native helper, range/fallback and offline pipeline. Do not fetch its neighbors.
+        assertPass("The known-ID probe matches the packaged album recording, not the single or video",
+                jsTrue(web, "(()=>{const track=" + track + ", control=" + JSONObject.quote(control) + ";"
+                        + "const matches=r=>r && 'pick:'+r.id===track.ref && r.track===track.title && r.artist===track.artist"
+                        + " && r.album===track.album && r.duration===track.seconds;"
+                        + "if (!MUSIC_GENRES_V50.find(s=>s.title==='Pop Hits')?.results.some(matches)) return false;"
+                        + "const play=playMusicList;playMusicList=(items,index,mode,genre,button)=>{"
+                        + "const selected=items[index];if(button?.matches(control) && matches(selected))"
+                        + " return play([{...selected,_preparedRecording:track}],0,mode,genre,button);};return true})()"));
+        tryLiveTrack(web, results, title, control, 209, id);
+    }
+
+    private void verifyOriginalMusic(WebView web, LiveMusic results, boolean unpinnedOnly) throws Exception {
         await("Original Music shelves contain 14 genres and the original Trending Now card", 10000,
                 () -> jsTrue(web, "document.querySelectorAll('#musicGenreChips button').length===14 "
                         + "&& document.querySelector('#music-shelf-trending-now [title=\"Play The Fate of Ophelia\"]')"));
-        tryLiveTrack(web, results, "The Fate of Ophelia", "#music-shelf-trending-now [title='Play The Fate of Ophelia']", 226, true);
+        tryLiveTrack(web, results, "The Fate of Ophelia", "#music-shelf-trending-now [title='Play The Fate of Ophelia']", 226, "");
         if (unpinnedOnly) return;
         // If the first unpinned attempt was refused, respect the cooldown before testing the
         // independent pinned route once. Never retrigger the refused recording during this run.
@@ -873,26 +903,26 @@ public final class BlackBoxSmoke extends Instrumentation {
                         + "document.querySelectorAll('#bgQueueList .bg-queue-title-v49')[6]?.textContent === 'Espresso'"));
         tapWeb(web, "#bgQueueClose");
         if (waitForProvider) SystemClock.sleep(Math.max(0, nextAttempt - SystemClock.elapsedRealtime()));
-        tryLiveTrack(web, results, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", 175, false);
-        tryLiveTrack(web, results, "Taste", ".music-album-tracklist-v63 .music-catalog-track-v63:first-child [data-track-play-v63]", 157, true);
-        tryLiveTrack(web, results, "Sharpest Tool", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(4) [data-track-play-v63]", 218, true);
+        tryLiveTrack(web, results, "Espresso", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(7) [data-track-play-v63]", 175, "51zjlMhdSTE");
+        tryLiveTrack(web, results, "Taste", ".music-album-tracklist-v63 .music-catalog-track-v63:first-child [data-track-play-v63]", 157, "");
+        tryLiveTrack(web, results, "Sharpest Tool", ".music-album-tracklist-v63 .music-catalog-track-v63:nth-child(4) [data-track-play-v63]", 218, "");
         tapWeb(web, "#musicClear");
         tapWeb(web, "#musicGenreChips [title='Open 30 Ghana Essentials picks']");
         await("Ghana Essentials shows its original 30 picks", 8000,
                 () -> jsTrue(web, "!document.querySelector('#viewMusicGenre').hidden && document.querySelectorAll('[data-genre-catalog] .music-genre-card-v50').length===30"));
-        tryLiveTrack(web, results, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", 185, false);
+        tryLiveTrack(web, results, "Kwaku the Traveller", "#musicGenrePage [title='Play Kwaku the Traveller']", 185, "Hb6I7GoTvzI");
     }
 
     private void tryLiveTrack(WebView web, LiveMusic results, String title, String control, int seconds,
-                              boolean discoveryRequired) throws Exception {
+                              String expectedSource) throws Exception {
         String row = "liveMusicResult[" + JSONObject.quote(title) + "]";
         long tapped = SystemClock.elapsedRealtime();
         try {
-            js(web, "window.liveMusicToast=''");
+            js(web, "window.liveMusicToast='';window.liveMusicTap=null;window.liveMusicControl=" + JSONObject.quote(control));
             tapWeb(web, control);
             await(title + " reaches the live helper on one tap", 7000, () -> jsTrue(web, row + "?.initialState!=null"));
             assertPass(title + " began with no prepared audio and chose the expected lookup path",
-                    jsTrue(web, row + ".initialState!=='ready' && " + row + ".source" + (discoveryRequired ? "===''" : "!==''")));
+                    jsTrue(web, row + ".initialState!=='ready' && " + row + ".source===" + JSONObject.quote(expectedSource)));
             await(title + " starts advancing in the v90 player", (int) PreparedMusic.SELECTION_WAIT_MS + 15_000, () -> {
                 if (jsTrue(web, row + "?.state==='failed'")) {
                     String reason = jsText(web, row + ".message");
@@ -907,7 +937,8 @@ public final class BlackBoxSmoke extends Instrumentation {
                 }
                 return false;
             });
-            long advancing = SystemClock.elapsedRealtime() - tapped;
+            long advancing = Long.parseLong(js(web, "window.liveMusicTap==null ? " + (SystemClock.elapsedRealtime() - tapped)
+                    + " : Math.round(performance.now()-window.liveMusicTap)"));
             boolean streaming = jsTrue(web, "document.querySelector('#bgAudio').src.startsWith('https://blackbox.invalid/playing-audio/')");
             boolean beforeSaved = !jsTrue(web, row + "?.state==='ready'");
             android.util.Log.i("BlackBoxSmoke", "v90 provider " + title + ": advancing in " + advancing + "ms via "
@@ -918,14 +949,15 @@ public final class BlackBoxSmoke extends Instrumentation {
                 if (jsTrue(web, row + "?.state==='failed'")) throw new AssertionError(jsText(web, row + ".message"));
                 return jsTrue(web, row + "?.state==='ready' && musicDownloads.some(item=>item.offline && item.id===" + JSONObject.quote(key) + ")");
             });
-            long ready = SystemClock.elapsedRealtime();
+            long ready = Long.parseLong(js(web, row + ".readyMs ?? " + (SystemClock.elapsedRealtime() - tapped)));
+            android.util.Log.i("BlackBoxSmoke", "v90 provider " + title + ": offline copy observed in " + ready + "ms");
             js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
             awaitAudio(web, title, seconds, 6, seconds * 0.63, 10000);
             tapWeb(web, "#bgClose");
             await("Original player closes without deleting " + title, 7000,
                     () -> jsTrue(web, "document.querySelector('#bgAudioBar').hidden && !localStorage.getItem(MUSIC_SESSION_KEY)"));
             results.played.add(new LiveTrack(title, key, seconds));
-            android.util.Log.i("BlackBoxSmoke", "v90 provider " + title + ": offline copy ready in " + (ready - tapped) + "ms; full seek passed");
+            android.util.Log.i("BlackBoxSmoke", "v90 provider " + title + ": full seek passed");
         } catch (AssertionError blocked) {
             String message = blocked.getMessage() + " (" + (SystemClock.elapsedRealtime() - tapped) + "ms)";
             results.failures.add(message);

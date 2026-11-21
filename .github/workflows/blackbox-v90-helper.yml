@@ -10,6 +10,10 @@ on:
         description: Require a single unpinned v90 card to resolve, play, seek and replay offline
         type: boolean
         default: false
+      verify_live_known_album:
+        description: Test only the verified album ID for stupid song in the v90 player, with no candidate upload
+        type: boolean
+        default: false
   push:
     branches: ['arena/**']
     paths:
@@ -54,6 +58,7 @@ jobs:
           node --check android/app/src/main/assets/v90-mobile/android-music.js
           python3 -B android/tests/test_catalogue_music.py
       - name: Compile the actual v90 app with the helper and verify APK bytes
+        if: ${{ !inputs.verify_live_known_album }}
         run: |
           log=$(mktemp)
           if ! (cd android && gradle :app:assembleDebug --no-daemon --console=plain -PbbxMusicHelper=true -PbbxFastStartPreview=true) > "$log" 2>&1; then
@@ -88,6 +93,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Verify partial-file playback, queue and offline playback (fixtures, not provider access)
+        if: ${{ !inputs.verify_live_known_album }}
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 35
@@ -100,6 +106,7 @@ jobs:
             adb shell wm density 320
             BBX_TEST_PACKAGE=com.blackboxstream.mobile.music.fast BBX_VERIFY_HELPER_FIXTURE=1 bash android/tests/run_device.sh
       - name: Retain the fixture-checked candidate (not a live playback pass)
+        if: ${{ !inputs.verify_live_known_album }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: BlackBox-Music-Fast-Start-ARM64-candidate
@@ -108,7 +115,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Require cold live recordings in the actual v90 Android player (not fixtures)
-        if: ${{ inputs.verify_live_music || inputs.verify_live_unpinned }}
+        if: ${{ inputs.verify_live_music || inputs.verify_live_unpinned || inputs.verify_live_known_album }}
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 35
@@ -119,4 +126,4 @@ jobs:
           script: |
             adb shell wm size 720x1560
             adb shell wm density 320
-            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music.fast BBX_VERIFY_MUSIC_ONLY=1 BBX_VERIFY_UNPINNED_ONLY=${{ inputs.verify_live_unpinned && !inputs.verify_live_music && '1' || '0' }} bash android/tests/run_device.sh
+            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music.fast BBX_VERIFY_MUSIC_ONLY=1 BBX_VERIFY_UNPINNED_ONLY=${{ inputs.verify_live_unpinned && !inputs.verify_live_music && '1' || '0' }} BBX_VERIFY_KNOWN_ALBUM_ONLY=${{ inputs.verify_live_known_album && '1' || '0' }} bash android/tests/run_device.sh

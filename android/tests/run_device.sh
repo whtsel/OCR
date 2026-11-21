@@ -21,7 +21,9 @@ if [[ "${BBX_VERIFY_PUBLIC_ONLY:-0}" == 1 ]]; then
 fi
 if [[ "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 ]]; then
     args+=(-e music_only yes)
-    if [[ "${BBX_VERIFY_UNPINNED_ONLY:-0}" == 1 ]]; then
+    if [[ "${BBX_VERIFY_KNOWN_ALBUM_ONLY:-0}" == 1 ]]; then
+        args+=(-e known_album_only yes)
+    elif [[ "${BBX_VERIFY_UNPINNED_ONLY:-0}" == 1 ]]; then
         args+=(-e unpinned_only yes)
     fi
 fi
@@ -53,7 +55,8 @@ if [[ "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 ]]; then
 fi
 if [[ "$out" != *'PASS BlackBox Android smoke'* || "$out" != *'INSTRUMENTATION_CODE: -1'* ||
     ( -n "${BBX_PUBLIC_MEDIA_HASHES:-}" && "$out" != *'both played with networking off'* ) ||
-    ( "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 && "$out" != *'PASS Original v90 Music:'* ) ]]; then
+    ( "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 && "$out" != *'PASS Original v90 Music:'* ) ||
+    ( "${BBX_VERIFY_KNOWN_ALBUM_ONLY:-0}" == 1 && "$out" != *'PASS Original v90 Music: known album ID played'* ) ]]; then
     device_log=$("$adb" logcat -d -v brief -s AndroidRuntime:E BlackBoxSmoke:I MediaPlayer:E | tail -65 || true)
     printf '%s\n' "$device_log"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
