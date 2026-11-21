@@ -6,7 +6,8 @@ plugins {
 // The dependency-free baseline/standalone build remains available.
 def musicHelper = providers.gradleProperty('bbxMusicHelper').getOrElse('true') == 'true'
 def helperAbi = providers.gradleProperty('bbxHelperAbi').getOrElse('arm64-v8a')
-def preview = providers.gradleProperty('bbxHelperPreview').getOrElse('false') == 'true'
+def fastPreview = providers.gradleProperty('bbxFastStartPreview').getOrElse('false') == 'true'
+def preview = fastPreview || providers.gradleProperty('bbxHelperPreview').getOrElse('false') == 'true'
 def helperRaw = layout.buildDirectory.dir('generated/musicHelper/res')
 def previewRes = layout.buildDirectory.dir('generated/musicHelperPreview/res')
 
@@ -22,8 +23,8 @@ android {
         versionName '1.4.4-transport'
         testInstrumentationRunner 'com.blackboxstream.mobile.BlackBoxSmoke'
         if (musicHelper) {
-            versionCode 11
-            versionName(preview ? '1.4.6-music' : '1.4.6')
+            versionCode 13
+            versionName(fastPreview ? '1.4.8-fast' : preview ? '1.4.8-music' : '1.4.8')
             if (!(helperAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException('Unsupported helper ABI: ' + helperAbi)
             ndk { abiFilters += [helperAbi] }
         }
@@ -43,7 +44,7 @@ android {
             resources.merges += ['META-INF/LICENSE*', 'META-INF/NOTICE*', 'META-INF/DEPENDENCIES']
         }
         if (preview) {
-            buildTypes.debug.applicationIdSuffix = '.music'
+            buildTypes.debug.applicationIdSuffix = fastPreview ? '.music.fast' : '.music'
             sourceSets.debug.res.srcDir(previewRes)
         }
     }
@@ -59,6 +60,7 @@ if (musicHelper) {
     tasks.register('stagePinnedMusicHelper') {
         inputs.file(zipapp)
         inputs.property('musicPreview', preview)
+        inputs.property('fastStartPreview', fastPreview)
         outputs.dir(helperRaw)
         if (preview) outputs.dir(previewRes)
         doLast {
@@ -73,7 +75,8 @@ if (musicHelper) {
             if (preview) {
                 def label = previewRes.get().file('values/strings.xml').asFile
                 label.parentFile.mkdirs()
-                label.text = '<resources><string name="app_name">BlackBox Music v90</string></resources>'
+                def appName = fastPreview ? 'BlackBox Music Fast Start' : 'BlackBox Music v90'
+                label.text = "<resources><string name=\"app_name\">${appName}</string></resources>"
             }
         }
     }

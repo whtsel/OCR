@@ -46,6 +46,11 @@ public final class BlackBoxSmoke extends Instrumentation {
     private PlaybackService engine;
     private int checks;
     private boolean publicMediaVerified, originalMusicVerified, unpinnedMusicVerified;
+
+    private static boolean musicPreview(Context app) {
+        String id = app.getPackageName();
+        return id.equals("com.blackboxstream.mobile.music") || id.equals("com.blackboxstream.mobile.music.fast");
+    }
     private Bundle fixtures;
     private final ServiceConnection binding = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder local) { engine = ((PlaybackService.LocalBinder) local).get(); }
@@ -201,7 +206,7 @@ public final class BlackBoxSmoke extends Instrumentation {
     /** Tests the real helper loader, isolated queue worker, and actual v90 WebView using only built-in fixture media. */
     private void verifyHelperFixtures() throws Exception {
         Context app = getTargetContext();
-        assertPass("Helper fixtures run only on the disposable preview package", app.getPackageName().equals("com.blackboxstream.mobile.music"));
+        assertPass("Helper fixtures run only on the disposable preview package", musicPreview(app));
         Class<?> runtime = Class.forName("com.blackboxstream.mobile.BundledMusicRuntime");
         Object instance = runtime.getDeclaredConstructor(Context.class).newInstance(app);
         java.lang.reflect.Method run = runtime.getDeclaredMethod("run", PreparedMusic.Control.class, File.class, String[].class);
@@ -218,11 +223,14 @@ public final class BlackBoxSmoke extends Instrumentation {
             copyFixture("dawn.mp4", video);
             String phases = (String) run.invoke(instance, new PreparedMusic.Control(), scratch,
                     new String[] {"--enable-file-urls", "--no-simulate", "--quiet", "--progress", "--newline",
-                            "--progress-template", "download:BBX_MEDIA:%(progress.status)s",
+                            "--progress-template", ProgressiveMusicAudio.PROGRESS_TEMPLATE,
                             "--print", "before_dl:BBX_DOWNLOAD_START %(ext)s", "-x", "--audio-format", "m4a",
                             "-o", new File(scratch, "audio.%(ext)s").getPath(), video.toURI().toString()});
             assertPass("The real extractor marks format selection and transfer end before conversion",
                     phases.indexOf("BBX_DOWNLOAD_START ") >= 0 && phases.indexOf("BBX_MEDIA:finished") > phases.indexOf("BBX_DOWNLOAD_START "));
+            assertPass("The pinned extractor emits bounded format/size markers without a source URL", phases.contains("BBX_PREFIX:downloading:"));
+            byte[] orbit = TorrentMeta.slurp(getContext().getAssets().open("fixtures/orbit.m4a"), 512 * 1024);
+            verifyProgressiveRanges(scratch, orbit);
             verifyMusicBudget();
             File audio = new File(scratch, "audio.m4a");
             PreparedMusic.verifyAudio(audio, 14);
@@ -245,6 +253,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             java.util.concurrent.atomic.AtomicReference<PreparedMusic.Link> link =
                     new java.util.concurrent.atomic.AtomicReference<>(PreparedMusic.Link.METERED);
             java.util.concurrent.CountDownLatch firstFile = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch finishFirst = new java.util.concurrent.CountDownLatch(1);
             java.util.concurrent.CountDownLatch nextFile = new java.util.concurrent.CountDownLatch(1);
             PreparedMusic fixtureQueue = new PreparedMusic(cache, (track, work, control) -> {
                 prepared.add(track.ref);
@@ -258,7 +267,20 @@ public final class BlackBoxSmoke extends Instrumentation {
                     if (SystemClock.elapsedRealtime() >= until) throw new java.io.IOException("Fixture gate was not released.");
                 }
                 File complete = new File(work, "audio.m4a");
-                copyFixture("orbit.m4a", complete);
+                if (allowed == firstFile) {
+                    File part = new File(work, "audio.m4a.part");
+                    try (FileOutputStream out = new FileOutputStream(part)) {
+                        int prefix = orbit.length / 2;
+                        out.write(orbit, 0, prefix);
+                        control.offerStream(part, orbit.length, "aaaaaaaaaaa");
+                        while (!finishFirst.await(100, TimeUnit.MILLISECONDS)) {
+                            if (control.cancelled) return null;
+                            if (SystemClock.elapsedRealtime() >= until) throw new java.io.IOException("Fixture transfer wasn't released.");
+                        }
+                        out.write(orbit, prefix, orbit.length - prefix);
+                    }
+                    if (!part.renameTo(complete)) throw new java.io.IOException("Could not finish fixture.");
+                } else copyFixture("orbit.m4a", complete); // Unsupported progressive source: keep the old path.
                 return new PreparedMusic.Result(complete, "aaaaaaaaaaa");
             }, link::get);
             desktop = launch(V90Activity.class, null);
@@ -300,8 +322,24 @@ public final class BlackBoxSmoke extends Instrumentation {
                 assertPass("A slow first recording is still pending after the former cutoff, with no second tap or dialog",
                         prepared.size() == 1 && jsTrue(web, spinnerOnly(ophelia)
                                 + " && document.querySelector('#bgAudioBar').hidden && document.querySelector('#bgAudio').paused && planLog.length===1"));
+                long bufferReady = SystemClock.elapsedRealtime();
                 firstFile.countDown();
-                awaitPreparedFixture(web, "The Fate of Ophelia", 1); // Same exact row, new JS object.
+                awaitAudio(web, "The Fate of Ophelia", 24, 1, 0.6, 6500);
+                String playingUrl = jsText(web, "document.querySelector('#bgAudio').src");
+                String[] streamPath = URI.create(playingUrl).getPath().split("/");
+                assertPass("First sound comes from the private stream while half the fixture is still withheld",
+                        playingUrl.startsWith("https://blackbox.invalid/playing-audio/") && streamPath.length == 4
+                                && finishFirst.getCount() == 1 && fixtureQueue.read(streamPath[2]) == null
+                                && jsTrue(web, "musicDownloads.length===0 && !document.querySelector('.music-ui-loading-v52')"));
+                android.util.Log.i("BlackBoxSmoke", "v90 fixture: advancing audio from a partial file in "
+                        + (SystemClock.elapsedRealtime() - bufferReady) + "ms after release of the first bytes");
+                assertPass("The private stream cannot be opened with another recording key or a stale ticket",
+                        fixtureQueue.readStream(nextKey, streamPath[3].substring(0, 32), null) == null
+                                && fixtureQueue.readStream(streamPath[2], "00000000000000000000000000000000", null) == null);
+                finishFirst.countDown();
+                await("Only the complete validated song enters Downloads, without restarting playback", 7000,
+                        () -> fixtureQueue.read(streamPath[2]) != null && jsTrue(web,
+                                "musicDownloads.length===1 && musicDownloads[0].offline && document.querySelector('#bgAudio').src===" + JSONObject.quote(playingUrl)));
                 assertPass("One tap survives a queue rebuild and starts lookahead only after playing", jsTrue(web,
                         "planLog.length===2 && planLog[1].playing && !planLog[1].retry && planLog[1].selected.title===planLog[0].selected.title"
                                 + " && JSON.stringify(planLog[1].upcoming)===JSON.stringify(planLog[0].upcoming)"));
@@ -335,8 +373,10 @@ public final class BlackBoxSmoke extends Instrumentation {
                 js(web, "document.querySelector('#bgAudio').currentTime = document.querySelector('#bgAudio').duration - 0.25");
                 awaitPreparedFixture(web, "Locked out of Heaven", 1);
                 assertPass("The automatic handoff works offline with the newly prepared song, without another worker call",
-                        prepared.equals(Arrays.asList("pick:3579685431", "pick:62724015")) && jsTrue(web,
-                                "planLog.some(p=>p.selected?.title==='Locked out of Heaven' && !p.playing && !p.retry)"));
+                        prepared.equals(Arrays.asList("pick:3579685431", "pick:62724015"))
+                                && fixtureQueue.readStream(streamPath[2], streamPath[3].substring(0, 32), null) == null
+                                && jsTrue(web, "document.querySelector('#bgAudio').src.startsWith('blob:')"
+                                        + " && planLog.some(p=>p.selected?.title==='Locked out of Heaven' && !p.playing && !p.retry)"));
 
                 js(web, "window.holdNextPlan=true");
                 tapWeb(web, ophelia);
@@ -366,6 +406,8 @@ public final class BlackBoxSmoke extends Instrumentation {
                         () -> jsTrue(offline, "musicDownloads.filter(t=>t.offline).length===2 && document.querySelector(" + JSONObject.quote(savedPlay) + ")"));
                 tapWeb(offline, savedPlay);
                 awaitPreparedFixture(offline, "Locked out of Heaven", 1);
+                assertPass("Reopened Downloads read only the complete private file, not the old stream URL",
+                        jsTrue(offline, "document.querySelector('#bgAudio').src.startsWith('blob:')"));
                 // The unplayed album track must not lose its album/disc/track identity in a saved playlist.
                 assertPass("The original playlist preserves exact unplayed album rows across reload of its stored data", jsTrue(offline,
                         "(()=>{const list=bbxPickV78._create('Smoke catalogue playlist');"
@@ -395,18 +437,60 @@ public final class BlackBoxSmoke extends Instrumentation {
         awaitAudio(web, title, 24, 1, from, 14000);
     }
 
-    private void awaitAudio(WebView web, String title, int seconds, int tolerance, double from, int timeout) throws Exception {
-        String playable = "(()=>{const a=document.querySelector('#bgAudio'), b=document.querySelector('#bgAudioBar');return a.src.startsWith('blob:https://blackbox.invalid/')"
+    private static String playableAudio(String title, int seconds, int tolerance, double from) {
+        return "(()=>{const a=document.querySelector('#bgAudio'), b=document.querySelector('#bgAudioBar');return "
+                + "(a.src.startsWith('blob:https://blackbox.invalid/') || a.src.startsWith('https://blackbox.invalid/playing-audio/'))"
                 + " && !b.hidden && getComputedStyle(b).display!=='none' && document.querySelector('#bgTitle').textContent==="
                 + JSONObject.quote(title) + " && Math.abs(a.duration-" + seconds + ")<=" + tolerance
                 + " && !a.paused && !a.muted && a.volume>0 && a.readyState>=2 && !a.seeking && a.currentTime>" + from + "})()";
+    }
+
+    private void awaitAudio(WebView web, String title, int seconds, int tolerance, double from, int timeout) throws Exception {
         try {
-            await(title + " starts or seeks in the original audio player without another tap", timeout, () -> jsTrue(web, playable));
+            await(title + " starts or seeks in the original audio player without another tap", timeout,
+                    () -> jsTrue(web, playableAudio(title, seconds, tolerance, from)));
         } catch (AssertionError error) {
             throw new AssertionError(error.getMessage() + ": " + js(web,
                     "JSON.stringify({title:document.querySelector('#bgTitle').textContent,blob:document.querySelector('#bgAudio').src.startsWith('blob:'),"
                             + "error:document.querySelector('#bgAudio').error?.code,duration:document.querySelector('#bgAudio').duration,time:document.querySelector('#bgAudio').currentTime,"
                             + "busy:document.querySelector('.music-ui-loading-v52')?.outerHTML.slice(0,150),paused:document.querySelector('#bgAudio').paused})"), error);
+        }
+    }
+
+    private void verifyProgressiveRanges(File scratch, byte[] audio) throws Exception {
+        String marker = "BBX_PREFIX:downloading:aaaaaaaaaaa:" + audio.length + ":m4a:https:none:mp4a.40.2:False:" + audio.length;
+        ProgressiveMusicAudio.Candidate candidate = ProgressiveMusicAudio.candidate(marker);
+        assertPass("Only exact-size direct non-DRM AAC can open a growing file",
+                candidate != null && candidate.length == audio.length && candidate.id.equals("aaaaaaaaaaa")
+                        && ProgressiveMusicAudio.candidate(marker.replace(":False:", ":True:")) == null
+                        && ProgressiveMusicAudio.candidate(marker.replace(":https:", ":http_dash_segments:")) == null
+                        && ProgressiveMusicAudio.candidate(marker.replace(":none:", ":avc1:")) == null
+                        && ProgressiveMusicAudio.candidate(marker + "0") == null);
+        File part = new File(scratch, "range-test.part");
+        try (FileOutputStream writer = new FileOutputStream(part)) {
+            writer.write(audio, 0, 1024);
+            assertPass("Do not expose an incomplete MP4 header", ProgressiveMusicAudio.openPartial(part, audio.length) == null);
+            writer.write(audio, 1024, 32 * 1024 - 1024);
+            try (ProgressiveMusicAudio stream = ProgressiveMusicAudio.openPartial(part, audio.length)) {
+                assertPass("A verified fast-start prefix can open before the download finishes", stream != null && !stream.hasAllBytes());
+                ProgressiveMusicAudio.Read first = stream.read("bytes=101-116");
+                assertPass("A WebView range is bounded and maps to the expected audio bytes",
+                        first != null && first.status == 206 && first.length == 16 && first.contentRange.equals("bytes 101-116/" + audio.length)
+                                && Arrays.equals(TorrentMeta.slurp(first.body, 16), Arrays.copyOfRange(audio, 101, 117)));
+                assertPass("Unsatisfiable and multi-part requests do not open readers",
+                        stream.read("bytes=0-10,20-30").status == 416 && stream.read("bytes=" + audio.length + "-").status == 416);
+                ProgressiveMusicAudio.Read tail = stream.read("bytes=-32");
+                FutureTask<byte[]> pending = new FutureTask<>(() -> TorrentMeta.slurp(tail.body, 32));
+                Thread reader = new Thread(pending, "fixture-music-seek");
+                reader.start();
+                SystemClock.sleep(150);
+                assertPass("Seeking to new bytes waits instead of returning early EOF", !pending.isDone());
+                writer.write(audio, 32 * 1024, audio.length - 32 * 1024);
+                File finalized = new File(scratch, "range-test.m4a");
+                assertPass("Streaming survives the downloader's atomic rename", part.renameTo(finalized)
+                        && Arrays.equals(pending.get(2500, TimeUnit.MILLISECONDS), Arrays.copyOfRange(audio, audio.length - 32, audio.length))
+                        && stream.hasAllBytes());
+            }
         }
     }
 
@@ -552,13 +636,13 @@ public final class BlackBoxSmoke extends Instrumentation {
         }, () -> PreparedMusic.Link.UNMETERED)) {
             JSONObject selected = limited.plan(1, a, new JSONArray().put(b), true, false, false);
             String key = selected.getString("selected");
-            JSONObject result = limited.awaitSelection(key).getJSONObject("tracks").getJSONObject(key);
+            JSONObject result = limited.awaitSelection(key, true).getJSONObject("tracks").getJSONObject(key);
             assertPass("A provider refusal wakes the selection waiter with a clear failure", "failed".equals(result.getString("state"))
                     && result.getString("message").contains("rate-limiting"));
             String next = limited.plan(2, b, new JSONArray(), true, false, false).getString("selected");
             // The first waiter can return while the worker is still draining. Observe the terminal
             // state, not the immediate plan reply, in both worker schedules.
-            JSONObject blocked = limited.awaitSelection(next).getJSONObject("tracks").getJSONObject(next);
+            JSONObject blocked = limited.awaitSelection(next, true).getJSONObject("tracks").getJSONObject(next);
             assertPass("Cooldown makes the next unprepared selection fail without another provider call",
                     "failed".equals(blocked.getString("state")) && attempts.get() == 1);
         }
@@ -605,7 +689,7 @@ public final class BlackBoxSmoke extends Instrumentation {
     private void verifyMusicCandidate(boolean unpinnedOnly) throws Exception {
         Context app = getTargetContext();
         assertPass("Live tests use a fresh Music candidate, not an installed user library",
-                app.getPackageName().equals("com.blackboxstream.mobile.music") && !PreparedMusic.cacheDirectory(app).exists());
+                musicPreview(app) && !PreparedMusic.cacheDirectory(app).exists());
         LiveMusic results = new LiveMusic();
         Activity desktop = launch(V90Activity.class, null);
         try {
@@ -756,7 +840,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             await(title + " reaches the live helper on one tap", 7000, () -> jsTrue(web, row + "?.initialState!=null"));
             assertPass(title + " began with no prepared audio and chose the expected lookup path",
                     jsTrue(web, row + ".initialState!=='ready' && " + row + ".source" + (discoveryRequired ? "===''" : "!==''")));
-            await(title + " receives a private full recording", (int) PreparedMusic.SELECTION_WAIT_MS + 5000, () -> {
+            await(title + " starts advancing in the v90 player", (int) PreparedMusic.SELECTION_WAIT_MS + 15_000, () -> {
                 if (jsTrue(web, row + "?.state==='failed'")) {
                     String reason = jsText(web, row + ".message");
                     await(title + " shows a failure reason and its Play ring clears", 4500,
@@ -764,25 +848,31 @@ public final class BlackBoxSmoke extends Instrumentation {
                                     + " && !document.querySelector('.music-ui-loading-v52') && document.querySelector('#bgAudioBar').hidden"));
                     throw new AssertionError(title + ": " + reason);
                 }
-                if (jsTrue(web, row + "?.state==='ready'")) return true;
+                if (jsTrue(web, playableAudio(title, seconds, 6, 0.6))) return true;
                 if (jsTrue(web, "!!window.liveMusicToast && !document.querySelector('.music-ui-loading-v52') && document.querySelector('#bgAudioBar').hidden")) {
                     throw new AssertionError(title + ": " + jsText(web, "window.liveMusicToast"));
                 }
                 return false;
             });
-            long ready = SystemClock.elapsedRealtime();
-            awaitAudio(web, title, seconds, 6, 1, 13000);
             long advancing = SystemClock.elapsedRealtime() - tapped;
-            assertPass(title + " advances within the bounded preparation and local player time", advancing <= PreparedMusic.SELECTION_WAIT_MS + 15000);
+            boolean streaming = jsTrue(web, "document.querySelector('#bgAudio').src.startsWith('https://blackbox.invalid/playing-audio/')");
+            boolean beforeSaved = !jsTrue(web, row + "?.state==='ready'");
+            android.util.Log.i("BlackBoxSmoke", "v90 provider " + title + ": advancing in " + advancing + "ms via "
+                    + (streaming ? "progressive audio" : "complete-file path") + (beforeSaved ? " before offline publication" : ""));
+            String key = jsText(web, row + ".key");
+            assertPass(title + " uses its exact cache key", key.matches("[a-f0-9]{64}"));
+            await(title + " eventually saves the full recording", PreparedMusic.SELECTION_WAIT_MS + 15_000 - advancing, () -> {
+                if (jsTrue(web, row + "?.state==='failed'")) throw new AssertionError(jsText(web, row + ".message"));
+                return jsTrue(web, row + "?.state==='ready' && musicDownloads.some(item=>item.offline && item.id===" + JSONObject.quote(key) + ")");
+            });
+            long ready = SystemClock.elapsedRealtime();
             js(web, "(()=>{const seek=document.querySelector('#bgSeek');seek.value=66;seek.dispatchEvent(new Event('input'))})()");
             awaitAudio(web, title, seconds, 6, seconds * 0.63, 10000);
-            String key = jsText(web, row + ".key");
-            assertPass(title + " is saved under its exact cache key", key.matches("[a-f0-9]{64}"));
             tapWeb(web, "#bgClose");
             await("Original player closes without deleting " + title, 7000,
                     () -> jsTrue(web, "document.querySelector('#bgAudioBar').hidden && !localStorage.getItem(MUSIC_SESSION_KEY)"));
             results.played.add(new LiveTrack(title, key, seconds));
-            android.util.Log.i("BlackBoxSmoke", "v90 provider " + title + ": ready in " + (ready - tapped) + "ms, advancing in " + advancing + "ms; full seek passed");
+            android.util.Log.i("BlackBoxSmoke", "v90 provider " + title + ": offline copy ready in " + (ready - tapped) + "ms; full seek passed");
         } catch (AssertionError blocked) {
             String message = blocked.getMessage() + " (" + (SystemClock.elapsedRealtime() - tapped) + "ms)";
             results.failures.add(message);
@@ -808,6 +898,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                         () -> jsTrue(offline, "document.querySelector(" + JSONObject.quote(control) + ")"));
                 tapWeb(offline, control);
                 awaitAudio(offline, track.title, track.seconds, 6, 1, 7500);
+                assertPass(track.title + " plays a complete private file offline", jsTrue(offline, "document.querySelector('#bgAudio').src.startsWith('blob:')"));
                 android.util.Log.i("BlackBoxSmoke", "v90 provider " + track.title + ": exact Downloads replay passed offline");
             }
         } finally {

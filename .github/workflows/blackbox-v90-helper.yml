@@ -1,4 +1,4 @@
-name: BlackBox Music v90 Android
+name: BlackBox Music v90 fast-start Android
 on:
   workflow_dispatch:
     inputs:
@@ -56,7 +56,7 @@ jobs:
       - name: Compile the actual v90 app with the helper and verify APK bytes
         run: |
           log=$(mktemp)
-          if ! (cd android && gradle :app:assembleDebug --no-daemon --console=plain -PbbxMusicHelper=true -PbbxHelperPreview=true) > "$log" 2>&1; then
+          if ! (cd android && gradle :app:assembleDebug --no-daemon --console=plain -PbbxMusicHelper=true -PbbxFastStartPreview=true) > "$log" 2>&1; then
             tail -75 "$log"
             message=$(grep -A5 -E 'error:|What went wrong:|^e: ' "$log" | head -c 2700 || true)
             printf '::error::%s\n' "${message//$'\n'/' / '}"
@@ -66,17 +66,17 @@ jobs:
           python3 .github/ci/verify_blackbox_v90_helper.py "$apk"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
-          grep -q "^package: name='com.blackboxstream.mobile.music' versionCode='11' versionName='1.4.6-music'" "$RUNNER_TEMP/badging.txt"
+          grep -q "^package: name='com.blackboxstream.mobile.music.fast' versionCode='13' versionName='1.4.8-fast'" "$RUNNER_TEMP/badging.txt"
           grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
           hash=$(sha256sum "$apk")
           echo "::notice::ARM64 v90 candidate SHA-256 ${hash%% *} ($(stat -c %s "$apk") bytes)"
-          cp "$apk" "$RUNNER_TEMP/BlackBox-Music-v90-ARM64-candidate.apk"
+          cp "$apk" "$RUNNER_TEMP/BlackBox-Music-Fast-Start-ARM64-candidate.apk"
       - name: Assemble the x86_64 counterpart and fixture instrumentation
         working-directory: android
         run: |
           log=$(mktemp)
           if ! gradle :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console=plain \
-            -PbbxMusicHelper=true -PbbxHelperPreview=true -PbbxHelperAbi=x86_64 > "$log" 2>&1; then
+            -PbbxMusicHelper=true -PbbxFastStartPreview=true -PbbxHelperAbi=x86_64 > "$log" 2>&1; then
             tail -75 "$log"
             message=$(grep -A5 -E 'error:|What went wrong:|^e: ' "$log" | head -c 2700 || true)
             printf '::error::%s\n' "${message//$'\n'/' / '}"
@@ -87,7 +87,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Exercise the bundled helper, queue and offline playback (fixtures, not provider access)
+      - name: Verify partial-file playback, queue and offline playback (fixtures, not provider access)
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 35
@@ -98,12 +98,12 @@ jobs:
           script: |
             adb shell wm size 720x1560
             adb shell wm density 320
-            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_HELPER_FIXTURE=1 bash android/tests/run_device.sh
+            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music.fast BBX_VERIFY_HELPER_FIXTURE=1 bash android/tests/run_device.sh
       - name: Retain the fixture-checked candidate (not a live playback pass)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: BlackBox-Music-v90-ARM64-candidate
-          path: ${{ runner.temp }}/BlackBox-Music-v90-ARM64-candidate.apk
+          name: BlackBox-Music-Fast-Start-ARM64-candidate
+          path: ${{ runner.temp }}/BlackBox-Music-Fast-Start-ARM64-candidate.apk
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
@@ -119,4 +119,4 @@ jobs:
           script: |
             adb shell wm size 720x1560
             adb shell wm density 320
-            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_MUSIC_ONLY=1 BBX_VERIFY_UNPINNED_ONLY=${{ inputs.verify_live_unpinned && !inputs.verify_live_music && '1' || '0' }} bash android/tests/run_device.sh
+            BBX_TEST_PACKAGE=com.blackboxstream.mobile.music.fast BBX_VERIFY_MUSIC_ONLY=1 BBX_VERIFY_UNPINNED_ONLY=${{ inputs.verify_live_unpinned && !inputs.verify_live_music && '1' || '0' }} bash android/tests/run_device.sh

@@ -3,13 +3,15 @@
   'use strict';
   if (!window.bbxAndroidOpen) return;
   const engine = '/api/mobile/music-helper';
-  const planTimeout = 15_000, localOpenTimeout = 12_000;
+  const planTimeout = 15_000, localOpenTimeout = 12_000, streamOpenTimeout = 7500;
   const mobileLookaheadKey = 'bbxAndroidMusicMobileLookahead';
   let mobileLookahead = false, helperAvailable = false, mobileSetting;
   try { mobileLookahead = localStorage.getItem(mobileLookaheadKey) === '1'; } catch { /* Keep opt-in off. */ }
   const byId = id => document.getElementById(id);
   const keyPattern = /^[a-f0-9]{64}$/;
+  const streamToken = /^[a-f0-9]{32}$/;
   const audioUrl = key => `/prepared-audio/${key}.m4a`;
+  const streamUrl = (key, token) => `/playing-audio/${key}/${token}.m4a`;
   const title = item => item.track || item.title || '';
   const artist = item => item.artist || item.channel || '';
   const clean = value => String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
@@ -275,12 +277,17 @@
     live.controller.abort();
     clearMusicPlaybackFeedback('cancel', live.feedbackId);
     musicAutoAdvanceBlocked = true;
+    if (live.streamError) live.audio.removeEventListener('error', live.streamError);
+    clearSource(live);
+    if (hideBar) live.bar.hidden = true;
+    closeMusicFrequency();
+  }
+  function clearSource(live) {
     live.audio.pause();
     live.audio.removeAttribute('src');
     live.audio.load();
     if (live.blob) URL.revokeObjectURL(live.blob);
-    if (hideBar) live.bar.hidden = true;
-    closeMusicFrequency();
+    live.blob = null;
   }
   function stop(live) {
     if (session !== live) return;
@@ -300,62 +307,158 @@
     live.deadline = setTimeout(() => fail(live, message), ms);
   }
 
+  function selectedRow(live, snapshot) {
+    const key = snapshot.selected, row = snapshot.tracks?.[key];
+    if (!snapshot.available) return {error:'Music playback is not available in this build.'};
+    if (!keyPattern.test(key) || !row || recordingKey(row.recording) !== live.recordingKey) {
+      return {error:'Could not prepare this recording. Tap Play to retry.'};
+    }
+    if (row.state === 'failed') return {error:row.message || 'Could not prepare this exact recording.'};
+    return {key, row};
+  }
+  const waitForAudio = (live, key, savedOnly) => read(`/await?key=${key}${savedOnly ? '&saved=1' : ''}`,
+    undefined, live.controller.signal);
+
+  function openStream(live, key, token) {
+    const {audio, controller:{signal}} = live;
+    return new Promise(resolve => {
+      let done = false;
+      const finish = ok => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        audio.removeEventListener('loadedmetadata', metadata);
+        audio.removeEventListener('error', fallback);
+        signal.removeEventListener('abort', fallback);
+        if (!ok && session === live) clearSource(live);
+        resolve(ok);
+      };
+      const fallback = () => finish(false);
+      const metadata = () => {
+        // The source was matched before any transfer. Check that the decoder sees the full length too.
+        if (!stillSelected(live) || !Number.isFinite(audio.duration) || audio.duration < 1
+            || Math.abs(audio.duration - live.track.seconds) > 6) return fallback();
+        audio.play().then(() => finish(stillSelected(live)), fallback);
+      };
+      const timer = setTimeout(fallback, streamOpenTimeout);
+      signal.addEventListener('abort', fallback, {once:true});
+      audio.addEventListener('loadedmetadata', metadata, {once:true});
+      audio.addEventListener('error', fallback, {once:true});
+      audio.src = streamUrl(key, token);
+      audio.load();
+    });
+  }
+  async function openSaved(live, key, position = 0) {
+    deadline(live, localOpenTimeout, 'The saved audio could not start. Tap Play to retry.');
+    const response = await fetch(audioUrl(key), {cache:'no-store', signal:live.controller.signal});
+    if (!response.ok || !response.headers.get('Content-Type')?.startsWith('audio/mp4')) throw new Error('Missing cached audio');
+    const blob = await response.blob();
+    if (!stillSelected(live)) return false;
+    if (!blob.size || blob.size > 24 * 1024 * 1024) throw new Error('Invalid cached audio');
+    // Keep the original complete-file player for cached songs and any unsupported stream.
+    live.audio.src = live.blob = URL.createObjectURL(blob);
+    if (position > 0) live.audio.currentTime = Math.min(position, Math.max(0, live.track.seconds - 1));
+    await live.audio.play();
+    return stillSelected(live);
+  }
+  function showStarted(live) {
+    clearTimeout(live.deadline);
+    live.started = true;
+    musicAutoAdvanceBlocked = false;
+    byId('bgTitle').textContent = title(live.item);
+    byId('bgArtist').textContent = artist(live.item);
+    const art = byId('bgArt'), picture = live.item.artwork || live.item.thumbnail;
+    if (picture) art.src = safeArtwork(picture); else art.removeAttribute('src');
+    art.style.display = 'block';
+    showMusicFrequencyMeta(live.item);
+    startMusicFrequency();
+    live.bar.hidden = false;
+    clearMusicPlaybackFeedback('cancel', live.feedbackId);
+    updateQCount();
+    persistMusicPlaybackSession();
+  }
+  function saveToLibrary(live, key) {
+    if (!stillSelected(live)) return;
+    remember(live.item, live.track, key, live.collection);
+    saveMusicDownloads(); saveMusicCollections(false); renderMusicDownloads();
+  }
+  async function waitForSave(live, key) {
+    try {
+      while (stillSelected(live)) {
+        const snapshot = await waitForAudio(live, key, true);
+        if (!stillSelected(live)) return false;
+        const selection = selectedRow(live, snapshot);
+        if (selection.key !== key) return false;
+        if (selection.row.state === 'ready') return true;
+      }
+    } catch { /* Audio already being played does not depend on an offline status reply. */ }
+    return false;
+  }
+  function monitorStream(live, key) {
+    let recovering = false;
+    const saved = waitForSave(live, key).then(ready => {
+      if (ready) saveToLibrary(live, key);
+      else if (!recovering && stillSelected(live) && !live.audio.error) toast('This track could not be saved for offline listening.');
+      return ready;
+    });
+    live.streamError = async () => {
+      if (!stillSelected(live) || recovering) return;
+      recovering = true;
+      const position = live.audio.currentTime;
+      live.started = false;
+      musicAutoAdvanceBlocked = true;
+      clearSource(live);
+      live.feedbackId = attachSpinner(byId('bgPlayBtn'));
+      try {
+        // Use the same transfer if the decoder cannot continue (for example an unbuffered seek).
+        if (await saved) {
+          if (stillSelected(live) && await openSaved(live, key, position)) showStarted(live);
+          return;
+        }
+      } catch { /* The replacement could not start either. */ }
+      if (stillSelected(live)) fail(live, 'The exact track stopped streaming. Tap Play to retry.');
+    };
+    live.audio.addEventListener('error', live.streamError, {once:true});
+  }
   async function play(live) {
     try {
       if (!live.track) { fail(live, 'This catalogue entry does not identify a full recording.'); return; }
-      // An automatic handoff may continue a running next job, but never repeats a known provider failure.
-      let snapshot = await planQueue(live, live.intent !== 'auto-ended'), key;
+      // An automatic handoff may continue a running next job, but never retries a known provider failure.
+      let snapshot = await planQueue(live, live.intent !== 'auto-ended');
+      let triedStream = false;
       if (!stillSelected(live)) return;
       const budget = snapshot.selectionWaitMs;
       if (Number.isFinite(budget) && budget >= planTimeout && budget <= 300_000) {
         deadline(live, Math.max(1, budget - (performance.now() - live.tapped)),
-          'The full recording was not prepared in time. Tap Play to retry.');
+          'The exact recording was not ready in time. Tap Play to retry.');
       }
       while (stillSelected(live)) {
-        key = snapshot.selected;
-        const row = snapshot.tracks?.[key];
-        if (!snapshot.available) { fail(live, 'Music playback is not available in this build.'); return; }
-        if (!keyPattern.test(key) || !row || recordingKey(row.recording) !== live.recordingKey) {
-          fail(live, 'Could not prepare this recording. Tap Play to retry.'); return;
+        const {key, row, error} = selectedRow(live, snapshot);
+        if (error) { fail(live, error); return; }
+        if (row.state === 'ready') {
+          if (await openSaved(live, key)) {
+            showStarted(live);
+            saveToLibrary(live, key);
+          }
+          return;
         }
-        if (row.state === 'failed') { fail(live, row.message || 'Could not prepare this exact recording.'); return; }
-        if (row.state === 'ready') break;
-        snapshot = await read(`/await?key=${key}`, undefined, live.controller.signal);
+        if (!triedStream && streamToken.test(row.stream || '')) {
+          triedStream = true;
+          if (await openStream(live, key, row.stream)) {
+            showStarted(live);
+            monitorStream(live, key);
+            return;
+          }
+        }
+        if (!stillSelected(live)) return;
+        snapshot = await waitForAudio(live, key, triedStream);
       }
-      if (!stillSelected(live)) return;
-      deadline(live, localOpenTimeout, 'The saved audio could not start. Tap Play to retry.');
-      const response = await fetch(audioUrl(key), {cache:'no-store', signal:live.controller.signal});
-      if (!response.ok || !response.headers.get('Content-Type')?.startsWith('audio/mp4')) throw new Error('Missing cached audio');
-      const blob = await response.blob();
-      if (!stillSelected(live)) return;
-      if (!blob.size || blob.size > 24 * 1024 * 1024) throw new Error('Invalid cached audio');
-      // Use the original audio node and its normal seek, pause and end handlers. The WebView's
-      // local-only configuration lets this one tap start playback after asynchronous preparation.
-      live.audio.src = live.blob = URL.createObjectURL(blob);
-      await live.audio.play();
-      if (!stillSelected(live)) return;
-      live.started = true;
-      musicAutoAdvanceBlocked = false;
-      preloadNextTwo(); // Only after the current track actually starts, on its existing queue plan.
-      byId('bgTitle').textContent = title(live.item);
-      byId('bgArtist').textContent = artist(live.item);
-      const art = byId('bgArt'), picture = live.item.artwork || live.item.thumbnail;
-      if (picture) art.src = safeArtwork(picture); else art.removeAttribute('src');
-      art.style.display = 'block';
-      showMusicFrequencyMeta(live.item);
-      startMusicFrequency();
-      live.bar.hidden = false;
-      clearMusicPlaybackFeedback('cancel', live.feedbackId);
-      remember(live.item, live.track, key);
-      saveMusicDownloads(); saveMusicCollections(false);
-      renderMusicDownloads(); updateQCount(); persistMusicPlaybackSession();
     } catch {
       // No preview, video, source dialog, or retry on another recording.
       if (stillSelected(live)) fail(live, 'Could not open the audio. Tap Play to retry.');
     } finally {
       clearTimeout(live.deadline);
-      // A queue rebuild can replace the selected object while the bridge reply is in flight.
-      // Never leave that abandoned request's ring attached to the original button.
+      // A queue rebuild can replace the selected object without replacing this session.
       if (!live.started && session === live) stop(live);
     }
   }
@@ -391,7 +494,7 @@
     if (session) release(session, false);
     const track = recording(item);
     const live = session = {...player, item, track, recordingKey:track ? recordingKey(track) : '',
-      fromQueue, intent:options.intent, started:false, tapped:performance.now(), controller:new AbortController()};
+      fromQueue, intent:options.intent, started:false, tapped:performance.now(), collection:activeCollection(), controller:new AbortController()};
     live.feedbackId = attachSpinner(fromQueue ? document.querySelector('#bgQueueList .playing') : control);
     deadline(live, planTimeout, 'The Music helper did not respond. Tap Play to retry.');
     live.playing = play(live);
@@ -412,7 +515,8 @@
   };
   const originalNext = queueNext;
   queueNext = options => {
-    if (options?.intent === 'auto-ended' && (!session?.started || !session.audio.ended || !stillSelected(session))) return;
+    if (options?.intent === 'auto-ended' && (!session?.started || !session.audio.ended || !stillSelected(session)
+        || session.audio.currentTime < session.audio.duration - 1)) return;
     if (musicQueue.idx + 1 < musicQueue.list.length) return originalNext(options);
   };
 

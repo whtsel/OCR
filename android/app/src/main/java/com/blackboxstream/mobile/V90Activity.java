@@ -32,6 +32,8 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.net.ssl.HttpsURLConnection;
 import org.json.JSONObject;
 
@@ -43,6 +45,7 @@ public final class V90Activity extends Activity {
             + "frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'";
     private static final Set<String> ART_HOSTS = new HashSet<>(Arrays.asList("image.tmdb.org", "i.ytimg.com", "img.youtube.com", "cdn-images.dzcdn.net", "is1-ssl.mzstatic.com"));
     private static final Set<String> MOBILE_ASSETS = new HashSet<>(Arrays.asList("android-api.js", "android-port.js", "android-catalogue.js", "android-music.js", "android-v90.css"));
+    private static final Pattern PLAYING_AUDIO = Pattern.compile("/playing-audio/([a-f0-9]{64})/([a-f0-9]{32})\\.m4a");
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor work = new ThreadPoolExecutor(6, 6, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(80));
     // Slow catalogue/source requests must not delay a Music Play or cancel message. Long waits
@@ -195,6 +198,26 @@ public final class V90Activity extends Activity {
             String path = req.getUrl().getEncodedPath();
             try {
                 if ("/".equals(path)) return response(200, "OK", "text/html", index());
+                if (path != null && path.startsWith("/playing-audio/")) {
+                    if (req.isForMainFrame()) return response(403, "Forbidden", "text/plain", new byte[0]);
+                    Matcher route = PLAYING_AUDIO.matcher(path);
+                    if (route.matches()) {
+                        String range = null;
+                        for (Map.Entry<String, String> header : req.getRequestHeaders().entrySet())
+                            if ("Range".equalsIgnoreCase(header.getKey())) range = header.getValue();
+                        ProgressiveMusicAudio.Read read = api.playingAudio(route.group(1), route.group(2), range);
+                        if (read != null) {
+                            Map<String, String> mediaHeaders = new HashMap<>(headers());
+                            mediaHeaders.put("Content-Length", Long.toString(read.length));
+                            mediaHeaders.put("Accept-Ranges", "bytes");
+                            if (read.contentRange != null) mediaHeaders.put("Content-Range", read.contentRange);
+                            return new WebResourceResponse("audio/mp4", null, read.status,
+                                    read.status == 206 ? "Partial Content" : read.status == 416 ? "Range Not Satisfiable" : "OK",
+                                    mediaHeaders, read.body);
+                        }
+                    }
+                    return response(404, "Not Found", "text/plain", new byte[0]);
+                }
                 // Read-only and same-origin. A missing prepared recording never invokes the downloader.
                 if (path != null && path.matches("/prepared-audio/[a-f0-9]{64}\\.m4a")) {
                     if (req.isForMainFrame()) return response(403, "Forbidden", "text/plain", new byte[0]);

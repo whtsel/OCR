@@ -85,7 +85,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         ArrayList<String> options = new ArrayList<>(Arrays.asList("--no-playlist", "--socket-timeout", "20",
                 "--retries", "0", "--extractor-retries", "0", "--fragment-retries", "0", "--abort-on-unavailable-fragments",
                 "--no-simulate", "--quiet", "--progress", "--newline", "--progress-delta", "1",
-                "--progress-template", "download:BBX_MEDIA:%(progress.status)s",
+                "--progress-template", ProgressiveMusicAudio.PROGRESS_TEMPLATE,
                 "--print", "before_dl:BBX_DOWNLOAD_START %(ext)s",
                 "--max-filesize", "24M", "-f", "bestaudio[ext=m4a]/bestaudio",
                 "-x", "--audio-format", "m4a", "--audio-quality", "0", "-o", new File(scratch, "audio.%(ext)s").getAbsolutePath()));
@@ -103,9 +103,24 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         options.addAll(0, Arrays.asList(track.title, track.artist, track.album, Integer.toString(track.seconds), remembered(track.key)));
         execute(control, scratch, true, options.toArray(new String[0]));
         if (control.cancelled) return null;
+        return new PreparedMusic.Result(audio, sourceId(scratch));
+    }
+
+    private static String sourceId(File scratch) throws IOException {
         try (FileInputStream in = new FileInputStream(new File(scratch, "source-id"))) {
-            return new PreparedMusic.Result(audio, new String(TorrentMeta.slurp(in, 16), StandardCharsets.US_ASCII));
+            return new String(TorrentMeta.slurp(in, 16), StandardCharsets.US_ASCII);
         }
+    }
+
+    private static void maybeOfferStream(String line, boolean discover, File scratch, PreparedMusic.Control control) {
+        if (!line.startsWith("BBX_PREFIX:downloading:") || !control.wantsStream()) return;
+        ProgressiveMusicAudio.Candidate candidate = ProgressiveMusicAudio.candidate(line);
+        if (candidate == null) return;
+        try {
+            // Catalogue entries cannot publish bytes until the exact matcher accepted this same ID.
+            if (!discover || candidate.id.equals(sourceId(scratch)))
+                control.offerStream(new File(scratch, "audio.m4a.part"), candidate.length, candidate.id);
+        } catch (IOException ignored) { /* A missing marker never changes the complete-file path. */ }
     }
 
     private Map<String, String> readHints() {
@@ -190,6 +205,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                     else if ("BBX_CATALOGUE_QUERY".equals(line)) control.stage("search catalogue");
                     else if ("BBX_CATALOGUE_ALTERNATE".equals(line)) control.stage("search alternate wording");
                     else if ("BBX_CATALOGUE_VERIFY".equals(line)) control.stage("verify source metadata");
+                    maybeOfferStream(line, discover, scratch, control);
                     // Capture bounded output for diagnostics; never impose a line reading limit on the child.
                     int keep = Math.min(line.length(), 65536 - captured.length());
                     if (keep > 0) captured.append(line, 0, keep).append('\n');

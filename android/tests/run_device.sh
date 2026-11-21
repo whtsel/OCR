@@ -34,6 +34,13 @@ if [[ "${BBX_VERIFY_HELPER_FIXTURE:-0}" == 1 ]]; then
 fi
 out=$("$adb" shell am instrument -w -r "${args[@]}" "$package.test/com.blackboxstream.mobile.BlackBoxSmoke")
 printf '%s\n' "$out"
+if [[ "${BBX_VERIFY_HELPER_FIXTURE:-0}" == 1 ]]; then
+    trace=$("$adb" logcat -d -v raw -s BlackBoxSmoke:I | grep '^v90 fixture:' | tail -8 || true)
+    printf '%s\n' "$trace"
+    if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+        printf '%s\n' "$trace" | sed -n 's/^v90 fixture:/::notice::v90 fixture:/p'
+    fi
+fi
 if [[ "${BBX_VERIFY_MUSIC_ONLY:-0}" == 1 ]]; then
     trace=$("$adb" logcat -d -v raw -s BlackBoxMusic:I BlackBoxSmoke:I | grep -e '^v90 provider ' -e ' +[0-9][0-9]*ms$' | tail -100 || true)
     printf '%s\n' "$trace"

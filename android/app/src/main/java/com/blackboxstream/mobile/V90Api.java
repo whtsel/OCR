@@ -66,6 +66,10 @@ final class V90Api {
 
     File preparedAudio(String id) { return closed || expired() ? null : music.read(id); }
 
+    ProgressiveMusicAudio.Read playingAudio(String id, String token, String range) {
+        return closed || expired() ? null : music.readStream(id, token, range);
+    }
+
     static boolean expired() { return System.currentTimeMillis() >= EXPIRES_AT; }
     private static Reply ok(JSONObject value) { return new Reply(200, value); }
     static Reply fail(int status, String reason) {
@@ -115,7 +119,8 @@ final class V90Api {
             }
             if (get && path.equals("/api/mobile/library")) return library();
             if (get && path.equals("/api/mobile/music-helper")) return ok(music.state());
-            if (get && path.equals("/api/mobile/music-helper/await")) return ok(music.awaitSelection(param(uri, "key", "")));
+            if (get && path.equals("/api/mobile/music-helper/await"))
+                return ok(music.awaitSelection(param(uri, "key", ""), "1".equals(param(uri, "saved", ""))));
             if (!get && path.equals("/api/mobile/music-helper/warm")) {
                 music.warm();
                 return ok(new JSONObject());

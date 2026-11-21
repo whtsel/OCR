@@ -4,10 +4,11 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Install and use
 
-**BlackBox Music v90 (ARM64)** is a side-by-side test build of the full Android port
-(`com.blackboxstream.mobile.music`), not the two-track diagnostic. It does not replace BlackBox
-Stream or the old `.helper` preview, or migrate their app-private downloads. Android only updates
-an installed build if both packages have the same signing key. Keep the main app installed. Use an up-to-date Android System WebView on Android 7.0 or newer.
+**BlackBox Music Fast Start (ARM64)** is a side-by-side test build of the full v90 Android port
+(`com.blackboxstream.mobile.music.fast`), not the helper diagnostic. Leave the existing 1.4.6 Music
+app installed: this preview does not replace it or touch its offline library. Its Downloads are
+separate. Android only updates an installed app if the package and signing key match. Use an
+up-to-date Android System WebView on Android 7.0 or newer.
 As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 
 - **Music:** Tap the existing Play control. Its loading circle stays until the exact audio starts
@@ -39,14 +40,22 @@ metadata if audio has to be fetched again. Card, queue and Downloads keys do not
 browser session, remote helper updates or alternate editions are used. Provider availability and exact metadata vary by track
 and network; not every catalogue entry can be verified. If the provider rate-limits this device,
 BlackBox pauses new requests to it for one minute. Offline copies still play in that time.
-Only fetch recordings you may download. Music v90 waits for a complete, verified file. It does not
-use the experimental fast-start tester. Finding a recording has up to 80 seconds; a matched source
-gets a separate download budget (up to 145 seconds, or 40 seconds without new bytes) and up to
-25 seconds to finish the file. Provider refusal and no-match errors still end the request without
-trying another recording. The existing Play ring clears with a stage-specific message on failure.
+Only fetch recordings you may stream and save. On a cold play, v90 can start a direct, audio-only
+AAC source as soon as the helper has matched the recording and received a playable MP4 prefix.
+The same transfer finishes in the background; an in-progress stream is **not** a Downloads item.
+Only the completed, verified file is published to the existing offline cache. Nothing is hosted,
+no provider URL or account data is passed to the WebView, and no second audio transfer is started.
+If the format needs conversion, its MP4 metadata is at the end, the length is unknown, or the
+phone cannot play the partial file, it uses the existing full-file path for that same recording.
+Seeking ahead of the received bytes can still buffer.
 
-The selected track takes priority. Once it starts, a single worker prepares the next **two actual
-queue slots** on unmetered connections. In the player’s queue, **Prepare one next song on mobile data**
+Finding a recording has up to 80 seconds; a matched source gets up to 145 seconds to transfer
+(or 40 seconds without new bytes) and up to 25 seconds to finish. A slow lookup or a provider
+refusal is not fixed by streaming earlier: the Play ring clears on failure without substituting
+an upload or using a login. A pre-existing offline file is always opened without that lookup.
+
+The selected track takes priority. After it starts and its offline file finishes, the single worker
+prepares the next **two actual queue slots** on unmetered connections. In the player’s queue, **Prepare one next song on mobile data**
 is off by default. Turning it on allows just the immediate next track (up to six minutes) on a
 metered connection; Android Data Saver still takes precedence. An empty, long, or duplicate first
 slot does not pull a later song into that mobile slot. A complete queued file plays locally, and
@@ -116,7 +125,7 @@ Open `android/` in Android Studio or use JDK 17, Gradle 8.9, Android SDK 35 and 
 ```sh
 cd android
 (cd vendor && sha256sum -c ytdlp.sha256)
-gradle :app:assembleDebug -PbbxHelperPreview=true
+gradle :app:assembleDebug -PbbxFastStartPreview=true
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
@@ -133,12 +142,13 @@ and the [pinned extractor release](https://github.com/yt-dlp/yt-dlp/releases/tag
 source and licensing. The Gradle task, on-device loader, and APK verification check the pin. CI
 also compares the six ARM64 runtime files with the exact diagnostic binaries. For a test on an
 x86_64 Android emulator, add `-PbbxHelperAbi=x86_64`, build `:app:assembleDebugAndroidTest` as well,
-and run `BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_HELPER_FIXTURE=1 ./tests/run_device.sh`.
-That test exercises the pinned runtime and conversion, holds a real Android bridge reply to test
-spinner-only delayed autoplay without a second tap, and checks cancellation, seek, and offline
-reuse on two v90 tracks using test-only audio. Run `python3 -B
+and run `BBX_TEST_PACKAGE=com.blackboxstream.mobile.music.fast BBX_VERIFY_HELPER_FIXTURE=1 ./tests/run_device.sh`.
+That test exercises the pinned runtime and conversion. It withholds the second half of a test-only
+audio file and requires the original v90 player to audibly advance before the native worker can
+finish that file. It also checks byte ranges, the original whole-file fallback, unchanged queue
+handoff, cancellation, seek, and offline reuse. Run `python3 -B
 tests/test_catalogue_music.py` for the controlled source-selection checks. A properly signed
-helper build without `-PbbxHelperPreview=true` uses the usual `com.blackboxstream.mobile` app ID. This is a candidate; live catalogue audio and separately imported public video still need device acceptance.
+helper build without a preview flag uses the usual `com.blackboxstream.mobile` app ID. This is a candidate; live catalogue audio and separately imported public video still need device acceptance.
 
 ## Tests
 
@@ -164,8 +174,8 @@ gradle :app:assembleDebug :app:assembleDebugAndroidTest -PbbxMusicHelper=false
 # With libtorrent and OpenSSL: also forward a controlled seeder and HTTPS relay with adb reverse.
 python3 tests/run_device_fixtures.py
 # Separate build and fresh emulator/device package for live Music acceptance.
-gradle :app:assembleDebug :app:assembleDebugAndroidTest -PbbxHelperPreview=true -PbbxHelperAbi=x86_64
-BBX_TEST_PACKAGE=com.blackboxstream.mobile.music BBX_VERIFY_MUSIC_ONLY=1 ./tests/run_device.sh
+gradle :app:assembleDebug :app:assembleDebugAndroidTest -PbbxFastStartPreview=true -PbbxHelperAbi=x86_64
+BBX_TEST_PACKAGE=com.blackboxstream.mobile.music.fast BBX_VERIFY_MUSIC_ONLY=1 ./tests/run_device.sh
 # Independently hash two authorized public files, then test explicit imports and offline replay.
 BBX_VERIFY_PUBLIC_MEDIA=1 python3 tests/run_device_fixtures.py
 ```
@@ -182,6 +192,7 @@ films back in Streaming. A live Music pass requires five cold plays from origina
 controls (three unpinned), full duration, audio progression, seeking past the preview window, and
 Downloads replay after reopening with all networking off. The GitHub Actions `verify_live_music`
 input runs this independent gate; `verify_live_unpinned=true` tests one cold, unpinned card.
-Provider refusals fail the gate, even if the separate fixture
-job and APK verification pass. The run summary records sanitized preparation stages and timings;
+Provider refusals fail the gate, even if the separate fixture job and APK verification pass. The
+live gate measures advancing audio separately from offline publication; fixture timing is not a
+promise about live tracks or a phone's mobile data. The summary records sanitized stages and timings;
 no audio, account data, or provider links are saved as test results.

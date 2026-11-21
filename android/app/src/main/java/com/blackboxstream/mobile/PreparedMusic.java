@@ -96,7 +96,15 @@ final class PreparedMusic implements AutoCloseable {
     static final class Control {
         volatile boolean cancelled;
         private final long started = SystemClock.elapsedRealtime();
+        private final PreparedMusic queue;
+        private final Track track;
         private Process process;
+        Control() { this(null, null); }
+        Control(PreparedMusic queue, Track track) { this.queue = queue; this.track = track; }
+        boolean wantsStream() { return queue != null && queue.wantsStream(this); }
+        void offerStream(File part, long length, String providerId) {
+            if (queue != null) queue.offerStream(this, part, length, providerId);
+        }
         void stage(String stage) {
             // Internal stage names and elapsed times only. Never publish provider output or track metadata.
             Log.i("BlackBoxMusic", stage + " +" + (SystemClock.elapsedRealtime() - started) + "ms");
@@ -121,6 +129,9 @@ final class PreparedMusic implements AutoCloseable {
     private int epoch;
     private String requested = "", firstUpcoming = "", running;
     private Control active;
+    // At most one live reader source, even when the worker has moved on to the next queue file.
+    private Control streamOwner;
+    private ProgressiveMusicAudio stream;
 
     static PreparedMusic builtIn(Context app) {
         Runtime runtime = null;
@@ -191,6 +202,7 @@ final class PreparedMusic implements AutoCloseable {
         albumCompleted.remove(key);
         failures.remove(key);
         if (active != null && key.equals(running)) active.cancel();
+        if (key.equals(requested)) closeStream();
         deleteScratch(entry(key));
         cached.remove(key);
         notifyAll();
@@ -216,6 +228,7 @@ final class PreparedMusic implements AutoCloseable {
         epoch = sequence;
         if (retry) failures.remove(key);
         failures.keySet().removeIf(id -> !next.containsKey(id) && !album.containsKey(id));
+        if (!key.equals(requested)) closeStream();
         requested = key;
         firstUpcoming = firstKey;
         started = playing && !key.isEmpty() && readyFile(key) != null;
@@ -232,17 +245,49 @@ final class PreparedMusic implements AutoCloseable {
         if (first == null || !first.key.equals(running)) active.cancel();
     }
 
-    /** Return as soon as this selected job publishes audio, fails or is replaced. */
-    synchronized JSONObject awaitSelection(String key) throws JSONException {
+    /** Wake for a playable prefix or the final offline file. A fallback can wait for the latter only. */
+    synchronized JSONObject awaitSelection(String key, boolean savedOnly) throws JSONException {
         if (!key.matches("[a-f0-9]{64}")) throw new IllegalArgumentException("Invalid recording key.");
         long until = SystemClock.elapsedRealtime() + WAIT_SLICE_MS;
-        while (available() && requested.equals(key) && desired.containsKey(key) && readyFile(key) == null && !failures.containsKey(key)) {
+        while (available() && requested.equals(key) && desired.containsKey(key) && readyFile(key) == null
+                && !failures.containsKey(key) && (savedOnly || stream == null)) {
             long waitMs = until - SystemClock.elapsedRealtime();
             if (waitMs <= 0) break;
             try { wait(waitMs); }
             catch (InterruptedException closing) { Thread.currentThread().interrupt(); break; }
         }
         return state();
+    }
+
+    private synchronized boolean wantsStream(Control control) {
+        return available() && stream == null && active == control && !control.cancelled
+                && requested.equals(control.track.key) && desired.containsKey(requested) && readyFile(requested) == null;
+    }
+
+    private void offerStream(Control control, File part, long length, String providerId) {
+        if (!wantsStream(control) || !videoId(providerId)
+                || !control.track.source.isEmpty() && !control.track.source.equals(providerId)) return;
+        ProgressiveMusicAudio opened = ProgressiveMusicAudio.openPartial(part, length);
+        if (opened == null) return;
+        synchronized (this) {
+            if (wantsStream(control)) {
+                stream = opened;
+                streamOwner = control;
+                control.stage("stream ready");
+                notifyAll();
+            } else opened.close();
+        }
+    }
+
+    synchronized ProgressiveMusicAudio.Read readStream(String key, String token, String range) {
+        return available() && requested.equals(key) && stream != null && stream.token.equals(token)
+                ? stream.read(range) : null;
+    }
+
+    private void closeStream() {
+        if (stream != null) stream.close();
+        stream = null;
+        streamOwner = null;
     }
 
     synchronized JSONObject downloadAlbum(JSONArray tracks) throws JSONException {
@@ -276,8 +321,10 @@ final class PreparedMusic implements AutoCloseable {
                 boolean prepared = readyFile(key) != null;
                 String state = prepared ? "ready" : key.equals(running) && !active.cancelled ? "working"
                         : failures.containsKey(key) || albumCompleted.contains(key) && !desired.containsKey(key) ? "failed" : "queued";
-                rows.put(key, new JSONObject().put("state", state).put("recording", track.json())
-                        .put("message", "failed".equals(state) ? failures.get(key) : ""));
+                JSONObject row = new JSONObject().put("state", state).put("recording", track.json())
+                        .put("message", "failed".equals(state) ? failures.get(key) : "");
+                if ("working".equals(state) && key.equals(requested) && stream != null) row.put("stream", stream.token);
+                rows.put(key, row);
             }
         }
         return new JSONObject().put("available", on).put("selected", requested).put("sequence", epoch)
@@ -360,7 +407,7 @@ final class PreparedMusic implements AutoCloseable {
                 track = nextJob();
                 if (track == null) { dispatching = false; return; }
                 running = track.key;
-                active = control = new Control();
+                active = control = new Control(this, track);
             }
             File scratch = null;
             String failure = null;
@@ -409,6 +456,9 @@ final class PreparedMusic implements AutoCloseable {
                 deleteScratch(scratch);
                 control.stage(control.cancelled ? "cancelled" : rateLimited ? "provider refused (429)" : failure != null ? "failed" : "committed");
                 synchronized (this) {
+                    // A finalization failure need not interrupt a fully buffered stream. A truncated
+                    // or cancelled transfer must never give the player a successful EOF.
+                    if (streamOwner == control && (control.cancelled || !stream.hasAllBytes())) closeStream();
                     if (failure != null && !control.cancelled && wanted(track.key)) {
                         failures.put(track.key, failure);
                         if (rateLimited) retryProviderAt = SystemClock.elapsedRealtime() + PROVIDER_COOLDOWN_MS;
@@ -471,6 +521,7 @@ final class PreparedMusic implements AutoCloseable {
         desired.clear(); album.clear(); albumCompleted.clear(); failures.clear();
         requested = firstUpcoming = "";
         started = false;
+        closeStream();
         if (active != null) active.cancel();
     }
     @Override public synchronized void close() {

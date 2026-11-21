@@ -30,6 +30,7 @@ with zipfile.ZipFile(Path(sys.argv[1])) as apk:
             raise SystemExit(f'Unexpected ARM64 runtime bytes in {name}')
     dexes = [apk.read(name) for name in apk.namelist() if name.startswith('classes') and name.endswith('.dex')]
     for name in (b'Lcom/blackboxstream/mobile/PreparedMusic;', b'Lcom/blackboxstream/mobile/BundledMusicRuntime;',
+                 b'Lcom/blackboxstream/mobile/ProgressiveMusicAudio;',
                  b'Lorg/apache/commons/compress/archivers/zip/ZipFile;'):
         if not any(name in dex for dex in dexes):
             raise SystemExit(f'Missing class in package: {name.decode()}')
