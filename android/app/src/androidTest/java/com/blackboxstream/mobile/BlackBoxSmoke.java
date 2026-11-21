@@ -371,7 +371,7 @@ public final class BlackBoxSmoke extends Instrumentation {
                 assertPass("On a metered link the app does not prepare ahead without permission", prepared.size() == 1);
                 tapWeb(web, "#bgQueueToggle");
                 tapWeb(web, "#bbxMusicMobileLookahead");
-                assertPass("The queue's mobile opt-in updates the same active plan, not the track order", jsTrue(web,
+                await("The queue's mobile opt-in updates the same active plan, not the track order", 5000, () -> jsTrue(web,
                         "planLog.at(-1)?.playing && planLog.at(-1)?.mobileLookahead"
                                 + " && localStorage.getItem('bbxAndroidMusicMobileLookahead')==='1'"
                                 + " && planLog.at(-1).upcoming[0].title==='Locked out of Heaven'"));
