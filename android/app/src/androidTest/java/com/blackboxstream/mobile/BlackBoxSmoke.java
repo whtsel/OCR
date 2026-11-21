@@ -496,6 +496,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             throw new AssertionError(error.getMessage() + ": " + js(web,
                     "JSON.stringify({title:document.querySelector('#bgTitle').textContent,blob:document.querySelector('#bgAudio').src.startsWith('blob:'),"
                             + "error:document.querySelector('#bgAudio').error?.code,duration:document.querySelector('#bgAudio').duration,time:document.querySelector('#bgAudio').currentTime,"
+                            + "ready:document.querySelector('#bgAudio').readyState,seeking:document.querySelector('#bgAudio').seeking,"
                             + "busy:document.querySelector('.music-ui-loading-v52')?.outerHTML.slice(0,150),paused:document.querySelector('#bgAudio').paused})"), error);
         }
     }
@@ -523,10 +524,13 @@ public final class BlackBoxSmoke extends Instrumentation {
                 ProgressiveMusicAudio.Read first = stream.read("bytes=101-116");
                 assertPass("A WebView range is bounded and maps to the expected audio bytes",
                         first != null && first.status == 206 && first.length == 16 && first.contentRange.equals("bytes 101-116/" + audio.length)
+                                && first.body.available() == audio.length && first.body.skip(101) == 101
                                 && Arrays.equals(TorrentMeta.slurp(first.body, 16), Arrays.copyOfRange(audio, 101, 117)));
                 assertPass("Unsatisfiable and multi-part requests do not open readers",
                         stream.read("bytes=0-10,20-30").status == 416 && stream.read("bytes=" + audio.length + "-").status == 416);
                 ProgressiveMusicAudio.Read tail = stream.read("bytes=-32");
+                assertPass("WebView's seek does not skip twice in a suffix response", tail.status == 206
+                        && tail.body.available() == audio.length && tail.body.skip(audio.length - 32) == audio.length - 32);
                 FutureTask<byte[]> pending = new FutureTask<>(() -> TorrentMeta.slurp(tail.body, 32));
                 Thread reader = new Thread(pending, "fixture-music-seek");
                 reader.start();

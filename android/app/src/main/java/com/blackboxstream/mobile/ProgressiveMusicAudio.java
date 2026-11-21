@@ -137,12 +137,23 @@ final class ProgressiveMusicAudio implements Closeable {
     private final class Window extends InputStream {
         private final long end;
         private long pos;
+        private boolean opening = true;
         private volatile boolean released;
         Window(long pos, long end) { this.pos = pos; this.end = end; }
 
         @Override public int available() throws IOException {
             if (closed || released) return 0;
-            return (int) Math.max(0, Math.min(end, bytes.size()) - pos);
+            // Before reading, Chromium's WebView verifies the Range against available(), even
+            // for an intercepted 206. Its size check needs the *whole representation* length.
+            return (int) (opening ? length : Math.max(0, Math.min(end, bytes.size()) - pos));
+        }
+
+        @Override public long skip(long count) throws IOException {
+            if (closed || released) throw new IOException("The exact audio buffer is no longer available.");
+            // WebView then seeks inside the InputStream. Our HTTP range is already positioned,
+            // so acknowledge this initial skip without applying the same offset twice.
+            if (opening && count > 0 && count == pos) { opening = false; return count; }
+            return super.skip(count);
         }
 
         @Override public int read() throws IOException {
@@ -153,6 +164,7 @@ final class ProgressiveMusicAudio implements Closeable {
         @Override public int read(byte[] buffer, int offset, int count) throws IOException {
             if (offset < 0 || count < 0 || offset > buffer.length - count) throw new IndexOutOfBoundsException();
             if (count == 0) return 0;
+            opening = false;
             if (pos >= end) return -1;
             long started = System.nanoTime();
             while (!closed && !released) {
