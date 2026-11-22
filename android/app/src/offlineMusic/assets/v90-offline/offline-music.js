@@ -328,7 +328,9 @@
       const controls = [button('Play saved', () => playList(sorted), 'om-link', `Play saved from ${track.album}`)];
       const album = musicAlbumCatalogV63?.byId.get(track.albumId);
       if (album && albumStatus(album).missing) controls.push(button('Queue missing', () => downloadMusicAlbumV63(album), 'om-link', `Queue missing: ${track.album}`));
-      return card({...track, title:track.album}, `${track.albumArtist} · ${knownTotal}`, controls, true);
+      const release = card({...track, title:track.album}, `${track.albumArtist} · ${knownTotal}`, controls, true);
+      release.classList.add('om-release');
+      return release;
     }));
     id('om-saved').replaceChildren(...(songs.length ? songs.slice(0, visibleLimit).map(track => card(track,
       track.artist, [button('▶', () => play('play', track.key), 'om-round', `Play ${track.title}`), button('✕', () => {
@@ -435,6 +437,13 @@
     if (!music && id('om-playlist-dialog').open) id('om-playlist-dialog').close();
     doc.classList.toggle('bbx-offline-active', music);
     doc.classList.toggle('bbx-offline-find', find);
+    if (music) {
+      if (!musicAlbumCatalogV63 && !musicAlbumCatalogPromiseV63) loadMusicAlbumCatalogV63().then(render).catch(() => {});
+      const musicLink = id('navMusic'), nav = musicLink.parentElement;
+      for (const link of nav.querySelectorAll('.navlink')) link.classList.toggle('active', link === musicLink);
+      const right = musicLink.getBoundingClientRect().right - nav.getBoundingClientRect().right;
+      if (right > 0) nav.scrollLeft += right + 6;
+    }
     for (const tab of id('om-tabs').querySelectorAll('button')) {
       if (tab.dataset.omPage === page) tab.setAttribute('aria-current','page'); else tab.removeAttribute('aria-current');
     }

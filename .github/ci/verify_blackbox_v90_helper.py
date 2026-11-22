@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import zipfile
 
-from check_blackbox_p11 import verify_refreshed_helper
+from check_blackbox_p11 import P19_BYTES, verify_refreshed_helper
 
 ARM64 = {
     'libffmpeg.so': '1b8d5c371ea79e6e7a1930b31f2ad6a2731e48d75ceddc9c36dffda6e0092401',
@@ -16,8 +16,16 @@ ARM64 = {
     'libqjs.so': 'a0fe160a8cd76eec34132f945664856e96687d701e3b1ff28dff44ea1fad13bc',
 }
 
+offline = '--offline' in sys.argv[2:]
 with zipfile.ZipFile(Path(sys.argv[1])) as apk:
-    verify_refreshed_helper(apk.read('res/raw/ytdlp'))
+    pin = 'res/raw/ytdlp'
+    if offline and pin not in apk.namelist():
+        # aapt2 may shorten the in-ZIP resource path in release APKs.
+        resources = [member.filename for member in apk.infolist()
+                     if member.filename.startswith('res/') and member.file_size == P19_BYTES]
+        assert len(resources) == 1, f'Expected one release resource of the pinned helper size, got {resources}'
+        pin = resources[0]
+    verify_refreshed_helper(apk.read(pin))
     for member in apk.namelist():
         assert not member.startswith('assets/fixtures/') and not member.endswith(('/dawn.mp4', '/orbit.m4a')), f'Test-only media shipped: {member}'
     for line in Path('android/V90-ASSETS.sha256').read_text().splitlines():
@@ -34,7 +42,7 @@ with zipfile.ZipFile(Path(sys.argv[1])) as apk:
                  b'Lorg/apache/commons/compress/archivers/zip/ZipFile;'):
         if not any(name in dex for dex in dexes):
             raise SystemExit(f'Missing class in package: {name.decode()}')
-    if '--offline' in sys.argv[2:]:
+    if offline:
         for name in (b'OfflineMusicLibrary', b'OfflineMusicPlayer', b'WholeFileMusicRuntime'):
             assert any(b'Lcom/blackboxstream/mobile/' + name + b';' in dex for dex in dexes), name
         for name in ('offline-music.js', 'offline-music.css', 'music-panels.html', 'icon.svg', 'mix.svg', 'kwaku.svg', 'espresso.svg'):

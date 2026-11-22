@@ -41,7 +41,7 @@ jobs:
           (cd android/app/src/main/assets/v90 && sha256sum -c ../../../../../V90-ASSETS.sha256)
           node --check android/app/src/offlineMusic/assets/v90-offline/offline-music.js
           python3 -B android/tests/test_catalogue_music.py
-      - name: Build the full v90 app and sign the side-by-side package
+      - name: Build the full v90 ARM64 release candidate
         run: |
           log=$(mktemp)
           if ! (cd android && gradle :app:assembleRelease --no-daemon --console=plain -PbbxOfflineMusic=true) > "$log" 2>&1; then
@@ -50,22 +50,7 @@ jobs:
             printf '::error::%s\n' "${detail//$'\n'/' / '}"
             exit 1
           fi
-          tools="$ANDROID_HOME/build-tools/35.0.0"
-          apk="$RUNNER_TEMP/BlackBox-Stream-v90-Offline-ARM64.apk"
-          "$tools/zipalign" -P 16 -f 4 android/app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/aligned.apk"
-          keytool -genkeypair -keystore "$RUNNER_TEMP/offline-preview.p12" -storepass test-only -keypass test-only \
-            -alias preview -keyalg RSA -keysize 2048 -validity 365 -dname 'CN=BlackBox Stream v90 Offline Test' >/dev/null
-          "$tools/apksigner" sign --ks "$RUNNER_TEMP/offline-preview.p12" --ks-pass pass:test-only --out "$apk" "$RUNNER_TEMP/aligned.apk"
-          "$tools/apksigner" verify --verbose "$apk"
-          "$tools/zipalign" -P 16 -c 4 "$apk"
-          "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
-          grep -q "^package: name='com.blackboxstream.mobile.offline' versionCode='14' versionName='1.5.0-offline'" "$RUNNER_TEMP/badging.txt"
-          grep -q "^application-label:'BlackBox Stream v90 Offline'$" "$RUNNER_TEMP/badging.txt"
-          grep -q "^launchable-activity: name='com.blackboxstream.mobile.V90Activity'" "$RUNNER_TEMP/badging.txt"
-          grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
-          if grep -q '^application-debuggable' "$RUNNER_TEMP/badging.txt"; then echo 'Debuggable phone package' >&2; exit 1; fi
-          python3 -B .github/ci/verify_blackbox_v90_helper.py "$apk" --offline
-          echo "::notice::$(sha256sum "$apk")"
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/v90-unsigned.apk"
       - name: Build the x86 sibling and stage deterministic fixtures
         run: |
           log=$(mktemp)
@@ -89,6 +74,38 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
           script: PYTHONPATH=".github/ci:$RUNNER_TEMP/offline-tools" python3 -B -u .github/ci/smoke_v90_offline.py android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Sign and verify the non-debuggable ARM64 APK
+        run: |
+          set -Eeuo pipefail
+          phase=alignment
+          trap 'code=$?; echo "::error::ARM64 verification failed during $phase (exit $code)"; exit "$code"' ERR
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          apk="$RUNNER_TEMP/BlackBox-Stream-v90-Offline-ARM64.apk"
+          "$tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/v90-unsigned.apk" "$RUNNER_TEMP/aligned.apk"
+          phase=key-generation
+          keytool -genkeypair -keystore "$RUNNER_TEMP/offline-preview.p12" -storepass test-only -keypass test-only \
+            -alias preview -keyalg RSA -keysize 2048 -validity 365 -dname 'CN=BlackBox Stream v90 Offline Test' >/dev/null
+          phase=signing
+          "$tools/apksigner" sign --ks "$RUNNER_TEMP/offline-preview.p12" --ks-pass pass:test-only --out "$apk" "$RUNNER_TEMP/aligned.apk"
+          phase=signature-check
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/zipalign" -P 16 -c 4 "$apk"
+          phase=manifest-check
+          "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
+          metadata=$(grep -E '^(package:|application-label:|launchable-activity:|native-code:|application-debuggable)' "$RUNNER_TEMP/badging.txt")
+          echo "::notice::${metadata//$'\n'/' / '}"
+          grep -q "^package: name='com.blackboxstream.mobile.offline' versionCode='14' versionName='1.5.0-offline'" "$RUNNER_TEMP/badging.txt"
+          grep -q "^application-label:'BlackBox Stream v90 Offline'$" "$RUNNER_TEMP/badging.txt"
+          grep -q "^launchable-activity: name='com.blackboxstream.mobile.V90Activity'" "$RUNNER_TEMP/badging.txt"
+          grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
+          if grep -q '^application-debuggable' "$RUNNER_TEMP/badging.txt"; then echo '::error::Debuggable phone package'; exit 1; fi
+          phase=package-content
+          if ! report=$(python3 -B .github/ci/verify_blackbox_v90_helper.py "$apk" --offline 2>&1); then
+            echo "::error::${report//$'\n'/' / '}"
+            exit 1
+          fi
+          echo "$report"
+          echo "::notice::$(sha256sum "$apk")"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: BlackBox-Stream-v90-Offline-ARM64
