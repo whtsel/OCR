@@ -6,6 +6,10 @@ on:
         description: Compare a fresh Espresso save in full v90 Find and the archived-helper pilot (no upload)
         type: boolean
         default: false
+      pilot_only:
+        description: In a live trial, run only the original-helper control (do not retry full v90)
+        type: boolean
+        default: false
   push:
     branches: ['arena/**']
     paths:
@@ -124,7 +128,7 @@ jobs:
             export PYTHONPATH=".github/ci:$RUNNER_TEMP/offline-tools";
             if [ "${{ inputs.verify_live_catalogue }}" = true ]; then
             python3 -B -u .github/ci/compare_v90_offline.py
-            android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/pilot-live.apk";
+            android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/pilot-live.apk" ${{ inputs.pilot_only && '--only-pilot' || '' }};
             else python3 -B -u .github/ci/smoke_v90_offline.py android/app/build/outputs/apk/debug/app-debug.apk; fi
       - name: Require package verification before upload
         if: ${{ !inputs.verify_live_catalogue && steps.package.outcome != 'success' }}

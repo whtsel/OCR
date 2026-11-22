@@ -111,16 +111,17 @@ def pilot_save(apk, directory):
     install_fresh(apk, PILOT)
     v90.airplane(False)
     p11.adb('shell', 'am', 'start', '-W', '-n', pilot.ACTIVITY, timeout=35)
+    # The native bridge can answer before the deferred script has mounted Find.
+    # Wait for the rendered empty Collection, then use the same tap as the pilot smoke.
+    pilot.visible('Playlists', 'Queue what you want. Play what’s saved.')
     with pilot.page_devtools() as js:
         profile = 'JSON.parse(OfflineMusic.library())'
         v90.wait(js, f'{profile}.tracks?.length===2', 'Pilot did not load the two documented controls')
         if js(f'{profile}.fixtures || {profile}.tracks.some(t=>t.saved) || {profile}.jobs.length!==0'):
             raise RuntimeError('Pilot did not start empty and in live mode')
-        v90.click(js, '#tab-find')
-        button = '[aria-label="Queue Espresso"]'
-        v90.wait(js, f'!!document.querySelector({json.dumps(button)})', 'Archive pilot Espresso control missing')
+        pilot.tap('Find')
         started = time.monotonic()
-        v90.click(js, button)
+        pilot.tap('Queue Espresso')
         state = f"(()=>{{const p={profile};return p.tracks.find(t=>t.key==='espresso')?.saved?'pass':p.jobs.find(t=>t.key==='espresso')?.state}})()"
         v90.wait(js, state, 'Pilot request never entered the queue')
         if js(state) == 'wifi':
@@ -145,20 +146,23 @@ def pilot_save(apk, directory):
     return 'pass'
 
 
-def main(full, pilot):
+def main(full, pilot, only_pilot=False):
     if p11.adb('shell', 'getprop', 'ro.kernel.qemu') != '1' or p11.adb('shell', 'getprop', 'ro.product.cpu.abi') != 'x86_64':
         raise RuntimeError('Live comparison is only for a disposable x86 Android emulator')
     with ZipFile(full) as a, ZipFile(pilot) as b:
         names = {n for n in b.namelist() if n.startswith('lib/x86_64/') and n.endswith('.so')}
         if len(names) != 6 or any(a.read(n) != b.read(n) for n in names):
             raise RuntimeError('The six x86 runtime files are not identical')
-    note(f'Cold A/B of Espresso ({VIDEO}), one job per app, same x86 runtime; no fixtures, no credentials')
+    mode = 'pilot reference' if only_pilot else 'A/B'
+    note(f'Cold {mode} of Espresso ({VIDEO}), one job per app, matching x86 runtime; no fixtures, no credentials')
     p11.adb('shell', 'wm', 'size', '720x1560')
     p11.adb('shell', 'wm', 'density', '320')
     results = {}
+    cases = [('p11 pilot', pilot_save, pilot, PILOT)]
+    if not only_pilot:
+        cases.insert(0, ('full v90', full_save, full, v90.PKG))
     with tempfile.TemporaryDirectory() as tmp:
-        for name, function, apk, package in (('full v90', full_save, full, v90.PKG),
-                                               ('p11 pilot', pilot_save, pilot, PILOT)):
+        for name, function, apk, package in cases:
             if 'limited' in results.values():
                 results[name] = 'not tried after rate limit'
                 break
@@ -175,15 +179,16 @@ def main(full, pilot):
                 if trace:
                     note(f'{name} stages: {p11.diagnostic(trace)}')
         summary = ' / '.join(f'{name}: {outcome}' for name, outcome in results.items())
-        print(f'::notice::Cold Espresso A/B: {summary}')
+        note(f'Cold Espresso {mode}: {summary}')
         if set(results.values()) != {'pass'}:
-            raise RuntimeError(f'Fresh save and offline seek not verified for both paths. {summary}')
+            raise RuntimeError(f'Fresh save and offline seek not verified. {summary}')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('full', type=Path)
     parser.add_argument('pilot', type=Path)
+    parser.add_argument('--only-pilot', action='store_true', help='Run only the reference app on a disposable emulator')
     try:
         main(**vars(parser.parse_args()))
     except Exception as error:
