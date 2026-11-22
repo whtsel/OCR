@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -29,11 +30,13 @@ final class OfflineMusicLibrary {
     static final int MAX_RECORDS = 1000;
     static final int MAX_BATCH = 120; // The largest packaged v90 album has 100 rows.
     private static final int MAX_PLAYLISTS = 100;
+    private static final int PARALLEL_DOWNLOADS = 5;
     static final String TAG = "BlackBoxOfflineMusic";
     private static OfflineMusicLibrary instance;
 
     // Loading the standalone v90 build does not load any helper dependencies.
-    interface Downloader { File fetch(PreparedMusic.Track track, File staging) throws Exception; }
+    interface Downloader { File fetch(PreparedMusic.Track track, File staging, Progress progress) throws Exception; }
+    interface Progress { void report(String phase, long received, long total); }
 
     static synchronized OfflineMusicLibrary open(Context context) {
         if (instance == null) instance = new OfflineMusicLibrary(context.getApplicationContext());
@@ -49,20 +52,20 @@ final class OfflineMusicLibrary {
         final JSONObject info;
         final PreparedMusic.Track track;
         final String batch, label, failure;
-        final boolean mobile, complete;
+        final boolean complete;
 
-        Entry(JSONObject row, String batch, String label, String failure, boolean mobile, boolean complete) throws JSONException {
+        Entry(JSONObject row, String batch, String label, String failure, boolean complete) throws JSONException {
             info = clean(row);
             JSONObject spec = new JSONObject(info.toString());
             // A missing edition/duration is a visible blocked queue item, not permission to look up a substitute.
             spec.put("source", "");
             track = new PreparedMusic.Track(spec, false);
-            this.batch = batch; this.label = label; this.failure = failure; this.mobile = mobile; this.complete = complete;
+            this.batch = batch; this.label = label; this.failure = failure; this.complete = complete;
         }
 
-        private Entry(Entry prev, String reason, boolean mobile, boolean complete) {
+        private Entry(Entry prev, String reason, boolean complete) {
             info = prev.info; track = prev.track; batch = prev.batch; label = prev.label;
-            failure = reason; this.mobile = mobile; this.complete = complete;
+            failure = reason; this.complete = complete;
         }
 
         private static String text(JSONObject row, String name, int limit) throws JSONException {
@@ -84,11 +87,10 @@ final class OfflineMusicLibrary {
         }
 
         boolean identified() { return track.seconds > 0 && !track.album.isEmpty(); }
-        Entry result(String reason, boolean saved) { return new Entry(this, reason, mobile, saved); }
-        Entry allowMobile() { return new Entry(this, failure, true, complete); }
+        Entry result(String reason, boolean saved) { return new Entry(this, reason, saved); }
         JSONObject encode() throws JSONException {
             return new JSONObject(info.toString()).put("batch", batch).put("label", label)
-                    .put("failure", failure).put("mobile", mobile).put("complete", complete);
+                    .put("failure", failure).put("complete", complete);
         }
     }
 
@@ -96,10 +98,16 @@ final class OfflineMusicLibrary {
     private final SharedPreferences prefs;
     private final ConnectivityManager network;
     private final Downloader downloader;
-    private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
+    private static final class Job {
+        String phase = "preparing";
+        long received, total;
+    }
+
+    private final ExecutorService workers = Executors.newFixedThreadPool(PARALLEL_DOWNLOADS);
+    private final ScheduledExecutorService cooldown = Executors.newSingleThreadScheduledExecutor();
     private final Map<String, Entry> entries = new LinkedHashMap<>();
     private JSONArray playlists = new JSONArray();
-    private String active = "";
+    private final Map<String, Job> active = new LinkedHashMap<>();
     private boolean paused;
     private long cooldownUntil;
     private String lastSnapshot;
@@ -118,7 +126,7 @@ final class OfflineMusicLibrary {
                 try {
                     JSONObject row = rows.getJSONObject(i);
                     Entry entry = new Entry(row, row.getString("batch"), row.getString("label"),
-                            row.getString("failure"), row.optBoolean("mobile"), row.optBoolean("complete"));
+                            row.getString("failure"), row.optBoolean("complete"));
                     if (ready(entry) != null) entry = entry.result("", true); // A kill may land between rename and prefs write.
                     else if (entry.complete) entry = entry.result("missing", false);
                     entries.put(entry.track.key, entry);
@@ -155,8 +163,8 @@ final class OfflineMusicLibrary {
         Network current = network == null ? null : network.getActiveNetwork();
         NetworkCapabilities caps = current == null ? null : network.getNetworkCapabilities(current);
         if (caps == null || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return 0;
-        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) return 3;
-        return network.getRestrictBackgroundStatus() == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED ? 2 : 1;
+        // Metering is diagnostic only. Any available Internet transport can start the queue.
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) ? 2 : 1;
     }
 
     private void persist() throws JSONException, IOException {
@@ -180,8 +188,8 @@ final class OfflineMusicLibrary {
                     if (tracks.length() == 0 || tracks.length() > MAX_BATCH) return error("Queue up to 120 songs at a time.");
                     String batch = UUID.randomUUID().toString(), label = Entry.text(request, "label", 240);
                     for (int i = 0; i < tracks.length(); i++) {
-                        Entry entry = new Entry(tracks.getJSONObject(i), batch, label, "", false, false);
-                        if (!entry.identified()) entry = entry.result("exact", false);
+                        Entry entry = new Entry(tracks.getJSONObject(i), batch, label, "", false);
+                        if (!entry.identified()) entry = entry.result("metadata", false);
                         if (!entries.containsKey(entry.track.key) && entries.size() >= MAX_RECORDS) {
                             entries.clear(); entries.putAll(before);
                             return error("Your Music library is full. Remove a saved song or clear a queue item first.");
@@ -192,15 +200,14 @@ final class OfflineMusicLibrary {
                 }
                 case "pause": paused = true; break;
                 case "resume": paused = false; break;
-                case "mobile": entries.replaceAll((key, entry) -> entry.batch.equals(value) ? entry.allowMobile() : entry); break;
                 case "retry": {
                     Entry entry = entries.get(value);
-                    if (entry != null && !value.equals(active) && retryable(entry.failure)) entries.put(value, entry.result("", false));
+                    if (entry != null && !active.containsKey(value) && retryable(entry.failure)) entries.put(value, entry.result("", false));
                     break;
                 }
                 case "remove": {
                     Entry entry = entries.get(value);
-                    if (entry != null && !value.equals(active) && ready(entry) == null) entries.remove(value);
+                    if (entry != null && !active.containsKey(value) && ready(entry) == null) entries.remove(value);
                     break;
                 }
                 case "playlist-add": {
@@ -232,7 +239,7 @@ final class OfflineMusicLibrary {
                 }
                 case "delete": {
                     Entry entry = entries.get(value);
-                    if (entry != null && !value.equals(active) && ready(entry) != null) {
+                    if (entry != null && !active.containsKey(value) && ready(entry) != null) {
                         // Commit the intent first; a failed metadata write must not delete the file.
                         entries.remove(value);
                         persist();
@@ -260,12 +267,11 @@ final class OfflineMusicLibrary {
             for (Entry entry : entries.values()) {
                 String status, reason = entry.failure;
                 if (ready(entry) != null) status = "saved";
-                else if (entry.track.key.equals(active)) status = "working";
+                else if (active.containsKey(entry.track.key)) status = "working";
                 else if (entry.complete) { status = "failed"; reason = "missing"; }
                 else if (!entry.failure.isEmpty()) status = "failed";
                 else if (paused) status = "paused";
                 else if (link == 0) status = "offline";
-                else if (link < 3 && (!entry.mobile || link == 1)) status = link == 1 ? "restricted" : "wifi";
                 else if (cooldownUntil > SystemClock.elapsedRealtime()) status = "cooldown";
                 else status = "queued";
                 rows.put(new JSONObject(entry.info.toString()).put("key", entry.track.key).put("state", status)
@@ -274,49 +280,74 @@ final class OfflineMusicLibrary {
             }
             lastLink = link;
             return lastSnapshot = new JSONObject().put("tracks", rows).put("paused", paused)
-                    .put("connected", link > 0).put("playlists", playlists).put("available", downloader != null).toString();
+                    .put("connected", link > 0).put("metered", link == 1).put("playlists", playlists).put("available", downloader != null).toString();
         } catch (JSONException invalid) { return error("Your Music library could not be read."); }
     }
 
     private static String error(String message) { return "{\"error\":" + JSONObject.quote(message) + "}"; }
 
     private static boolean retryable(String reason) {
-        return !"signin".equals(reason) && !"refused".equals(reason) && !"exact".equals(reason);
+        return !"signin".equals(reason) && !"refused".equals(reason) && !"metadata".equals(reason);
+    }
+
+    /** Separate from the durable list so byte ticks never rebuild or persist the queue. */
+    synchronized String progress() {
+        try {
+            JSONObject result = new JSONObject();
+            for (Map.Entry<String, Job> item : active.entrySet()) {
+                Job job = item.getValue();
+                result.put(item.getKey(), new JSONObject().put("phase", job.phase)
+                        .put("received", job.received).put("total", job.total));
+            }
+            return result.toString();
+        } catch (JSONException invalid) { return "{}"; }
+    }
+
+    private synchronized void report(String key, Job job, String phase, long received, long total) {
+        if (active.get(key) != job) return; // Ignore a late parser callback from a finished job.
+        job.phase = phase;
+        job.received = Math.max(job.received, received);
+        if (total > 0) job.total = total;
+        if (job.received > job.total) job.total = 0; // No trustworthy denominator yet.
     }
 
     private synchronized void kick() {
-        if (paused || !active.isEmpty() || downloader == null || V90Api.expired()
-                || cooldownUntil > SystemClock.elapsedRealtime()) return;
-        int link = link();
-        if (link < 2) return;
+        if (paused || active.size() >= PARALLEL_DOWNLOADS || downloader == null || V90Api.expired()
+                || cooldownUntil > SystemClock.elapsedRealtime() || link() == 0) return;
         for (Entry entry : entries.values()) {
-            if (entry.complete || !entry.failure.isEmpty() || ready(entry) != null || link != 3 && !entry.mobile) continue;
-            active = entry.track.key;
+            if (active.size() >= PARALLEL_DOWNLOADS) break;
+            if (entry.complete || !entry.failure.isEmpty() || active.containsKey(entry.track.key) || ready(entry) != null) continue;
+            Job job = new Job();
+            active.put(entry.track.key, job);
             lastSnapshot = null;
-            worker.execute(() -> download(entry));
-            return;
+            workers.execute(() -> download(entry, job));
         }
     }
 
-    private void download(Entry entry) {
-        String failure = "";
+    private static boolean directory(File folder) {
+        return folder.isDirectory() || folder.mkdirs() || folder.isDirectory(); // Other workers may create the parent.
+    }
+
+    private void download(Entry entry, Job job) {
+        String failure = "", key = entry.track.key;
         boolean deferred = false;
-        File work = new File(stage, entry.track.key);
+        File work = new File(stage, key);
         try {
             synchronized (this) {
-                int link = link();
-                Entry current = entries.get(entry.track.key);
-                deferred = paused || link < 2 || link == 2 && !current.mobile || V90Api.expired();
+                deferred = paused || link() == 0 || V90Api.expired() || cooldownUntil > SystemClock.elapsedRealtime();
             }
             if (!deferred) {
-                if ((!work.isDirectory() && !work.mkdirs()) || (!saved.isDirectory() && !saved.mkdirs())) throw new Refusal("storage");
-                File result = downloader.fetch(entry.track, work);
+                if (!directory(work) || !directory(saved)) throw new Refusal("storage");
+                File result = downloader.fetch(entry.track, work, (phase, received, total) -> report(key, job, phase, received, total));
                 if (result == null || !work.getCanonicalFile().equals(result.getCanonicalFile().getParentFile())) throw new Refusal("incomplete");
+                report(key, job, "verifying", 0, 0);
                 verify(result, entry.track.seconds);
                 if (!result.renameTo(file(entry))) throw new Refusal("storage");
             }
         } catch (Exception | LinkageError stopped) {
             failure = classify(stopped);
+            // If the active transport disappeared, wait for a connection rather than lose the job.
+            deferred = link() == 0 && ("network".equals(failure) || "helper".equals(failure));
         } finally {
             if (!deferred) {
                 File[] files = work.listFiles();
@@ -326,14 +357,14 @@ final class OfflineMusicLibrary {
         }
         synchronized (this) {
             if (!deferred) {
-                entries.put(entry.track.key, entries.get(entry.track.key).result(failure, failure.isEmpty()));
+                entries.put(key, entries.get(key).result(failure, failure.isEmpty()));
                 if ("limited".equals(failure)) {
                     cooldownUntil = SystemClock.elapsedRealtime() + 60000;
-                    worker.schedule(() -> { synchronized (this) { lastSnapshot = null; kick(); } }, 60, TimeUnit.SECONDS);
+                    cooldown.schedule(() -> { synchronized (this) { lastSnapshot = null; kick(); } }, 60, TimeUnit.SECONDS);
                 }
                 try { persist(); } catch (IOException | JSONException ignored) { Log.w(TAG, "Music job result could not be recorded"); }
             }
-            active = "";
+            active.remove(key);
             lastSnapshot = null;
             kick();
         }
@@ -349,7 +380,7 @@ final class OfflineMusicLibrary {
         if (problem.contains("http error 403") || problem.contains("forbidden") || problem.contains("video unavailable") || problem.contains("did not allow")) return "refused";
         if (problem.contains("space left") || problem.contains("storage")) return "storage";
         if (problem.contains("timed out") || problem.contains("connection") || problem.contains("took too long") || problem.contains("resolve host")
-                || problem.contains("no address") || error instanceof InterruptedException) return "network";
+                || problem.contains("no address") || problem.contains("stopped receiving data") || error instanceof InterruptedException) return "network";
         return "helper";
     }
 

@@ -4,20 +4,24 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline (ARM64)** is a full v90 Android build, not the Music pilot. Its
-package (`com.blackboxstream.mobile.offline`, `1.5.0-offline`) installs beside the pilot and other
-v90 builds. It starts with an empty private Collection; installed apps and their downloads are not
-copied or modified. Use Android 7.0 or later with an up-to-date System WebView. The original v90
-expiry still applies (end of 31 March 2027 UTC).
+**BlackBox Stream v90 Offline 1.5.1 (ARM64)** is the full v90 Android build, not the Music pilot.
+Its test package (`com.blackboxstream.mobile.offline.parallel`) installs beside 1.5.0, the pilot,
+and the other v90 builds. It starts with a separate, empty Collection so it does not overwrite or
+delete existing downloads. Use Android 7.0 or later with an up-to-date System WebView. The original
+v90 expiry still applies (end of 31 March 2027 UTC).
 
 - **Music → Find** is the original v90 Music discovery UI: fourteen genre shelves, instant and
   structured catalogue search, and ordered album tracklists. The download buttons explicitly add a
   song, selected group, or album to Downloads. A partial album offers **Play saved** and **Queue
   missing**. The catalogue includes metadata, not bundled audio.
-- **Downloads** starts new jobs on an unmetered network by default. Allow mobile data for a particular
-  group when needed (Android Data Saver takes precedence). Pause stops the queue after the current
-  job. Failed items appear separately with a reason and a Retry button where appropriate. Only a
-  verified complete recording is published; an unavailable provider or recording is not replaced.
+- **Downloads** starts up to five independent jobs when Android has an Internet connection,
+  including mobile data. There is no app-level network choice. Pause lets active jobs finish but
+  does not start another; a provider rate limit pauses new jobs briefly. Progress rings show actual
+  received bytes against a known transfer size, or spin without a percentage during lookup and
+  unknown-length transfers. A downloaded file only enters Collection after verification.
+  The bundled v90 Android helper resolves and downloads a catalogue recording in one session,
+  preferring AAC when available. Exact live and studio versions are kept distinct; missing evidence
+  or a provider refusal shows in Needs attention rather than saving a substitute.
 - **Collection** plays its saved, app-private files without the helper or a connection. To check it on
   a phone, save one song, force-stop the app, turn on airplane mode with Wi‑Fi off, reopen, and play
   and seek from Collection. The source must still allow a fresh download before this test.
@@ -27,10 +31,10 @@ expiry still applies (end of 31 March 2027 UTC).
 Build the offline package with `cd android && gradle :app:assembleRelease -PbbxOfflineMusic=true`
 (Gradle 8.9, JDK 17 and Android SDK 35; allow up to 3 GiB of Java heap for release dependencies).
 The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) signs the ARM64 test APK,
-checks the bundled v90 assets and pinned p11 helper, and tests an x86 sibling with synthetic media.
-It checks both album queue routes, grouped saves, a failed job followed by a successful wrapper
-transfer, retry, and playback/seek after a force-stop in airplane mode. It is not a live recording
-availability test. The test signing key is not a production update key.
+checks the bundled v90 assets and pinned Android helper, and tests an x86 sibling with synthetic
+media. The suite tests five overlapping real byte transfers on a metered connection, progress rings,
+pause and retry, both album queue routes, and playback/seek after a force-stop in airplane mode.
+It does not establish live-provider availability. The test signing key is not a production update key.
 
 ## Earlier Fast Start preview
 

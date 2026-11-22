@@ -336,26 +336,81 @@
     if (songs.length > visibleLimit) id('om-saved').append(button('Show more', () => { visibleLimit += libraryPageSize; renderCollection(); }, 'om-link om-more'));
   }
 
-  const jobStatus = {working:'Getting recording…', offline:'Waiting for connection', wifi:'Waiting for Wi-Fi',
-    restricted:'Waiting for unmetered network · Data Saver is on', paused:'Paused', queued:'Queued', cooldown:'Waiting for the provider cooldown'};
-  const failures = { exact:'No exact recording verified', signin:'Sign-in required', refused:'Provider refused this recording',
+  const jobStatus = {working:'Preparing recording…', offline:'Waiting for internet',
+    paused:'Paused', queued:'Queued', cooldown:'Waiting for the provider cooldown'};
+  const failures = { metadata:'Recording details missing in the catalogue', exact:'No exact recording found', signin:'Sign-in required', refused:'Provider refused this recording',
     network:'Connection interrupted', limited:'Provider rate limited this request', storage:'Could not save · check storage',
     incomplete:'A complete, playable file was not verified', missing:'Saved file missing', helper:'Download didn’t finish' };
+  const progressRows = new Map();
+  let lastProgress = '';
+  const size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB`
+    : bytes >= 1024 ? `${Math.floor(bytes / 1024)} KB` : `${bytes} B`;
+  const phaseLabel = {preparing:'Preparing recording…', downloading:'Downloading', finishing:'Finishing audio…', verifying:'Checking audio…'};
+  function progressRing(track, row) {
+    const wrap = node('div', 'om-progress is-indeterminate');
+    wrap.setAttribute('role', 'progressbar');
+    wrap.setAttribute('aria-label', `Download progress for ${track.title}`);
+    wrap.setAttribute('aria-valuetext', phaseLabel.preparing);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 44 44');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const style of ['om-progress-track', 'om-progress-arc']) {
+      const circle = document.createElementNS(svg.namespaceURI, 'circle');
+      circle.setAttribute('class', style);
+      circle.setAttribute('cx', '22'); circle.setAttribute('cy', '22'); circle.setAttribute('r', '18');
+      circle.setAttribute('pathLength', '100');
+      svg.append(circle);
+    }
+    const number = node('span', 'om-progress-number');
+    number.setAttribute('aria-hidden', 'true');
+    wrap.append(svg, number);
+    progressRows.set(track.key, {wrap, number, status:row.querySelector('.om-status')});
+    row.append(wrap);
+  }
+  function syncProgress() {
+    if (!progressRows.size) return;
+    const raw = bridge.progress();
+    if (raw === lastProgress) return;
+    const jobs = JSON.parse(raw);
+    lastProgress = raw;
+    for (const [key, {wrap, number, status}] of progressRows) {
+      const job = jobs[key];
+      if (!job) continue;
+      const known = job.total > 0 && job.received >= 0 && job.received <= job.total;
+      const percent = known ? Math.floor(job.received / job.total * 100) : null;
+      const label = phaseLabel[job.phase] || phaseLabel.preparing;
+      const received = job.received > 0 && job.phase === 'downloading';
+      status.textContent = received ? `${label} · ${size(job.received)}${known ? ` / ${size(job.total)}` : ''}` : label;
+      wrap.classList.toggle('is-indeterminate', !known);
+      if (known) {
+        wrap.style.setProperty('--om-download-offset', String(100 - percent));
+        wrap.setAttribute('aria-valuenow', percent);
+        number.textContent = `${percent}%`;
+      } else {
+        wrap.removeAttribute('aria-valuenow');
+        number.textContent = '';
+      }
+      wrap.setAttribute('aria-valuetext', known ? `${label}, ${percent}% of transfer` : status.textContent);
+    }
+  }
+
   function renderDownloads() {
     const pending = new Map();
+    progressRows.clear(); lastProgress = '';
     const waiting = data.tracks.filter(track => !['saved','failed'].includes(track.state));
     for (const track of waiting) batchOf(pending, track.batch).push(track);
     id('om-pause').hidden = !waiting.length && !data.paused;
-    id('om-pause').textContent = data.paused ? 'Resume queue' : waiting.some(row => row.state === 'working') ? 'Pause after current' : 'Pause queue';
+    id('om-pause').textContent = data.paused ? 'Resume queue' : waiting.some(row => row.state === 'working') ? 'Pause after active' : 'Pause queue';
     id('om-pending').replaceChildren(...(pending.size ? [...pending.values()].map(rows => {
       const block = node('div', 'om-batch');
       if (rows[0].label) {
         const head = node('header'); head.append(node('strong', '', rows[0].label), node('small', '', count(rows.length))); block.append(head);
       }
-      for (const track of rows) block.append(card(track, jobStatus[track.state] || 'Queued', track.state === 'working' ? [] : [
-        button('✕', () => command('remove', track.key), 'om-round', `Remove ${track.title} from queue`)]));
-      if (rows.some(row => row.state === 'wifi')) {
-        const footer = node('footer'); footer.append(button('Use mobile data for this group', () => command('mobile', rows[0].batch))); block.append(footer);
+      for (const track of rows) {
+        const row = card(track, jobStatus[track.state] || 'Queued', track.state === 'working' ? [] : [
+          button('✕', () => command('remove', track.key), 'om-round', `Remove ${track.title} from queue`)]);
+        if (track.state === 'working') progressRing(track, row);
+        block.append(row);
       }
       return block;
     }) : [empty('Queue is clear', 'Add songs from Find when you’re ready.') ]));
@@ -410,6 +465,7 @@
       if (views.has(state.view) || player.key) {
         const snapshot = bridge.library();
         if (snapshot !== last) updateLibrary(snapshot);
+        if (page === 'downloads' && !id('offline-downloads').hidden) syncProgress();
         const next = bridge.player();
         if (next !== lastPlayer || seekUntil && Date.now() > seekUntil) {
           lastPlayer = next; if (Date.now() > seekUntil) seekUntil = 0;

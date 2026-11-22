@@ -59,7 +59,7 @@ jobs:
           phase=alignment
           trap 'code=$?; echo "::error::ARM64 verification failed during $phase (exit $code)"; exit "$code"' ERR
           tools="$ANDROID_HOME/build-tools/35.0.0"
-          apk="$RUNNER_TEMP/BlackBox-Stream-v90-Offline-ARM64.apk"
+          apk="$RUNNER_TEMP/BlackBox-Stream-v90-Offline-1.5.1-ARM64.apk"
           "$tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/v90-unsigned.apk" "$RUNNER_TEMP/aligned.apk"
           phase=key-generation
           keytool -genkeypair -keystore "$RUNNER_TEMP/offline-preview.p12" -storepass test-only -keypass test-only \
@@ -73,8 +73,8 @@ jobs:
           "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
           metadata=$(grep -E '^(package:|application-label:|launchable-activity:|native-code:|application-debuggable)' "$RUNNER_TEMP/badging.txt")
           echo "::notice::${metadata//$'\n'/' / '}"
-          grep -q "^package: name='com.blackboxstream.mobile.offline' versionCode='14' versionName='1.5.0-offline'" "$RUNNER_TEMP/badging.txt"
-          grep -q "^application-label:'BlackBox Stream v90 Offline'$" "$RUNNER_TEMP/badging.txt"
+          grep -q "^package: name='com.blackboxstream.mobile.offline.parallel' versionCode='15' versionName='1.5.1-offline'" "$RUNNER_TEMP/badging.txt"
+          grep -q "^application-label:'BlackBox Stream v90 Offline 1.5.1'$" "$RUNNER_TEMP/badging.txt"
           grep -q "^launchable-activity: name='com.blackboxstream.mobile.V90Activity'" "$RUNNER_TEMP/badging.txt"
           grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
           if grep -q '^application-debuggable' "$RUNNER_TEMP/badging.txt"; then echo '::error::Debuggable phone package'; exit 1; fi
@@ -99,7 +99,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Test the v90 shell, Find, album queue and offline restart (synthetic audio)
+      - name: Test parallel downloads on a metered connection and v90 offline restart
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 35
@@ -113,8 +113,8 @@ jobs:
         run: exit 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: BlackBox-Stream-v90-Offline-ARM64
-          path: ${{ runner.temp }}/BlackBox-Stream-v90-Offline-ARM64.apk
+          name: BlackBox-Stream-v90-Offline-1.5.1-ARM64
+          path: ${{ runner.temp }}/BlackBox-Stream-v90-Offline-1.5.1-ARM64.apk
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

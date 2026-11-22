@@ -3,6 +3,7 @@ package com.blackboxstream.mobile;
 import android.content.Context;
 import android.os.SystemClock;
 import android.util.AtomicFile;
+import android.util.Log;
 import com.yausername.ffmpeg.FFmpeg;
 import com.yausername.youtubedl_android.YoutubeDL;
 import java.io.BufferedReader;
@@ -64,6 +65,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             companion = new String(TorrentMeta.slurp(in, 16 * 1024), StandardCharsets.UTF_8);
         }
         ready = true;
+        Log.i("BlackBoxMusic", "Packaged v90 helper ready; pin verified");
     }
 
     private static boolean matches(File file) throws Exception {
@@ -78,43 +80,53 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         return PIN.contentEquals(actual);
     }
 
+    private static final String BYTE_PROGRESS = "download:BBX_MEDIA:%(progress.status)s\n"
+            + "BBX_BYTES:%(progress.status)s:%(progress.downloaded_bytes)s:%(progress.total_bytes)s";
+
     @Override public PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control) throws Exception {
+        return fetch(track, scratch, control, track.source, null, null);
+    }
+
+    /** The original v90 resolve-and-transfer path with no progressive playback or second lookup. */
+    File saveOffline(PreparedMusic.Track track, File scratch, String pinned, String fixture,
+            OfflineMusicLibrary.Progress progress) throws Exception {
+        PreparedMusic.Result result = fetch(track, scratch, new PreparedMusic.Control(), pinned, fixture, progress);
+        return result == null ? null : result.audio;
+    }
+
+    private PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control,
+            String directId, String fixture, OfflineMusicLibrary.Progress progress) throws Exception {
         if (control.cancelled) return null;
-        // Match the phone-tested whole-file path, preferring AAC to avoid re-encoding where possible.
-        // An ordinary slow connection gets time to respond; provider refusals are not retried.
+        // Download the accepted recording from the same v90 extractor session. Prefer AAC
+        // when offered, no speculative second transfer, and no retry of a provider refusal.
         ArrayList<String> options = new ArrayList<>(Arrays.asList("--no-playlist", "--socket-timeout", "20",
                 "--retries", "0", "--extractor-retries", "0", "--fragment-retries", "0", "--abort-on-unavailable-fragments",
-                "--no-simulate", "--quiet", "--progress", "--newline", "--progress-delta", "1",
-                "--progress-template", ProgressiveMusicAudio.PROGRESS_TEMPLATE,
+                "--no-simulate", "--quiet", "--progress", "--newline", "--progress-delta", progress == null ? "1" : "0.5",
+                "--progress-template", progress == null ? ProgressiveMusicAudio.PROGRESS_TEMPLATE : BYTE_PROGRESS,
                 "--print", "before_dl:BBX_DOWNLOAD_START %(ext)s",
                 "--max-filesize", "24M", "-f", "bestaudio[ext=m4a]/bestaudio",
                 "-x", "--audio-format", "m4a", "--audio-quality", "0", "-o", new File(scratch, "audio.%(ext)s").getAbsolutePath()));
         File audio = new File(scratch, "audio.m4a");
-        if (!track.source.isEmpty()) {
+        if (fixture != null) {
+            // Only the test APK may supply a native-generated local tone path; never a bridge URL.
+            options.add("http://127.0.0.1:19090/" + fixture + ".m4a");
+            execute(control, scratch, false, progress, options.toArray(new String[0]));
+            return new PreparedMusic.Result(audio, "");
+        }
+        if (!directId.isEmpty()) {
             int min = Math.max(1, track.seconds - 6);
             int max = track.seconds == 0 ? PreparedMusic.MAX_SECONDS : track.seconds + 6;
-            options.addAll(Arrays.asList("--match-filters", "id = " + track.source + " & !is_live & !was_live & duration >= " + min + " & duration <= " + max,
-                    "https://www.youtube.com/watch?v=" + track.source));
-            run(control, scratch, options.toArray(new String[0]));
-            return new PreparedMusic.Result(audio, track.source);
+            options.addAll(Arrays.asList("--match-filters", "id = " + directId + " & !is_live & !was_live & duration >= " + min + " & duration <= " + max,
+                    "https://www.youtube.com/watch?v=" + directId));
+            execute(control, scratch, false, progress, options.toArray(new String[0]));
+            return new PreparedMusic.Result(audio, directId);
         }
-        // A remembered provider ID is a hint, not a pin. The companion rechecks all recording
-        // metadata and may search again if the hint is stale. It never changes track.key.
+        // A remembered provider ID is a hint, not a pin. It must pass the same matcher.
+        new File(scratch, "source-id").delete();
         options.addAll(0, Arrays.asList(track.title, track.artist, track.album, Integer.toString(track.seconds), remembered(track.key)));
-        execute(control, scratch, true, options.toArray(new String[0]));
+        execute(control, scratch, true, progress, options.toArray(new String[0]));
         if (control.cancelled) return null;
         return new PreparedMusic.Result(audio, sourceId(scratch));
-    }
-
-    /** Lookup only: neither a Play request nor a transfer of catalogue candidates. */
-    String findExact(PreparedMusic.Track track, File scratch) throws Exception {
-        new File(scratch, "source-id").delete();
-        execute(new PreparedMusic.Control(), scratch, true, track.title, track.artist, track.album,
-                Integer.toString(track.seconds), "", "--simulate", "--no-playlist", "--socket-timeout", "20",
-                "--retries", "0", "--extractor-retries", "0");
-        String id = sourceId(scratch);
-        if (!PreparedMusic.videoId(id)) throw new OfflineMusicLibrary.Refusal("exact");
-        return id;
     }
 
     private static String sourceId(File scratch) throws IOException {
@@ -170,11 +182,26 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         }
     }
 
-    private String run(PreparedMusic.Control control, File scratch, String... args) throws Exception {
-        return execute(control, scratch, false, args);
+    // Parse only byte counts emitted by the CLI; an absent/estimated total stays indeterminate.
+    private static void reportProgress(String line, OfflineMusicLibrary.Progress progress) {
+        if (progress == null) return;
+        if (line.startsWith("BBX_DOWNLOAD_START ")) {
+            progress.report("downloading", 0, 0);
+        } else if (line.startsWith("BBX_BYTES:") && line.length() <= 80) {
+            String[] fields = line.split(":", -1);
+            if (fields.length != 4) return;
+            if ("downloading".equals(fields[1]) || "finished".equals(fields[1]))
+                progress.report("finished".equals(fields[1]) ? "finishing" : "downloading", bytes(fields[2]), bytes(fields[3]));
+        }
     }
 
-    private String execute(PreparedMusic.Control control, File scratch, boolean discover, String... args) throws Exception {
+    private static long bytes(String text) {
+        if (!text.matches("[0-9]{1,12}")) return 0;
+        return Long.parseLong(text);
+    }
+
+    private String execute(PreparedMusic.Control control, File scratch, boolean discover,
+            OfflineMusicLibrary.Progress progress, String... args) throws Exception {
         MusicPreparationBudget budget = new MusicPreparationBudget(SystemClock.elapsedRealtime());
         try { start(); }
         catch (Exception | LinkageError failed) { throw new IOException("The bundled music helper could not start on this device."); }
@@ -216,7 +243,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                     else if ("BBX_CATALOGUE_QUERY".equals(line)) control.stage("search catalogue");
                     else if ("BBX_CATALOGUE_ALTERNATE".equals(line)) control.stage("search alternate wording");
                     else if ("BBX_CATALOGUE_VERIFY".equals(line)) control.stage("verify source metadata");
-                    maybeOfferStream(line, discover, scratch, control);
+                    if (progress == null) maybeOfferStream(line, discover, scratch, control);
+                    else reportProgress(line, progress);
                     // Capture bounded output for diagnostics; never impose a line reading limit on the child.
                     int keep = Math.min(line.length(), 65536 - captured.length());
                     if (keep > 0) captured.append(line, 0, keep).append('\n');

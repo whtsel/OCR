@@ -66,7 +66,7 @@ public final class V90Activity extends Activity {
         super.onCreate(state);
         root = Ui.column(this); root.setBackgroundColor(0xff101017);
         Ui.fitWindow(this, root); setContentView(root);
-        offlineMusic = "com.blackboxstream.mobile.offline".equals(getPackageName());
+        offlineMusic = "com.blackboxstream.mobile.offline.parallel".equals(getPackageName());
         api = offlineMusic ? new V90Api(this, null) : new V90Api(this);
         try {
             if (offlineMusic && (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0)
@@ -183,6 +183,7 @@ public final class V90Activity extends Activity {
         @JavascriptInterface public String queue(String action, String body) {
             return closed || V90Api.expired() ? "{\"error\":\"Music is not available.\"}" : musicLibrary.command(action, body);
         }
+        @JavascriptInterface public String progress() { return closed || V90Api.expired() ? "{}" : musicLibrary.progress(); }
         @JavascriptInterface public String player() { return closed || V90Api.expired() ? "{}" : musicPlayer.snapshot(); }
         @JavascriptInterface public void playback(String action, String value) {
             if (action == null || action.length() > 12 || value == null || value.length() > 70000) return;
