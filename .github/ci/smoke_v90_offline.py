@@ -186,7 +186,7 @@ def smoke(apk, root):
         click(js, '[data-nav=movies]')
         wait(js, "!document.querySelector('#viewBrowse').hidden && document.querySelector('#browseGrid').textContent.includes('TMDB key') && document.querySelector('#om-tabs').hidden", 'Movies/TMDB navigation regressed')
         click(js, '[data-nav=library]')
-        wait(js, "!document.querySelector('#viewLibrary').hidden && document.querySelector('.android-library-tools')", 'Original Library navigation regressed')
+        wait(js, "!document.querySelector('#viewLibrary').hidden && !!document.querySelector('.android-library-tools')", 'Original Library navigation regressed')
         if not js("!!document.querySelector('#navShare') && !!document.querySelector('#settingsWrap[data-platform=android]')"):
             raise RuntimeError('Local Share or native settings missing')
         click(js, '#navMusic')

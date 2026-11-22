@@ -51,30 +51,9 @@ jobs:
             exit 1
           fi
           cp android/app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/v90-unsigned.apk"
-      - name: Build the x86 sibling and stage deterministic fixtures
-        run: |
-          log=$(mktemp)
-          if ! (cd android && gradle :app:assembleDebug --no-daemon --console=plain -PbbxOfflineMusic=true -PbbxHelperAbi=x86_64) > "$log" 2>&1; then
-            tail -80 "$log"
-            detail=$(grep -A5 -E 'error:|What went wrong:' "$log" | head -c 2000 || true)
-            printf '::error::%s\n' "${detail//$'\n'/' / '}"
-            exit 1
-          fi
-          bash .github/ci/install_audio_probe.sh
-          python3 -m pip install --disable-pip-version-check --target "$RUNNER_TEMP/offline-tools" websocket-client==1.8.0
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Test the v90 shell, Find, album queue and offline restart (synthetic audio)
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
-        with:
-          api-level: 35
-          target: google_apis
-          arch: x86_64
-          disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
-          script: PYTHONPATH=".github/ci:$RUNNER_TEMP/offline-tools" python3 -B -u .github/ci/smoke_v90_offline.py android/app/build/outputs/apk/debug/app-debug.apk
       - name: Sign and verify the non-debuggable ARM64 APK
+        id: package
+        continue-on-error: true # Still capture emulator results; the final gate requires both.
         run: |
           set -Eeuo pipefail
           phase=alignment
@@ -106,6 +85,32 @@ jobs:
           fi
           echo "$report"
           echo "::notice::$(sha256sum "$apk")"
+      - name: Build the x86 sibling and stage deterministic fixtures
+        run: |
+          log=$(mktemp)
+          if ! (cd android && gradle :app:assembleDebug --no-daemon --console=plain -PbbxOfflineMusic=true -PbbxHelperAbi=x86_64) > "$log" 2>&1; then
+            tail -80 "$log"
+            detail=$(grep -A5 -E 'error:|What went wrong:' "$log" | head -c 2000 || true)
+            printf '::error::%s\n' "${detail//$'\n'/' / '}"
+            exit 1
+          fi
+          bash .github/ci/install_audio_probe.sh
+          python3 -m pip install --disable-pip-version-check --target "$RUNNER_TEMP/offline-tools" websocket-client==1.8.0
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test the v90 shell, Find, album queue and offline restart (synthetic audio)
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
+          script: PYTHONPATH=".github/ci:$RUNNER_TEMP/offline-tools" python3 -B -u .github/ci/smoke_v90_offline.py android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Require package verification before upload
+        if: steps.package.outcome != 'success'
+        run: exit 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: BlackBox-Stream-v90-Offline-ARM64
