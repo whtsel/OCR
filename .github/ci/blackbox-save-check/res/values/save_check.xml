@@ -1,0 +1,21 @@
+<resources>
+    <style name="SaveCheckTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">#C5AAF8</item>
+        <item name="android:statusBarColor">#131219</item>
+        <item name="android:navigationBarColor">#131219</item>
+        <item name="android:windowBackground">#131219</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:fontFamily">sans</item>
+    </style>
+    <item type="id" name="connection" />
+    <item type="id" name="pilot_save" />
+    <item type="id" name="full_save" />
+    <item type="id" name="pilot_result" />
+    <item type="id" name="full_result" />
+    <item type="id" name="pilot_play" />
+    <item type="id" name="full_play" />
+    <item type="id" name="stop_transfer" />
+    <item type="id" name="offline_seek" />
+    <item type="id" name="player_clock" />
+    <item type="id" name="copy_results" />
+</resources>

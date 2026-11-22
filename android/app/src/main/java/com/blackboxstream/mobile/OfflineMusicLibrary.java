@@ -385,7 +385,8 @@ final class OfflineMusicLibrary {
         return "helper";
     }
 
-    private static void verify(File file, int seconds) throws Refusal {
+    // Also used by the isolated save check so it cannot certify files the full app would reject.
+    static void verify(File file, int seconds) throws Refusal {
         long bytes = file.length();
         if (bytes < 32 || bytes > PreparedMusic.MAX_AUDIO) throw new Refusal("incomplete");
         try (RandomAccessFile data = new RandomAccessFile(file, "r")) {

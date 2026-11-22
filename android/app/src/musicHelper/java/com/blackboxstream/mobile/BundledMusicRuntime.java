@@ -69,7 +69,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         Log.i("BlackBoxMusic", "Packaged v90 helper ready; pin verified");
     }
 
-    private static boolean matches(File file) throws Exception {
+    static boolean matches(File file) throws Exception {
         if (!file.isFile() || file.length() != 3073072) return false;
         MessageDigest hash = MessageDigest.getInstance("SHA-256");
         try (InputStream in = new FileInputStream(file)) {

@@ -1,0 +1,64 @@
+name: BlackBox Music Save Check
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - '.github/ci/blackbox-save-check/**'
+      - '.github/workflows/blackbox-music-save-check.yml'
+permissions:
+  contents: read
+concurrency:
+  group: blackbox-music-save-check-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 19
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - name: Check production recording matcher and build isolated test APKs
+        run: |
+          python3 -B android/tests/test_catalogue_music.py
+          python3 -B -u .github/ci/check_blackbox_p11.py download "$RUNNER_TEMP/p11.apk"
+          log=$(mktemp)
+          if ! bash .github/ci/blackbox-save-check/build.sh "$RUNNER_TEMP/p11.apk" android/vendor/ytdlp "$RUNNER_TEMP/save-check" > "$log" 2>&1; then
+            tail -90 "$log"
+            detail=$(tail -c 2400 "$log")
+            echo "::error::${detail//$'\n'/' / '}"
+            exit 1
+          fi
+          cat "$log"
+          echo "::notice::$(sha256sum "$RUNNER_TEMP/save-check/BlackBox-Music-Save-Check-ARM64.apk")"
+      - name: Enable KVM and install synthetic audio verification tools
+        run: |
+          bash .github/ci/install_audio_probe.sh
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify fresh staging, isolated saves, cold seek and provider-stop guard (fixtures only)
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
+          script: >-
+            PYTHONPATH=.github/ci python3 -B -u .github/ci/blackbox-save-check/smoke.py "$RUNNER_TEMP/save-check/save-check-smoke.apk"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: BlackBox-Music-Save-Check-ARM64
+          path: ${{ runner.temp }}/save-check/BlackBox-Music-Save-Check-ARM64.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
