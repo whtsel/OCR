@@ -1,6 +1,11 @@
 name: BlackBox Stream v90 Offline Android
 on:
   workflow_dispatch:
+    inputs:
+      verify_live_catalogue:
+        description: Try one cold provider save from the original v90 Find, without fixtures (does not publish an APK)
+        type: boolean
+        default: false
   push:
     branches: ['arena/**']
     paths:
@@ -13,7 +18,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: blackbox-v90-offline-${{ github.ref }}
+  group: blackbox-v90-offline-${{ github.ref }}-${{ inputs.verify_live_catalogue && 'live' || 'fixtures' }}
   cancel-in-progress: true
 jobs:
   offline:
@@ -42,6 +47,7 @@ jobs:
           node --check android/app/src/offlineMusic/assets/v90-offline/offline-music.js
           python3 -B android/tests/test_catalogue_music.py
       - name: Build the full v90 ARM64 release candidate
+        if: ${{ !inputs.verify_live_catalogue }}
         run: |
           log=$(mktemp)
           if ! (cd android && gradle :app:assembleRelease --no-daemon --console=plain -PbbxOfflineMusic=true) > "$log" 2>&1; then
@@ -52,6 +58,7 @@ jobs:
           fi
           cp android/app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/v90-unsigned.apk"
       - name: Sign and verify the non-debuggable ARM64 APK
+        if: ${{ !inputs.verify_live_catalogue }}
         id: package
         continue-on-error: true # Still capture emulator results; the final gate requires both.
         run: |
@@ -99,7 +106,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Test parallel downloads on a metered connection and v90 offline restart
+      - name: Verify Android downloads and offline restart (fixtures or opt-in live trial)
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 35
@@ -107,11 +114,12 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
-          script: PYTHONPATH=".github/ci:$RUNNER_TEMP/offline-tools" python3 -B -u .github/ci/smoke_v90_offline.py android/app/build/outputs/apk/debug/app-debug.apk
+          script: PYTHONPATH=".github/ci:$RUNNER_TEMP/offline-tools" python3 -B -u .github/ci/smoke_v90_offline.py android/app/build/outputs/apk/debug/app-debug.apk ${{ inputs.verify_live_catalogue && '--live' || '' }}
       - name: Require package verification before upload
-        if: steps.package.outcome != 'success'
+        if: ${{ !inputs.verify_live_catalogue && steps.package.outcome != 'success' }}
         run: exit 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !inputs.verify_live_catalogue }}
         with:
           name: BlackBox-Stream-v90-Offline-1.5.1-ARM64
           path: ${{ runner.temp }}/BlackBox-Stream-v90-Offline-1.5.1-ARM64.apk

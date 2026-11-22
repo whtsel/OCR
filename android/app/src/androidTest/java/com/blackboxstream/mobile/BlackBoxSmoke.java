@@ -224,7 +224,8 @@ public final class BlackBoxSmoke extends Instrumentation {
         assertPass("Helper fixtures run only on the disposable preview package", musicPreview(app));
         Class<?> runtime = Class.forName("com.blackboxstream.mobile.BundledMusicRuntime");
         Object instance = runtime.getDeclaredConstructor(Context.class).newInstance(app);
-        java.lang.reflect.Method run = runtime.getDeclaredMethod("run", PreparedMusic.Control.class, File.class, String[].class);
+        java.lang.reflect.Method run = runtime.getDeclaredMethod("execute", PreparedMusic.Control.class, File.class,
+                boolean.class, OfflineMusicLibrary.Progress.class, String[].class);
         run.setAccessible(true);
         java.lang.reflect.Method offer = runtime.getDeclaredMethod("maybeOfferStream", String.class, boolean.class,
                 File.class, PreparedMusic.Control.class);
@@ -235,11 +236,11 @@ public final class BlackBoxSmoke extends Instrumentation {
         assertPass("Prepare a fresh test directory", scratch.mkdir());
         Activity desktop = null;
         try {
-            String installed = (String) run.invoke(instance, new PreparedMusic.Control(), scratch, new String[] {"--version"});
+            String installed = (String) run.invoke(instance, new PreparedMusic.Control(), scratch, false, null, new String[] {"--version"});
             assertPass("Pinned Android Python runtime executes yt-dlp 2026.10.26", PreparedMusic.VERSION.equals(installed.trim()));
             File video = new File(scratch, "fixture.mp4");
             copyFixture("dawn.mp4", video);
-            String phases = (String) run.invoke(instance, new PreparedMusic.Control(), scratch,
+            String phases = (String) run.invoke(instance, new PreparedMusic.Control(), scratch, false, null,
                     new String[] {"--enable-file-urls", "--no-simulate", "--quiet", "--progress", "--newline",
                             "--progress-template", ProgressiveMusicAudio.PROGRESS_TEMPLATE,
                             "--print", "before_dl:BBX_DOWNLOAD_START %(ext)s", "-x", "--audio-format", "m4a",

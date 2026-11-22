@@ -338,14 +338,15 @@
 
   const jobStatus = {working:'Preparing recording…', offline:'Waiting for internet',
     paused:'Paused', queued:'Queued', cooldown:'Waiting for the provider cooldown'};
-  const failures = { metadata:'Recording details missing in the catalogue', exact:'No exact recording found', signin:'Sign-in required', refused:'Provider refused this recording',
+  const failures = { metadata:'Recording details missing in the catalogue', exact:'Exact recording not verified', signin:'Sign-in required', refused:'Provider refused this recording',
     network:'Connection interrupted', limited:'Provider rate limited this request', storage:'Could not save · check storage',
     incomplete:'A complete, playable file was not verified', missing:'Saved file missing', helper:'Download didn’t finish' };
   const progressRows = new Map();
   let lastProgress = '';
   const size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB`
     : bytes >= 1024 ? `${Math.floor(bytes / 1024)} KB` : `${bytes} B`;
-  const phaseLabel = {preparing:'Preparing recording…', downloading:'Downloading', finishing:'Finishing audio…', verifying:'Checking audio…'};
+  const phaseLabel = {preparing:'Preparing recording…', searching:'Finding recording…', matching:'Checking recording…',
+    downloading:'Downloading', finishing:'Finishing audio…', verifying:'Checking audio…'};
   function progressRing(track, row) {
     const wrap = node('div', 'om-progress is-indeterminate');
     wrap.setAttribute('role', 'progressbar');

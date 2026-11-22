@@ -20,8 +20,9 @@ v90 expiry still applies (end of 31 March 2027 UTC).
   received bytes against a known transfer size, or spin without a percentage during lookup and
   unknown-length transfers. A downloaded file only enters Collection after verification.
   The bundled v90 Android helper resolves and downloads a catalogue recording in one session,
-  preferring AAC when available. Exact live and studio versions are kept distinct; missing evidence
-  or a provider refusal shows in Needs attention rather than saving a substitute.
+  preferring AAC when available. Exact live and studio versions are kept distinct. Published source
+  hints for the reported Gospel picks skip a search only when the provider's recording metadata still
+  matches. Missing evidence or a refusal shows in Needs attention rather than saving a substitute.
 - **Collection** plays its saved, app-private files without the helper or a connection. To check it on
   a phone, save one song, force-stop the app, turn on airplane mode with Wi‑Fi off, reopen, and play
   and seek from Collection. The source must still allow a fresh download before this test.
@@ -32,9 +33,12 @@ Build the offline package with `cd android && gradle :app:assembleRelease -PbbxO
 (Gradle 8.9, JDK 17 and Android SDK 35; allow up to 3 GiB of Java heap for release dependencies).
 The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) signs the ARM64 test APK,
 checks the bundled v90 assets and pinned Android helper, and tests an x86 sibling with synthetic
-media. The suite tests five overlapping real byte transfers on a metered connection, progress rings,
-pause and retry, both album queue routes, and playback/seek after a force-stop in airplane mode.
-It does not establish live-provider availability. The test signing key is not a production update key.
+media. The suite tests five overlapping real byte transfers on metered reconnect, exact and
+unknown-length progress rings, pause and retry, both album queue routes, and playback/seek after a
+force-stop in airplane mode. It does not establish live-provider availability. Dispatch the workflow
+with `verify_live_catalogue=true` to separately try a cold save of CeCe Winans's **Goodness of God
+(Live)** from the original Find, followed by offline playback if the save succeeds. This trial
+stops on a refusal and produces no APK. The test signing key is not a production update key.
 
 ## Earlier Fast Start preview
 

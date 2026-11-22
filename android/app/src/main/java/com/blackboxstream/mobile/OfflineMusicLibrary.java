@@ -330,13 +330,14 @@ final class OfflineMusicLibrary {
 
     private void download(Entry entry, Job job) {
         String failure = "", key = entry.track.key;
-        boolean deferred = false;
+        boolean deferred = false, attempted = false;
         File work = new File(stage, key);
         try {
             synchronized (this) {
                 deferred = paused || link() == 0 || V90Api.expired() || cooldownUntil > SystemClock.elapsedRealtime();
             }
             if (!deferred) {
+                attempted = true;
                 if (!directory(work) || !directory(saved)) throw new Refusal("storage");
                 File result = downloader.fetch(entry.track, work, (phase, received, total) -> report(key, job, phase, received, total));
                 if (result == null || !work.getCanonicalFile().equals(result.getCanonicalFile().getParentFile())) throw new Refusal("incomplete");
@@ -349,7 +350,7 @@ final class OfflineMusicLibrary {
             // If the active transport disappeared, wait for a connection rather than lose the job.
             deferred = link() == 0 && ("network".equals(failure) || "helper".equals(failure));
         } finally {
-            if (!deferred) {
+            if (attempted) {
                 File[] files = work.listFiles();
                 if (files != null) for (File f : files) f.delete();
                 work.delete();

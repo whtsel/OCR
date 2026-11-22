@@ -1,14 +1,15 @@
 """Drive the full v90 APK and native Music player on a disposable x86 emulator.
 
 Fixtures never request provider audio. The non-debuggable ARM64 deliverable cannot use them.
+The separate --live diagnostic requests one catalogue song without a fixture or credentials.
 """
+import argparse
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
 import json
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -67,11 +68,11 @@ def page():
         p11.adb('forward', '--remove', f'tcp:{port}', check=False)
 
 
-def wait(js, check, note, seconds=20):
+def wait(js, check, note, seconds=20, accept=bool):
     until = time.monotonic() + seconds
     while time.monotonic() < until:
         result = js(check)
-        if result:
+        if accept(result):
             return result
         time.sleep(.28)
     state = js("(()=>{const l=JSON.parse(window.OfflineMusic?.library()||'{}');return JSON.stringify({"
@@ -106,8 +107,9 @@ def force_stop():
 
 
 @contextmanager
-def recording_server(payloads, hold=None):
+def recording_server(payloads, holds=None, unknown=()):
     """Real helper subprocesses over adb reverse; never contact a music provider."""
+    holds = holds or {}
     seen = set()
 
     class Fixture(BaseHTTPRequestHandler):
@@ -118,11 +120,13 @@ def recording_server(payloads, hold=None):
                 return
             self.send_response(200)
             self.send_header('Content-Type', 'audio/mp4')
-            self.send_header('Content-Length', str(len(data)))
+            if self.path not in unknown:
+                self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             if send_body:
                 try:
                     seen.add(self.path)
+                    hold = holds.get(self.path)
                     if hold is None:
                         self.wfile.write(data)
                     else:
@@ -153,7 +157,7 @@ def recording_server(payloads, hold=None):
             p11.adb('reverse', 'tcp:19090', 'tcp:' + str(server.server_port))
             yield seen
         finally:
-            if hold:
+            for hold in set(holds.values()):
                 hold.set()
             p11.adb('reverse', '--remove', 'tcp:19090', check=False)
             server.shutdown()
@@ -190,17 +194,18 @@ def metered_connection(js):
     check = "(()=>{const q=JSON.parse(OfflineMusic.library());return q.connected&&q.metered})()"
     try:
         wait(js, check, 'No Android metered connection after enabling mobile data', 12)
+        print('Metered test transport: emulator cellular')
     except RuntimeError:
-        # Some runners lack an active virtual modem. Android's Wi-Fi metering policy also
-        # supplies a real metered default network; don't fake the result in JavaScript.
-        p11.adb('shell', 'svc', 'wifi', 'enable')
-        wait(js, 'JSON.parse(OfflineMusic.library()).connected===true', 'No emulator Internet transport')
+        # Some runners lack an active virtual modem. Set the real Android metering policy
+        # before enabling Wi-Fi, so a queued job cannot start on an unmetered connection.
         networks = p11.adb('shell', 'cmd', 'netpolicy', 'list', 'wifi-networks')
         for network in networks.splitlines():
             name, delimiter, _ = network.rpartition(';')
             if delimiter and name:
                 p11.adb('shell', 'cmd', 'netpolicy', 'set', 'metered-network', name, 'true')
+        p11.adb('shell', 'svc', 'wifi', 'enable')
         wait(js, check, 'Android did not report a metered Internet connection')
+        print('Metered test transport: emulator Wi-Fi marked metered by Android')
 
 
 def check_parallel(js, tone):
@@ -208,30 +213,32 @@ def check_parallel(js, tone):
         if track['state'] != 'saved':
             js(f"OfflineMusic.queue('remove',{json.dumps(track['key'])})")
     click(js, '#om-tab-downloads')
-    js("OfflineMusic.queue('pause','')")
+    wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'The reconnect test did not begin offline')
     tracks = [dict(ref=f'fixture:parallel:{k}', title=f'Parallel fixture {k}', artist='Fixture artist',
                    album='Synthetic AAC album', seconds=TRACKS[ESPRESSO][1], number=k, total=6) for k in range(1, 7)]
     request = json.dumps(dict(tracks=tracks, label='Parallel fixture downloads'))
     js(f"OfflineMusic.queue('enqueue',{json.dumps(request)})")
     rows = [t for t in entries(js) if t['ref'].startswith('fixture:parallel:')]
     keys = [t['key'] for t in rows]
-    if len(keys) != 6 or any(t['state'] != 'paused' for t in rows):
-        raise RuntimeError('Six controlled jobs were not queued')
+    if len(keys) != 6 or any(t['state'] != 'offline' for t in rows):
+        raise RuntimeError('Six controlled jobs did not wait for an Internet connection')
     if js("/Wi-Fi by default|Use mobile data/.test(document.querySelector('#offline-downloads').textContent)"):
         raise RuntimeError('Obsolete Wi-Fi/mobile download controls still in the UI')
-    gate = threading.Event()
-    first = [f'/{key}.m4a' for key in keys[:5]]
-    with recording_server({f'/{key}.m4a': tone for key in keys}, gate) as seen:
-        metered_connection(js)
-        click(js, '#om-pause')
+    gate, last_gate = threading.Event(), threading.Event()
+    paths = [f'/{key}.m4a' for key in keys]
+    holds = {path: gate if i < 5 else last_gate for i, path in enumerate(paths)}
+    with recording_server(dict.fromkeys(paths, tone), holds, unknown=(paths[-1],)) as seen:
+        metered_connection(js)  # Pending jobs must start automatically, without a Resume tap.
         wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.progress()),keys={json.dumps(keys[:5])};"
                  f"return Object.keys(p).length===5 && keys.every(k=>p[k]?.phase==='downloading' && "
                  f"p[k].total==={len(tone)} && p[k].received>0 && p[k].received<p[k].total)}})()",
              'Five real transfers did not overlap with accurate totals on a metered connection', 32)
-        wait(js, "document.querySelectorAll('#om-pending [role=progressbar][aria-valuenow]').length===5 && "
-                 "[...document.querySelectorAll('#om-pending [role=progressbar]')].every(e=>+e.getAttribute('aria-valuenow')>0 && +e.getAttribute('aria-valuenow')<100)",
-             'Downloads did not show five determinate, partial rings', 8)
-        if not all(path in seen for path in first) or f'/{keys[5]}.m4a' in seen:
+        wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.progress()),keys={json.dumps(keys[:5])};"
+                 "const rings=[...document.querySelectorAll('#om-pending [role=progressbar][aria-valuenow]')];"
+                 "return rings.length===5 && rings.every((e,i)=>{const j=p[keys[i]],n=+e.getAttribute('aria-valuenow');"
+                 "return j && n>0 && n<100 && n===Math.floor(j.received/j.total*100)})})()",
+             'Downloads did not show five rings with the actual transfer percentages', 8)
+        if not all(path in seen for path in paths[:5]) or paths[-1] in seen:
             raise RuntimeError('Concurrent downloads exceeded the five-job window')
         click(js, '#om-pause')
         click(js, '[data-nav=movies]')
@@ -242,12 +249,19 @@ def check_parallel(js, tone):
         click(js, '#navMusic')
         click(js, '#om-tab-downloads')
         click(js, '#om-pause')
-        wait(js, "JSON.parse(OfflineMusic.library()).tracks.every(t=>t.state==='saved')", 'The sixth job did not advance on resume')
-        if f'/{keys[5]}.m4a' not in seen:
+        wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.progress())[{json.dumps(keys[-1])}];"
+                 "const r=document.querySelector('#om-pending [role=progressbar]');"
+                 "return p?.received>0 && p.total===0 && p.phase==='downloading' && "
+                 "r?.classList.contains('is-indeterminate') && !r.hasAttribute('aria-valuenow') && "
+                 "r.getAttribute('aria-valuetext').includes('Downloading')"
+                 "})()", 'Unknown-length transfer did not show an indeterminate circle', 22)
+        last_gate.set()
+        wait(js, "JSON.parse(OfflineMusic.library()).tracks.every(t=>t.state==='saved')", 'The sixth job did not finish')
+        if paths[-1] not in seen:
             raise RuntimeError('The last job bypassed the fixture transfer')
         for row in rows:
             verify_bytes(row, tone)
-    print('::notice::PASS all five helper processes transferred bytes concurrently on a metered Internet connection; matching rings, pause, and sixth-job handoff')
+    print('::notice::PASS five helpers started automatically on metered reconnect; byte-accurate rings, pause, and sixth indeterminate transfer')
 
 
 def smoke(apk, root):
@@ -355,8 +369,8 @@ def smoke(apk, root):
         if failed['reason'] != 'incomplete':
             raise RuntimeError('First exact file failed for a different reason: ' + failed['reason'])
         verify_bytes(complete, tones[ESPRESSO])
-        if not received:
-            raise RuntimeError('The whole-file runtime did not fetch the loopback AAC fixture')
+        if not received or 'pin verified' not in p11.adb('logcat', '-d', '-s', 'BlackBoxMusic'):
+            raise RuntimeError('The byte-pinned v90 helper did not fetch the loopback AAC fixture')
         airplane(True)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Android did not drop its active network before retry')
         stage(failed, tones[KWAKU])
@@ -413,17 +427,74 @@ def smoke(apk, root):
         if remaining != [title for title in ordered if title != ESPRESSO]:
             raise RuntimeError(f'Partial album queued the wrong tracks: {remaining}')
         print('::notice::PASS partial album played its saved recording and queued exactly the remaining tracks')
-    if 'pin verified' in p11.adb('logcat', '-d', '-s', 'BlackBoxMusic'):
+    if 'Initializing packaged v90 helper' in p11.adb('logcat', '-d', '-s', 'BlackBoxMusic'):
         raise RuntimeError('Cold offline listening unexpectedly started the downloader')
+    print('::notice::PASS cold offline listening did not initialize the download helper')
     with page() as js:
         open_music(js)
         check_parallel(js, tones[ESPRESSO])
 
 
+def live_trial(apk):
+    """One cold request from the original Find. A refusal is a result, not a retry trigger."""
+    title = 'Goodness of God (Live)'
+    p11.adb('install', apk, timeout=100)
+    airplane(False)
+    with page() as js:
+        open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===true', 'No Android Internet transport for live trial')
+        click(js, '#om-tab-find')
+        chip = '#musicGenreChips button[title="Open 30 Gospel & Inspirational picks"]'
+        wait(js, f'!!document.querySelector({json.dumps(chip)})', 'Original Gospel shelf missing')
+        click(js, chip)
+        queue = f'#viewMusicGenre [data-genre-catalog] [aria-label="Queue {title}"]:not(:disabled)'
+        wait(js, f'!!document.querySelector({json.dumps(queue)})', 'Reported CeCe Winans row not in Find')
+        started = time.monotonic()
+        click(js, queue)
+        row, = entries(js)
+        if (row['ref'], row['title'], row['artist'], row['album'], row['seconds']) != (
+                'pick:1550189769', title, 'CeCe Winans', 'Believe For It', 298):
+            raise RuntimeError('The live trial did not select the original catalogue recording')
+        first_byte = None
+
+        def finished(status):
+            nonlocal first_byte
+            if first_byte is None and status['bytes'] > 0:
+                first_byte = time.monotonic() - started
+            return status['row']['state'] in ('saved', 'failed')
+
+        completed = wait(js, "(()=>{const r=JSON.parse(OfflineMusic.library()).tracks[0];"
+                             "return {row:r,bytes:JSON.parse(OfflineMusic.progress())[r.key]?.received||0}})()",
+                         'Live catalogue transfer did not finish within the helper budget', 265, finished)['row']
+        elapsed = time.monotonic() - started
+        if completed['state'] != 'saved':
+            raise RuntimeError(f"Live provider trial: {title} not saved after {elapsed:.1f}s ({completed['reason']}). No fallback.")
+        print(f'::notice::Live provider file verified after {elapsed:.1f}s' +
+              (f'; first observed bytes after {first_byte:.1f}s' if first_byte is not None else ''))
+    force_stop()
+    airplane(True)
+    with page() as js:
+        open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Live playback check is not offline')
+        play = f'#om-saved [aria-label="Play {title}"]'
+        wait(js, f'!!document.querySelector({json.dumps(play)})', 'Live recording did not survive restart')
+        click(js, play)
+        wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.player());return p.key==='{row['key']}' && p.playing && p.position>700}})()",
+             'The live recording did not play offline')
+        print('::notice::PASS real catalogue lookup, exact save, and cold offline playback of Goodness of God (Live)')
+
+
 if __name__ == '__main__':
+    args = argparse.ArgumentParser(description=__doc__)
+    args.add_argument('apk', type=Path)
+    args.add_argument('--live', action='store_true')
+    request = args.parse_args()
     try:
-        with tempfile.TemporaryDirectory() as directory:
-            smoke(Path(sys.argv[1]), Path(directory))
+        if request.live:
+            live_trial(request.apk)
+        else:
+            with tempfile.TemporaryDirectory() as directory:
+                smoke(request.apk, Path(directory))
     except Exception as error:
         print('::error::' + p11.diagnostic(str(error)).replace('\n', ' / '))
         raise

@@ -46,6 +46,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
 
     private synchronized void start() throws Exception {
         if (ready) return;
+        Log.i("BlackBoxMusic", "Initializing packaged v90 helper");
         YoutubeDL.getInstance().init(app);
         FFmpeg.getInstance().init(app);
         // Update only from our own APK; init() alone leaves a previous installation's zipapp in place.
@@ -91,7 +92,11 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
     File saveOffline(PreparedMusic.Track track, File scratch, String pinned, String fixture,
             OfflineMusicLibrary.Progress progress) throws Exception {
         PreparedMusic.Result result = fetch(track, scratch, new PreparedMusic.Control(), pinned, fixture, progress);
-        return result == null ? null : result.audio;
+        if (result == null) return null;
+        // This hint is never sufficient for publication. The queue verifies the full file
+        // and any future use of the ID goes through exact metadata validation again.
+        if (fixture == null && pinned.isEmpty() && result.audio.isFile()) rememberSource(track, result.source);
+        return result.audio;
     }
 
     private PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control,
@@ -106,6 +111,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                 "--print", "before_dl:BBX_DOWNLOAD_START %(ext)s",
                 "--max-filesize", "24M", "-f", "bestaudio[ext=m4a]/bestaudio",
                 "-x", "--audio-format", "m4a", "--audio-quality", "0", "-o", new File(scratch, "audio.%(ext)s").getAbsolutePath()));
+        // A fresh resolution may pick a different transfer format; never append to old audio bytes.
+        if (progress != null) options.add("--no-continue");
         File audio = new File(scratch, "audio.m4a");
         if (fixture != null) {
             // Only the test APK may supply a native-generated local tone path; never a bridge URL.
@@ -185,7 +192,11 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
     // Parse only byte counts emitted by the CLI; an absent/estimated total stays indeterminate.
     private static void reportProgress(String line, OfflineMusicLibrary.Progress progress) {
         if (progress == null) return;
-        if (line.startsWith("BBX_DOWNLOAD_START ")) {
+        if ("BBX_CATALOGUE_QUERY".equals(line) || "BBX_CATALOGUE_ALTERNATE".equals(line)) {
+            progress.report("searching", 0, 0);
+        } else if ("BBX_CATALOGUE_VERIFY".equals(line)) {
+            progress.report("matching", 0, 0);
+        } else if (line.startsWith("BBX_DOWNLOAD_START ")) {
             progress.report("downloading", 0, 0);
         } else if (line.startsWith("BBX_BYTES:") && line.length() <= 80) {
             String[] fields = line.split(":", -1);
