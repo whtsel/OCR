@@ -40,8 +40,14 @@ final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
         // Like the phone tester, read an existing completed candidate before starting a new transfer.
         // The queue, not this cache hit, verifies it before publishing it to Collection.
         if (audio.isFile()) return audio;
-        if (fixtureOnly) throw new OfflineMusicLibrary.Refusal("incomplete");
-        YoutubeDLRequest request = new YoutubeDLRequest("https://www.youtube.com/watch?v=" + video);
+        // CI's disposable debug APK can exercise the actual wrapper against its local AAC fixture.
+        // No stage path, source URL, configuration file, or helper flag is supplied by the WebView.
+        String source = fixtureOnly ? "http://127.0.0.1:19090/" + video + ".m4a" : "https://www.youtube.com/watch?v=" + video;
+        YoutubeDLRequest request = new YoutubeDLRequest(source);
+        request.addOption("--ignore-config");
+        request.addOption("--no-plugin-dirs");
+        request.addOption("--no-remote-components");
+        request.addOption("--no-update");
         request.addOption("-x");
         request.addOption("--audio-format", "m4a");
         request.addOption("--audio-quality", "0");

@@ -3,12 +3,14 @@
 Fixtures never request provider audio. The non-debuggable ARM64 deliverable cannot use them.
 """
 from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from urllib.request import urlopen
 
@@ -97,8 +99,49 @@ def airplane(enabled):
         raise RuntimeError('Android did not change airplane mode')
 
 
-def release_app():
+def force_stop():
     p11.adb('shell', 'am', 'force-stop', PKG)
+
+
+@contextmanager
+def recording_server(data):
+    # Synthetic Espresso is delivered by the actual Android wrapper over adb reverse.
+    # Everything else is blocked or already staged. No live provider is involved.
+    received = []
+
+    class Fixture(BaseHTTPRequestHandler):
+        def serve(self, send_body):
+            path = '/' + TRACKS[ESPRESSO][0] + '.m4a'
+            if self.path != path:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'audio/mp4')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            if send_body:
+                self.wfile.write(data)
+                received.append(self.path)
+
+        def do_GET(self):
+            self.serve(True)
+
+        def do_HEAD(self):
+            self.serve(False)
+
+        def log_message(self, *_):
+            pass
+
+    with ThreadingHTTPServer(('127.0.0.1', 0), Fixture) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            p11.adb('reverse', 'tcp:19090', 'tcp:' + str(server.server_port))
+            yield received
+        finally:
+            p11.adb('reverse', '--remove', 'tcp:19090', check=False)
+            server.shutdown()
+            thread.join(timeout=5)
 
 
 def entries(js):
@@ -165,8 +208,35 @@ def smoke(apk, root):
             raise RuntimeError(f'The complete ordered album was not queued in one batch: {album}')
         for track in album:
             js(f"OfflineMusic.queue('remove',{json.dumps(track['key'])})")
-        # Wait for the API-driven status to reach the cards again after direct fixture cleanup.
         click(js, '#musicClear')
+        query(js, 'Short n Sweet', submit=False)
+        instant = '#musicInstantV76:not([hidden]) [data-kind="album"] [aria-label*="Short n"]'
+        wait(js, f'!!document.querySelector({json.dumps(instant)})', 'Instant album control missing')
+        click(js, instant)
+        tracks = entries(js)
+        if [t['key'] for t in tracks] != [t['key'] for t in album] or len({t['batch'] for t in tracks}) != 1:
+            raise RuntimeError('Instant album control did not queue the same exact ordered batch')
+        for track in tracks:
+            js(f"OfflineMusic.queue('remove',{json.dumps(track['key'])})")
+        click(js, '#musicClear')
+        click(js, '#musicGenreChips button:first-child')
+        wait(js, "!document.querySelector('#viewMusicGenre').hidden && !!document.querySelector('[data-genre-queue]')", 'Original v90 genre page did not open')
+        click(js, '[data-genre-queue]')
+        genre = entries(js)
+        if len(genre) != 30 or len({t['batch'] for t in genre}) != 1:
+            raise RuntimeError('Genre Queue all did not produce one 30-track batch')
+        for track in genre:
+            js(f"OfflineMusic.queue('remove',{json.dumps(track['key'])})")
+        click(js, '#om-tab-find')
+        query(js, KWAKU)
+        single = f'#musicTorrGrid [aria-label="Queue {KWAKU}"]'
+        wait(js, f'!!document.querySelector({json.dumps(single)})', 'v90 single-song control missing')
+        click(js, single)
+        tracks = entries(js)
+        if len(tracks) != 1 or tracks[0]['title'] != KWAKU or tracks[0]['state'] != 'offline':
+            raise RuntimeError(f'Single song was not explicitly queued: {tracks}')
+        js(f"OfflineMusic.queue('remove',{json.dumps(tracks[0]['key'])})")
+        wait(js, f'!!document.querySelector({json.dumps(single)})', 'Single-song status did not refresh')
         click(js, '#om-select-tools button:first-child')
         query(js, KWAKU)
         first = f'[aria-label="Select {KWAKU}"]'
@@ -180,25 +250,35 @@ def smoke(apk, root):
         pending = entries(js)
         if [track['title'] for track in pending] != [KWAKU, ESPRESSO] or any(t['state'] != 'offline' for t in pending):
             raise RuntimeError(f'Selected exact tracks are not both queued offline: {pending}')
-        print('::notice::PASS v90 artist/album/instant search, complete 12-track album batch, and two exact tracks selected across searches')
-    release_app()
-    for track in pending:
-        audio = tones[track['title']]
-        stage(track, audio[:-40000] if track['title'] == KWAKU else audio)
-    with page() as js:
+        click(js, '#om-pause')
+        if not all(t['state'] == 'paused' for t in entries(js)):
+            raise RuntimeError('Pause did not stop pending jobs')
+        click(js, '#om-pause')
+        if not all(t['state'] == 'offline' for t in entries(js)):
+            raise RuntimeError('Resume ignored the network restriction')
+        if not js("document.querySelector('#musicInstantV76').hidden"):
+            raise RuntimeError('Search suggestions leaked into Downloads')
+        print('::notice::PASS v90 artist/album/instant search, direct single-song queue, genre batch, both album paths and grouped selection/pause')
+    force_stop()
+    stage(pending[0], tones[KWAKU][:-40000])
+    with recording_server(tones[ESPRESSO]) as received, page() as js:
         open_music(js)
         if [t['state'] for t in entries(js)] != ['offline', 'offline']:
             raise RuntimeError('Queue did not survive force-stop')
         airplane(False)
-        wait(js, "JSON.parse(OfflineMusic.library()).tracks.map(t=>t.state).join(',')==='failed,saved'", 'Incomplete first file did not let the next recording finish', 100)
+        wait(js, "JSON.parse(OfflineMusic.library()).tracks.map(t=>t.state).join(',')==='failed,saved'", 'Incomplete first file did not let the next recording finish', 115)
         failed, complete = entries(js)
         if failed['reason'] != 'incomplete':
             raise RuntimeError('First exact file failed for a different reason: ' + failed['reason'])
         verify_bytes(complete, tones[ESPRESSO])
+        if not received:
+            raise RuntimeError('The whole-file runtime did not fetch the loopback AAC fixture')
         airplane(True)
         stage(failed, tones[KWAKU])
         click(js, '#om-tab-downloads')
-        click(js, f'#om-issues [aria-label="Retry {KWAKU}"]')
+        retry = f'#om-issues [aria-label="Retry {KWAKU}"]'
+        wait(js, f'!!document.querySelector({json.dumps(retry)})', 'The exact failed recording did not appear in Needs attention')
+        click(js, retry)
         wait(js, "JSON.parse(OfflineMusic.library()).tracks[0].state==='offline'", 'Retry did not respect offline mode')
         airplane(False)
         wait(js, "JSON.parse(OfflineMusic.library()).tracks.every(t=>t.state==='saved')", 'Retry did not save the verified file', 65)
@@ -207,8 +287,8 @@ def smoke(apk, root):
         click(js, '#om-new-playlist')
         js("document.getElementById('om-playlist-name').value='Offline fixture'; document.querySelectorAll('#om-playlist-tracks input').forEach(i=>i.checked=true)")
         click(js, '#om-playlist-save')
-        print('::notice::PASS durable queue, bad-file rejection, independent second save, retry and byte-identical verified files')
-    release_app()
+        print('::notice::PASS durable queue, bad-file rejection, helper transfer of the independent second file, retry and byte-identical saves')
+    force_stop()
     airplane(True)
     p11.adb('logcat', '-c')
     with page() as js:
@@ -226,7 +306,21 @@ def smoke(apk, root):
             jump = wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.player());return p.position>{duration//2}&&p.position}})()", 'Offline seek did not reach the far side of the file')
             wait(js, f"JSON.parse(OfflineMusic.player()).position>{jump+800}", 'Clock did not advance after seek')
             click(js, '#om-player-close')
-            print(f'::notice::PASS {title} synthetic fixture played and sought after a force-stop in airplane mode')
+            print(f'::notice::PASS {title} synthetic fixture played and sought after a force-stop in airplane mode ({duration} ms, seek {jump} ms)')
+        click(js, '#om-tab-find')
+        query(js, 'Sabrina Carpenter')
+        wait(js, '!!document.querySelector(\'[data-album-open-v63="1752214909"]\')', 'Original album search missing after restart')
+        click(js, '[data-album-open-v63="1752214909"]')
+        selector = '.music-album-detail-v63 [data-album-download-v63]'
+        if js(f'document.querySelector({json.dumps(selector)}).textContent') != 'Queue missing':
+            raise RuntimeError('Partial album did not offer Queue missing')
+        click(js, '[data-album-play-v63]')
+        wait(js, f"JSON.parse(OfflineMusic.player()).key==='{complete['key']}' && JSON.parse(OfflineMusic.player()).playing", 'Partial album did not play its only saved song')
+        click(js, selector)
+        remaining = [t['title'] for t in entries(js) if t['state'] == 'offline']
+        if remaining != [title for title in ordered if title != ESPRESSO]:
+            raise RuntimeError(f'Partial album queued the wrong tracks: {remaining}')
+        print('::notice::PASS partial album played its saved recording and queued exactly the remaining tracks')
     if 'pin verified' in p11.adb('logcat', '-d', '-s', 'BlackBoxOfflineMusic'):
         raise RuntimeError('Cold offline listening unexpectedly started the downloader')
 

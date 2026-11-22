@@ -148,6 +148,7 @@
     }
     if (!add) return;
     root.dataset.omSelected = String(isChosen);
+    root.dataset.omSaved = String(isSaved(row));
     add.dataset.omAdd = '';
     add.disabled = !!row;
     add.setAttribute('aria-pressed', String(isChosen));
@@ -160,19 +161,56 @@
     original(target, tracks, label);
     [...(target?.children || [])].forEach((root, index) => decorate(root, recording(tracks[index])));
   })(renderMusicTrackRowsV63);
-  musicAlbumDownloadLabelV63 = () => 'Queue album';
-  refreshMusicAlbumJobUiV63 = () => {};
-  const albumRows = album => musicAlbumTracksV63(album).map(track => recording({...track, _offlineAlbumSize:album.rawTracks.length}));
+  const albumCache = new WeakMap();
+  function albumRows(album) {
+    if (!album?.rawTracks) return [];
+    if (!albumCache.has(album)) albumCache.set(album, musicAlbumTracksV63(album)
+      .map(track => recording({...track, _offlineAlbumSize:album.rawTracks.length})).filter(Boolean));
+    return albumCache.get(album);
+  }
+  function albumStatus(album) {
+    const tracks = albumRows(album), listed = tracks.map(track => byRef.get(track.ref));
+    return {total:tracks.length, saved:listed.filter(isSaved).length, missing:listed.filter(track => !track).length};
+  }
+  function albumLabel({total, saved, missing}) {
+    if (missing) return missing === total ? 'Queue album' : 'Queue missing';
+    return saved === total ? 'Album saved' : 'Listed in Downloads';
+  }
+  musicAlbumDownloadLabelV63 = album => albumLabel(albumStatus(album));
+  function albumButton(control, album, instant = false) {
+    const summary = albumStatus(album), label = albumLabel(summary);
+    const name = `${label}: ${album.title}`;
+    control.disabled = summary.missing === 0;
+    control.textContent = instant ? summary.missing ? '↓' : summary.saved === summary.total ? '✓' : '·' : label;
+    control.title = control.disabled ? name : `${name} · ${count(summary.missing)}`;
+    control.setAttribute('aria-label', name);
+  }
+  refreshMusicAlbumJobUiV63 = album => {
+    for (const control of document.querySelectorAll('[data-album-download-v63]')) {
+      if (control.dataset.albumDownloadV63 === album.id) albumButton(control, album);
+    }
+  };
   downloadMusicAlbumV63 = async album => enqueue(albumRows(album), album.title);
   renderMusicAlbumDetailV63 = ((original) => (album, catalog) => {
     original(album, catalog);
-    const playControl = id('musicTorrGrid').querySelector('[data-album-play-v63]');
-    if (playControl) {
-      playControl.textContent = '▶ Play saved';
-      playControl.onclick = () => playList(albumRows(album).map(track => byRef.get(track?.ref)));
+    const root = id('musicTorrGrid').querySelector('.music-album-detail-v63');
+    if (root) {
+      root._omAlbum = album;
+      const control = root.querySelector('[data-album-play-v63]');
+      control.textContent = '▶ Play saved';
+      control.onclick = () => playList(albumRows(album).map(track => byRef.get(track.ref)));
     }
     syncFind();
   })(renderMusicAlbumDetailV63);
+  openMusicGenre = ((original) => key => {
+    original(key);
+    const genre = musicGenreRecord(key), root = id('musicGenrePage');
+    if (!genre || !root) return;
+    root.querySelector('[data-genre-status]').textContent = `${count(genre.results.length)} to explore`;
+    root.querySelector('[data-genre-queue]').textContent = '↓ Queue all';
+    root.querySelector('[data-genre-queue]').onclick = () => enqueue(genre.results.map(recording), genre.title);
+    syncFind();
+  })(openMusicGenre);
   // v76's instant suggestions keep their own click dispatcher. Route the plus action here
   // once, with an ordered album as one batch instead of N independent requests.
   document.addEventListener('click', event => {
@@ -211,20 +249,37 @@
       b.hidden = !selecting; b.disabled = !chosen.size; b.textContent = chosen.size ? `Queue ${count(chosen.size)}` : 'Queue selection';
     }
     document.querySelectorAll('[data-om-track]').forEach(updateCard);
-    for (const root of document.querySelectorAll('#musicInstantV76 [data-instant-row][data-kind="song"]')) decorate(root, recording(root._hit?.track));
+    for (const root of document.querySelectorAll('#musicInstantV76 [data-instant-row]')) {
+      if (root.dataset.kind === 'song') decorate(root, recording(root._hit?.track));
+      else if (root.dataset.kind === 'album' && root._hit) albumButton(root.querySelector('[data-instant-action="add"]'), root._hit, true);
+    }
+    for (const control of id('musicTorrGrid').querySelectorAll('[data-album-download-v63]')) {
+      const album = musicAlbumCatalogV63?.byId.get(control.dataset.albumDownloadV63);
+      if (album) albumButton(control, album);
+    }
+    const detail = id('musicTorrGrid').querySelector('.music-album-detail-v63');
+    if (detail?._omAlbum) {
+      const summary = albumStatus(detail._omAlbum);
+      detail.querySelector('[data-album-play-v63]').disabled = summary.saved === 0;
+      detail.querySelector('[data-album-job-v63]').textContent = `${summary.saved} of ${summary.total} saved`;
+    }
   }
   // Instant search rebuilds its rows as the user types, independent of the other v90 renderers.
-  let instant;
-  new MutationObserver(() => {
-    if (instant) return;
-    instant = id('musicInstantV76');
+  const instantMount = new MutationObserver(() => {
+    const instant = id('musicInstantV76');
     if (instant) {
+      instantMount.disconnect();
+      const update = () => {
+        if (state.view === 'music' && page === 'find') syncFind();
+        else if (!instant.hidden) window.bbxMusicSearchV76?._close();
+      };
       new MutationObserver(records => {
-        if (records.some(record => record.target === instant)) syncFind();
+        if (records.some(record => record.target === instant)) update();
       }).observe(instant, {childList:true});
-      syncFind();
+      update();
     }
-  }).observe(id('musicQuery').closest('.music-hero-v47'), {childList:true, subtree:true});
+  });
+  instantMount.observe(document.body, {childList:true});
 
   const artwork = track => {
     if (norm(track?.title) === 'kwaku the traveller' && norm(track?.artist) === 'black sherif') return '/offline-music/kwaku.svg';
@@ -262,19 +317,25 @@
       const rows = [...new Set(list.keys)].map(key => byKey.get(key)).filter(isSaved);
       const playButton = button('▶', () => playList(rows), 'om-round', `Play ${list.name}`); playButton.disabled = !rows.length;
       return card({title:list.name}, `${count(rows.length)} saved`, [playButton, button('✕', () => {
-        if (confirm(`Remove the playlist “${list.name}”? Saved songs stay on this device.`)) storeLists(playlists.filter(entry => entry !== list));
+        confirmRemoval(`Remove “${list.name}”?`, 'Saved songs stay on this device.', () => storeLists(playlists.filter(entry => entry !== list)));
       }, 'om-round', `Remove playlist ${list.name}`)], true);
     }));
-    for (const track of songs) if (track.album) batchOf(releases, track.albumId || JSON.stringify([track.albumArtist, track.album]),).push(track);
+    for (const track of songs) if (track.album) batchOf(releases, track.albumId || JSON.stringify([track.albumArtist, track.album])).push(track);
     id('om-albums').hidden = releases.size === 0;
     id('om-releases').replaceChildren(...[...releases.values()].slice(0, visibleLimit).map(group => {
       const sorted = group.sort((a,b) => a.disc - b.disc || a.number - b.number);
       const track = sorted[0], knownTotal = track.total >= sorted.length ? `${sorted.length} of ${track.total} saved` : `${sorted.length} saved`;
-      return card({...track, title:track.album}, `${track.albumArtist} · ${knownTotal}`, [button('Play saved', () => playList(sorted), 'om-link', `Play saved from ${track.album}`)], true);
+      const controls = [button('Play saved', () => playList(sorted), 'om-link', `Play saved from ${track.album}`)];
+      const album = musicAlbumCatalogV63?.byId.get(track.albumId);
+      if (album && albumStatus(album).missing) controls.push(button('Queue missing', () => downloadMusicAlbumV63(album), 'om-link', `Queue missing: ${track.album}`));
+      return card({...track, title:track.album}, `${track.albumArtist} · ${knownTotal}`, controls, true);
     }));
     id('om-saved').replaceChildren(...(songs.length ? songs.slice(0, visibleLimit).map(track => card(track,
       track.artist, [button('▶', () => play('play', track.key), 'om-round', `Play ${track.title}`), button('✕', () => {
-        if (confirm(`Remove the offline copy of “${track.title}”?`)) command('delete', track.key);
+        confirmRemoval(`Remove “${track.title}”?`, 'This removes the downloaded file from this device.', () => {
+          if (player.key === track.key) play('stop');
+          command('delete', track.key);
+        });
       }, 'om-round', `Remove saved ${track.title}`)])) : [empty('Nothing saved yet', 'Find a song, then queue it in Downloads.', true)]));
     if (songs.length > visibleLimit) id('om-saved').append(button('Show more', () => { visibleLimit += libraryPageSize; renderCollection(); }, 'om-link om-more'));
   }
@@ -330,7 +391,10 @@
     id('om-mini').hidden = !track;
     id('om-chrome').hidden = !track && id('om-tabs').hidden;
     doc.classList.toggle('bbx-offline-playing', !!track);
-    if (!track) return;
+    if (!track) {
+      if (id('om-player').open) id('om-player').close();
+      return;
+    }
     text('om-mini-title', track.title); text('om-now-title', track.title); text('om-now-artist', track.artist);
     text('om-mini-state', player.problem ? 'Couldn’t play' : player.playing ? 'Playing offline' : player.ready ? 'Saved on this device' : 'Opening saved file…');
     id('om-play-error').hidden = !player.problem; text('om-play-error', player.problem || '');
@@ -362,12 +426,15 @@
   function syncView() {
     const music = views.has(state.view);
     if (music && state.view !== 'music') page = 'find';
+    const find = state.view === 'music' && page === 'find';
     id('offline-collection').hidden = !music || page !== 'collection';
     id('offline-downloads').hidden = !music || page !== 'downloads';
-    id('viewMusic').hidden = state.view !== 'music' || page !== 'find';
+    id('viewMusic').hidden = !find;
     id('om-tabs').hidden = !music;
+    if (!find) window.bbxMusicSearchV76?._close();
     if (!music && id('om-playlist-dialog').open) id('om-playlist-dialog').close();
     doc.classList.toggle('bbx-offline-active', music);
+    doc.classList.toggle('bbx-offline-find', find);
     for (const tab of id('om-tabs').querySelectorAll('button')) {
       if (tab.dataset.omPage === page) tab.setAttribute('aria-current','page'); else tab.removeAttribute('aria-current');
     }
@@ -387,7 +454,9 @@
   }
   const originalBack = window.bbxAndroidBack;
   window.bbxAndroidBack = () => {
-    for (const dialog of [id('om-player'), id('om-playlist-dialog')]) if (dialog.open) { dialog.close(); return true; }
+    for (const dialog of [id('om-confirm'), id('om-player'), id('om-playlist-dialog')]) if (dialog.open) { dialog.close(); return true; }
+    if (!id('settingsWrap').hidden) return originalBack?.() || false;
+    if (id('musicInstantV76') && !id('musicInstantV76').hidden) { window.bbxMusicSearchV76?._close(); return true; }
     if (state.view === 'musicGenre' || state.view === 'musicDetail') { show('find'); return true; }
     if (state.view === 'music') {
       if (page === 'find' && !id('musicSearchPane').hidden && id('musicTorrGrid').querySelector('.music-album-back-v63')) {
@@ -402,7 +471,15 @@
     try { localStorage.setItem(listKey, JSON.stringify(lists)); playlists = lists; renderCollection(); return true; }
     catch { toast('Could not save the playlist to this device.'); return false; }
   }
+  function confirmRemoval(message, description, remove) {
+    const dialog = id('om-confirm');
+    text('om-confirm-message', message); text('om-confirm-description', description);
+    id('om-confirm-remove').onclick = () => { dialog.close(); remove(); };
+    dialog.showModal();
+  }
+  id('om-confirm-cancel').onclick = () => id('om-confirm').close();
   doc.classList.add('bbx-offline-shell');
+  id('navMusic').addEventListener('click', () => { page = 'collection'; }, true);
   for (const tab of id('om-tabs').querySelectorAll('button')) tab.onclick = () => show(tab.dataset.omPage);
   id('om-add-songs').onclick = () => show('find'); id('om-saved-library').onclick = () => show('collection');
   id('om-pause').onclick = () => command(data.paused ? 'resume' : 'pause');

@@ -18,7 +18,7 @@
 <section id="offline-downloads" class="om-page" aria-labelledby="om-download-title" hidden>
   <div class="om-mark"><img src="/offline-music/icon.svg" alt="" width="27" height="27"> BLACKBOX <span>MUSIC</span></div>
   <header class="om-heading"><h1 id="om-download-title">Downloads<span>.</span></h1><p>Saved songs are ready to play offline.</p></header>
-  <div class="om-section-head om-download-opts"><button type="button" class="om-button" id="om-add-songs">＋ Add songs</button><small>Starts on Wi-Fi by default</small></div>
+  <div class="om-section-head om-download-opts"><button type="button" class="om-button" id="om-add-songs">+ Add songs</button><small>Starts on Wi-Fi by default</small></div>
   <section class="om-group"><div class="om-section-head"><h2>Queue</h2><button type="button" class="om-link" id="om-pause" hidden></button></div><div class="om-cards" id="om-pending"></div></section>
   <section class="om-group" id="om-failed" hidden><div class="om-section-head"><h2>Needs attention</h2></div><div class="om-list" id="om-issues"></div></section>
   <section class="om-group"><div class="om-section-head"><h2>Saved</h2><button type="button" class="om-link" id="om-saved-library">Open Collection</button></div><div class="om-list" id="om-finished"></div></section>
@@ -40,6 +40,10 @@
   <h2 id="om-now-title"></h2><p id="om-now-artist"></p><p id="om-play-error" role="status" hidden></p>
   <input id="om-seek" aria-label="Seek playback" type="range" value="0" min="0" max="1" disabled><div id="om-clock">0:00 / 0:00</div>
   <div class="om-player-buttons"><button type="button" id="om-previous" class="om-round" aria-label="Previous song">⏮</button><button type="button" id="om-play-toggle" class="om-round om-primary" aria-label="Play">▶</button><button type="button" id="om-next" class="om-round" aria-label="Next song">⏭</button><button type="button" id="om-stop" class="om-round" aria-label="Stop playback">■</button></div>
+</dialog>
+<dialog id="om-confirm" class="om-dialog" aria-labelledby="om-confirm-message">
+  <h2 id="om-confirm-message"></h2><p id="om-confirm-description"></p>
+  <div class="om-player-buttons"><button type="button" id="om-confirm-cancel" class="om-button">Cancel</button><button type="button" id="om-confirm-remove" class="om-button om-primary">Remove</button></div>
 </dialog>
 <dialog id="om-playlist-dialog" class="om-dialog" aria-labelledby="om-playlist-title">
   <div class="om-section-head"><h2 id="om-playlist-title">New playlist</h2><button type="button" class="om-round" id="om-playlist-close" aria-label="Close playlist editor">✕</button></div>

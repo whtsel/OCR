@@ -3,7 +3,13 @@
 .bbx-offline-shell .music-hero-meta-v47, .bbx-offline-shell .music-view-v47 .ad-space-v49,
 .bbx-offline-shell #viewMusicGenre .ad-space-v49, .bbx-offline-shell #viewMusicDetail .ad-space-v49,
 .bbx-offline-shell .music-shelf-actions-v47 [data-music-play-control],
-.bbx-offline-shell [data-album-queue-v63] { display: none !important; }
+.bbx-offline-shell [data-album-queue-v63], .bbx-offline-shell [data-genre-play], .bbx-offline-shell [data-genre-shuffle],
+.bbx-offline-shell [data-om-track] [data-music-play-control][hidden],
+.bbx-offline-shell [data-om-saved="false"] .music-instant-play-v76,
+.bbx-offline-shell:not(.bbx-offline-find) #musicInstantV76 { display: none !important; }
+.bbx-offline-active .topbar .searchwrap, .bbx-offline-active #catBar { display: none !important; }
+.bbx-offline-active #toast { bottom: 72px; }
+.bbx-offline-active.bbx-offline-playing #toast { bottom: 138px; }
 .bbx-offline-shell .music-layout-v47 { display: block; }
 .bbx-offline-active #app { padding-bottom: 76px; }
 .bbx-offline-playing #app { padding-bottom: 80px; }
