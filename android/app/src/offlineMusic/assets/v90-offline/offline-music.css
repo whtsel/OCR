@@ -1,0 +1,87 @@
+/* Scope the accepted charcoal / amber UI to the offline panels; Find uses v90's styles. */
+.bbx-offline-shell #musicLibrarySidebar, .bbx-offline-shell #bgAudioBar, .bbx-offline-shell #bgQueuePanel,
+.bbx-offline-shell .music-hero-meta-v47, .bbx-offline-shell .music-view-v47 .ad-space-v49,
+.bbx-offline-shell #viewMusicGenre .ad-space-v49, .bbx-offline-shell #viewMusicDetail .ad-space-v49,
+.bbx-offline-shell .music-shelf-actions-v47 [data-music-play-control],
+.bbx-offline-shell [data-album-queue-v63] { display: none !important; }
+.bbx-offline-shell .music-layout-v47 { display: block; }
+.bbx-offline-active #app { padding-bottom: 76px; }
+.bbx-offline-playing #app { padding-bottom: 80px; }
+.bbx-offline-active.bbx-offline-playing #app { padding-bottom: 144px; }
+.om-chrome, .om-page, .om-dialog, .om-select-tools {
+  --om-ink: #141317; --om-card: #201e25; --om-text: #f7eddd; --om-muted: #bcb2b6; --om-gold: #f2bd75; --om-rule: #ffffff17;
+  color: var(--om-text);
+}
+.om-page[hidden], .om-chrome [hidden], .om-page [hidden], .om-chrome[hidden] { display: none !important; }
+.om-page { width: min(100%, 710px); min-height: 68vh; margin: 0 auto; padding: 20px clamp(16px, 5vw, 30px) 24px;
+  background: radial-gradient(ellipse 300px 270px at 91% -5%, #372a34, transparent 96%), var(--om-ink); border-radius: 0 0 18px 18px; }
+.om-page h1, .om-page h2, .om-page h3, .om-page p, .om-dialog h2, .om-dialog p { margin: 0; }
+.om-mark { display:flex; align-items:center; gap:7px; font-weight:800; font-size:11px; letter-spacing:.15em; }
+.om-mark img { margin-right: 1px; }
+.om-mark span, .om-heading h1 span, .om-section-head > span { color:var(--om-gold); }
+.om-heading { padding: 18px 0 22px; }
+.om-heading h1 { font-size:clamp(36px, 10vw, 59px); font-weight:780; letter-spacing:-.065em; line-height:1.05; overflow-wrap:anywhere; }
+.om-heading p { color:var(--om-muted); font-size:14px; margin-top:9px; }
+.om-group + .om-group { margin-top:19px; }
+.om-section-head { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:42px; }
+.om-section-head h2 { font-size:19px; letter-spacing:-.03em; }
+.om-section-head > span { font-weight:700; font-size:11px; letter-spacing:.12em; }
+.om-section-head > small { color:var(--om-muted); }
+.om-page button, .om-chrome button, .om-dialog button { font: inherit; cursor:pointer; }
+.om-page button:disabled, .om-dialog button:disabled, .om-chrome button:disabled { opacity:.45; cursor:default; }
+.om-link, .om-round, .om-button { background:transparent; border:0; color:var(--om-gold); padding:0 8px; font-weight:700 !important; }
+.om-link { font-size:12px !important; min-height:44px; }
+.om-round { width:44px; height:44px; border-radius:50%; flex:none; font-size:17px !important; }
+.om-button { min-height:44px; border-radius:30px; border:1px solid #ffffff27; padding:0 14px; font-size:13px !important; }
+.om-primary { background:var(--om-gold); color:#231805; }
+.om-list, .om-batch, .om-mix { border-radius:14px; background:var(--om-card); border:1px solid var(--om-rule); }
+.om-list:empty { display:none; }
+.om-list:has(.om-empty) { background:none; border:0; }
+.om-cards { display:grid; gap:8px; }
+.om-mix, .om-row { display:flex; align-items:center; gap:10px; min-height:70px; padding:9px; }
+.om-mix { min-height:84px; background:linear-gradient(110deg, #2e2632, var(--om-card) 75%); }
+.om-row + .om-row { border-top:1px solid var(--om-rule); }
+.om-row .om-copy, .om-mix .om-copy { min-width:0; flex:1; overflow-wrap:anywhere; }
+.om-copy h3 { line-height:1.2; font-size:15px; }
+.om-copy p { font-size:12px; color:var(--om-muted); margin-top:4px; }
+.om-copy .om-status { color:var(--om-gold); }
+.om-cover { width:48px; height:48px; object-fit:cover; border-radius:8px; flex:none; }
+.om-mix .om-cover { width:64px; height:64px; }
+.om-controls { display:flex; align-items:center; gap:2px; flex-wrap:wrap; justify-content:flex-end; }
+.om-empty { border:1px dashed #bcb2b649; border-radius:14px; padding:13px 14px; font-size:13px; color:var(--om-muted); line-height:1.4; }
+.om-empty strong { display:block; color:var(--om-text); margin-bottom:5px; }
+.om-batch > header { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--om-rule); }
+.om-batch > header small { color:var(--om-muted); white-space:nowrap; }
+.om-batch > footer { border-top:1px solid var(--om-rule); padding:0 5px; }
+.om-more { text-align:center; padding:0 12px; }
+.om-chrome { position:fixed; z-index:975; bottom:0; left:0; right:0; pointer-events:none; }
+.om-tabs, .om-mini { pointer-events:auto; width:min(100%, 710px); margin:auto; }
+.om-tabs { display:grid; grid-template-columns:repeat(3, 1fr); padding:3px 5px max(3px,env(safe-area-inset-bottom)); background:#201e25; border:1px solid var(--om-rule); }
+.om-tabs button { position:relative; border:0; background:none; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; color:var(--om-muted); min-height:52px; font-size:11px; font-weight:700; }
+.om-tabs button[aria-current] { color:var(--om-gold); }
+.om-tabs svg { width:23px; height:23px; }
+#om-badge { position:absolute; left:calc(50% + 14px); top:3px; min-width:17px; padding:1px 3px; border-radius:999px; background:var(--om-gold); color:#251708; font-size:10px; }
+.om-mini { display:flex; align-items:center; gap:4px; margin-bottom:5px; padding:6px 8px; background:#302831; border:1px solid var(--om-rule); border-radius:12px; width:min(calc(100% - 16px), 694px); }
+.om-mini-copy { flex:1; background:none; border:0; display:flex; align-items:center; min-width:0; gap:9px; padding:0; color:var(--om-text); text-align:left; }
+.om-mini-copy img { flex:none; object-fit:cover; border-radius:6px; }
+.om-mini-copy span { min-width:0; }
+.om-mini-copy strong, .om-mini-copy small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.om-mini-copy strong { font-size:13px; }
+.om-mini-copy small { color:var(--om-muted); font-size:11px; }
+.om-dialog { width:min(calc(100% - 26px),410px); max-height:calc(100% - 22px); padding:14px 18px; border-radius:19px; border:1px solid var(--om-rule); background:#252128; }
+.om-dialog::backdrop { background:#0a080bdd; }
+#om-player { margin:auto auto 10px; text-align:center; }
+.om-player-art { display:block; width:min(54vw,220px,33vh); height:auto; aspect-ratio:1; border-radius:14px; margin:6px auto 12px; object-fit:cover; }
+#om-now-artist, #om-clock, #om-play-error { color:var(--om-muted); font-size:13px; margin-top:5px; }
+#om-seek { width:100%; min-height:36px; margin-top:8px; accent-color:var(--om-gold); }
+.om-player-buttons { display:flex; justify-content:center; gap:6px; margin-top:9px; }
+.om-select-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:10px 0 6px; }
+.om-select-tools button { min-height:42px; }
+.bbx-offline-shell [data-om-selected="true"] { outline:2px solid #f2bd75; outline-offset:-2px; }
+.bbx-offline-shell [data-om-add][aria-pressed="true"] { background:#f2bd75; color:#231805; }
+.bbx-offline-shell [data-om-add] { min-height:34px; }
+.om-playlist-name, #om-playlist-tracks label { display:flex; align-items:center; gap:9px; min-height:43px; }
+.om-playlist-name input { min-width:0; width:100%; }
+#om-playlist-tracks { max-height:40vh; overflow:auto; margin:6px 0 9px; }
+#om-playlist-tracks input { accent-color:var(--om-gold); }
+@media (max-width:380px) { .om-row .om-link { padding-inline:4px; } }

@@ -44,7 +44,9 @@ final class PreparedMusic implements AutoCloseable {
         final String key, ref, title, artist, album, source;
         final int seconds;
 
-        Track(JSONObject fields) throws JSONException {
+        Track(JSONObject fields) throws JSONException { this(fields, true); }
+
+        Track(JSONObject fields, boolean requireEdition) throws JSONException {
             ref = field(fields, "ref", 640, true);
             title = field(fields, "title", 240, true);
             artist = field(fields, "artist", 240, true);
@@ -52,7 +54,7 @@ final class PreparedMusic implements AutoCloseable {
             source = field(fields, "source", 11, false);
             seconds = fields.getInt("seconds");
             if (!source.isEmpty() && !videoId(source) || seconds < 0 || seconds > MAX_SECONDS
-                    || source.isEmpty() && (album.isEmpty() || seconds == 0))
+                    || requireEdition && source.isEmpty() && (album.isEmpty() || seconds == 0))
                 throw new IllegalArgumentException("The catalogue does not identify an exact full recording.");
             // Full recording identity, not a title-only match. The pinned source, when present, is part of that identity.
             try {

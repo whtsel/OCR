@@ -34,6 +34,11 @@ with zipfile.ZipFile(Path(sys.argv[1])) as apk:
                  b'Lorg/apache/commons/compress/archivers/zip/ZipFile;'):
         if not any(name in dex for dex in dexes):
             raise SystemExit(f'Missing class in package: {name.decode()}')
+    if '--offline' in sys.argv[2:]:
+        for name in (b'OfflineMusicLibrary', b'OfflineMusicPlayer', b'WholeFileMusicRuntime'):
+            assert any(b'Lcom/blackboxstream/mobile/' + name + b';' in dex for dex in dexes), name
+        for name in ('offline-music.js', 'offline-music.css', 'music-panels.html', 'icon.svg', 'mix.svg', 'kwaku.svg', 'espresso.svg'):
+            assert 'assets/v90-offline/' + name in apk.namelist(), name
     assert not any(b'Lcom/blackboxstream/mobile/MusicVideoActivity;' in dex for dex in dexes), 'Song video player shipped'
     assert apk.testzip() is None
 print('::notice::Verified the v90 APK contains the exact phone-tested zipapp and all six matching ARM64 files.')

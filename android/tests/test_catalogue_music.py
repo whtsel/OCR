@@ -116,6 +116,15 @@ class TestSelection(unittest.TestCase):
         self.assertFalse(resolver.prepare(engine, *track, lambda _: self.fail('must not mark'), LookupError, stale['id']))
         self.assertEqual(engine.downloads, [])
 
+    def test_offline_lookup_only_returns_the_verified_id(self):
+        wrong = dict(official, id='NOTORIGINAL', album='A different release')
+        engine = Engine([wrong, official], {wrong['id']: wrong, official['id']: official})
+        marks = []
+        self.assertTrue(resolver.prepare(engine, *track, marks.append, LookupError, download=False))
+        self.assertEqual(marks, ['ORIGINAL123'])
+        self.assertEqual(engine.inspections, ['NOTORIGINAL', 'ORIGINAL123'])
+        self.assertFalse(engine.downloads)
+
     def test_bot_check_does_not_try_an_alternate_query(self):
         engine = Engine([official], {official['id']: LookupError('Sign in to confirm you are not a bot')})
         with self.assertRaisesRegex(LookupError, 'not a bot'):

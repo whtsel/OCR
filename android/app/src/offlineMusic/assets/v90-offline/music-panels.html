@@ -1,0 +1,49 @@
+<!-- Offline Music panels. The sibling Find view is the unmodified v90 Music markup. -->
+<section id="offline-collection" class="om-page" aria-labelledby="om-collection-title" hidden>
+  <div class="om-mark"><img src="/offline-music/icon.svg" alt="" width="27" height="27"> BLACKBOX <span>MUSIC</span></div>
+  <header class="om-heading"><h1 id="om-collection-title">Your music<span>.</span></h1><p id="om-collection-count">Queue what you want. Play what’s saved.</p></header>
+  <section class="om-group">
+    <div class="om-section-head"><h2>Playlists</h2><button type="button" class="om-link" id="om-new-playlist" disabled>New playlist</button></div>
+    <div id="om-playlists" class="om-cards"></div>
+  </section>
+  <section id="om-albums" class="om-group" hidden>
+    <div class="om-section-head"><h2>Albums &amp; singles</h2></div>
+    <div id="om-releases" class="om-cards"></div>
+  </section>
+  <section class="om-group">
+    <div class="om-section-head"><h2>Saved songs</h2><span id="om-saved-count"></span></div>
+    <div id="om-saved" class="om-list"></div>
+  </section>
+</section>
+<section id="offline-downloads" class="om-page" aria-labelledby="om-download-title" hidden>
+  <div class="om-mark"><img src="/offline-music/icon.svg" alt="" width="27" height="27"> BLACKBOX <span>MUSIC</span></div>
+  <header class="om-heading"><h1 id="om-download-title">Downloads<span>.</span></h1><p>Saved songs are ready to play offline.</p></header>
+  <div class="om-section-head om-download-opts"><button type="button" class="om-button" id="om-add-songs">＋ Add songs</button><small>Starts on Wi-Fi by default</small></div>
+  <section class="om-group"><div class="om-section-head"><h2>Queue</h2><button type="button" class="om-link" id="om-pause" hidden></button></div><div class="om-cards" id="om-pending"></div></section>
+  <section class="om-group" id="om-failed" hidden><div class="om-section-head"><h2>Needs attention</h2></div><div class="om-list" id="om-issues"></div></section>
+  <section class="om-group"><div class="om-section-head"><h2>Saved</h2><button type="button" class="om-link" id="om-saved-library">Open Collection</button></div><div class="om-list" id="om-finished"></div></section>
+</section>
+<div class="om-chrome" id="om-chrome" hidden>
+  <section class="om-mini" id="om-mini" aria-label="Playback" hidden>
+    <button type="button" class="om-mini-copy" id="om-now" aria-label="Open now playing" aria-describedby="om-mini-title om-mini-state"><img id="om-mini-art" alt="" width="38" height="38"><span><strong id="om-mini-title"></strong><small id="om-mini-state"></small></span></button>
+    <button type="button" class="om-round" id="om-mini-toggle" aria-label="Play">▶</button>
+  </section>
+  <nav class="om-tabs" id="om-tabs" aria-label="Music sections" hidden>
+    <button type="button" id="om-tab-collection" data-om-page="collection"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8h18v12H3zM5 4h14M8 12h8"/></svg>Collection</button>
+    <button type="button" id="om-tab-find" data-om-page="find"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>Find</button>
+    <button type="button" id="om-tab-downloads" data-om-page="downloads" aria-label="Downloads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg>Downloads<span id="om-badge" hidden></span></button>
+  </nav>
+</div>
+<dialog id="om-player" class="om-dialog" aria-labelledby="om-now-title">
+  <div class="om-section-head"><span>NOW PLAYING</span><button type="button" id="om-player-close" class="om-round" aria-label="Close now playing">✕</button></div>
+  <img id="om-player-art" class="om-player-art" alt="" width="220" height="220">
+  <h2 id="om-now-title"></h2><p id="om-now-artist"></p><p id="om-play-error" role="status" hidden></p>
+  <input id="om-seek" aria-label="Seek playback" type="range" value="0" min="0" max="1" disabled><div id="om-clock">0:00 / 0:00</div>
+  <div class="om-player-buttons"><button type="button" id="om-previous" class="om-round" aria-label="Previous song">⏮</button><button type="button" id="om-play-toggle" class="om-round om-primary" aria-label="Play">▶</button><button type="button" id="om-next" class="om-round" aria-label="Next song">⏭</button><button type="button" id="om-stop" class="om-round" aria-label="Stop playback">■</button></div>
+</dialog>
+<dialog id="om-playlist-dialog" class="om-dialog" aria-labelledby="om-playlist-title">
+  <div class="om-section-head"><h2 id="om-playlist-title">New playlist</h2><button type="button" class="om-round" id="om-playlist-close" aria-label="Close playlist editor">✕</button></div>
+  <label class="om-playlist-name">Playlist name <input id="om-playlist-name" maxlength="60" autocomplete="off"></label>
+  <div id="om-playlist-tracks"></div>
+  <button type="button" class="om-button om-primary" id="om-playlist-save">Create playlist</button>
+</dialog>

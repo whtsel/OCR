@@ -61,13 +61,13 @@ final class V90Api {
         closed = true;
         synchronized (this) { for (Resolve job : jobs.values()) job.cancelled = true; jobs.clear(); }
         resolver.shutdownNow();
-        music.close();
+        if (music != null) music.close();
     }
 
-    File preparedAudio(String id) { return closed || expired() ? null : music.read(id); }
+    File preparedAudio(String id) { return closed || expired() || music == null ? null : music.read(id); }
 
     ProgressiveMusicAudio.Read playingAudio(String id, String token, String range) {
-        return closed || expired() ? null : music.readStream(id, token, range);
+        return closed || expired() || music == null ? null : music.readStream(id, token, range);
     }
 
     static boolean expired() { return System.currentTimeMillis() >= EXPIRES_AT; }
@@ -118,6 +118,7 @@ final class V90Api {
                 return select(parts[3], Integer.parseInt(parts[5]), selection.optString("job"), selection.optString("title"));
             }
             if (get && path.equals("/api/mobile/library")) return library();
+            if (music == null && path.startsWith("/api/mobile/music-helper")) return fail(404, "Music uses the offline download queue in this build.");
             if (get && path.equals("/api/mobile/music-helper")) return ok(music.state());
             if (get && path.equals("/api/mobile/music-helper/await"))
                 return ok(music.awaitSelection(param(uri, "key", ""), "1".equals(param(uri, "saved", ""))));

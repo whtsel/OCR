@@ -106,6 +106,17 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         return new PreparedMusic.Result(audio, sourceId(scratch));
     }
 
+    /** Lookup only: neither a Play request nor a transfer of catalogue candidates. */
+    String findExact(PreparedMusic.Track track, File scratch) throws Exception {
+        new File(scratch, "source-id").delete();
+        execute(new PreparedMusic.Control(), scratch, true, track.title, track.artist, track.album,
+                Integer.toString(track.seconds), "", "--simulate", "--no-playlist", "--socket-timeout", "20",
+                "--retries", "0", "--extractor-retries", "0");
+        String id = sourceId(scratch);
+        if (!PreparedMusic.videoId(id)) throw new OfflineMusicLibrary.Refusal("exact");
+        return id;
+    }
+
     private static String sourceId(File scratch) throws IOException {
         try (FileInputStream in = new FileInputStream(new File(scratch, "source-id"))) {
             return new String(TorrentMeta.slurp(in, 16), StandardCharsets.US_ASCII);

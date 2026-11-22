@@ -6,8 +6,10 @@ plugins {
 // The dependency-free baseline/standalone build remains available.
 def musicHelper = providers.gradleProperty('bbxMusicHelper').getOrElse('true') == 'true'
 def helperAbi = providers.gradleProperty('bbxHelperAbi').getOrElse('arm64-v8a')
-def fastPreview = providers.gradleProperty('bbxFastStartPreview').getOrElse('false') == 'true'
-def preview = fastPreview || providers.gradleProperty('bbxHelperPreview').getOrElse('false') == 'true'
+def offlineMusic = providers.gradleProperty('bbxOfflineMusic').getOrElse('false') == 'true'
+if (offlineMusic && !musicHelper) throw new GradleException('The offline v90 build requires the pinned music helper.')
+def fastPreview = !offlineMusic && providers.gradleProperty('bbxFastStartPreview').getOrElse('false') == 'true'
+def preview = offlineMusic || fastPreview || providers.gradleProperty('bbxHelperPreview').getOrElse('false') == 'true'
 def helperRaw = layout.buildDirectory.dir('generated/musicHelper/res')
 def previewRes = layout.buildDirectory.dir('generated/musicHelperPreview/res')
 
@@ -23,8 +25,9 @@ android {
         versionName '1.4.4-transport'
         testInstrumentationRunner 'com.blackboxstream.mobile.BlackBoxSmoke'
         if (musicHelper) {
-            versionCode 13
-            versionName(fastPreview ? '1.4.8-fast' : preview ? '1.4.8-music' : '1.4.8')
+            versionCode(offlineMusic ? 14 : 13)
+            if (offlineMusic) applicationId 'com.blackboxstream.mobile.offline'
+            versionName(offlineMusic ? '1.5.0-offline' : fastPreview ? '1.4.8-fast' : preview ? '1.4.8-music' : '1.4.8')
             if (!(helperAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException('Unsupported helper ABI: ' + helperAbi)
             ndk { abiFilters += [helperAbi] }
         }
@@ -43,7 +46,11 @@ android {
             jniLibs.useLegacyPackaging = true // libpython/libffmpeg are app executables and need their install paths.
             resources.merges += ['META-INF/LICENSE*', 'META-INF/NOTICE*', 'META-INF/DEPENDENCIES']
         }
-        if (preview) {
+        if (offlineMusic) {
+            sourceSets.main.assets.srcDir('src/offlineMusic/assets')
+            sourceSets.debug.res.srcDir(previewRes)
+            sourceSets.release.res.srcDir(previewRes)
+        } else if (preview) {
             buildTypes.debug.applicationIdSuffix = fastPreview ? '.music.fast' : '.music'
             sourceSets.debug.res.srcDir(previewRes)
         }
@@ -61,6 +68,7 @@ if (musicHelper) {
         inputs.file(zipapp)
         inputs.property('musicPreview', preview)
         inputs.property('fastStartPreview', fastPreview)
+        inputs.property('offlineMusic', offlineMusic)
         outputs.dir(helperRaw)
         if (preview) outputs.dir(previewRes)
         doLast {
@@ -75,7 +83,7 @@ if (musicHelper) {
             if (preview) {
                 def label = previewRes.get().file('values/strings.xml').asFile
                 label.parentFile.mkdirs()
-                def appName = fastPreview ? 'BlackBox Music Fast Start' : 'BlackBox Music v90'
+                def appName = offlineMusic ? 'BlackBox Stream v90 Offline' : fastPreview ? 'BlackBox Music Fast Start' : 'BlackBox Music v90'
                 label.text = "<resources><string name=\"app_name\">${appName}</string></resources>"
             }
         }

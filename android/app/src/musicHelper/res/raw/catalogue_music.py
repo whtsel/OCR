@@ -111,7 +111,7 @@ def provider_refused(problem):
     return any(reason in text for reason in ('http error 429', 'http error 403', 'too many requests', 'not a bot', 'sign in'))
 
 
-def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembered='', stage=lambda _: None):
+def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembered='', stage=lambda _: None, download=True):
     checked = set()
     rejected = None
     inspected = False
@@ -131,8 +131,10 @@ def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembere
         if not matches(info, video, title, artist, album, seconds):
             return False
         mark(video)
-        # Reuse this resolution, not a new search, download of a candidate, or substitution.
-        engine.process_ie_result(info, download=True)
+        # Legacy v90 can reuse the verified resolution immediately. The offline build asks
+        # for the ID only, then uses the separate p11 whole-file request for that ID.
+        if download:
+            engine.process_ie_result(info, download=True)
         return True
 
     if isinstance(remembered, str) and VIDEO_ID.fullmatch(remembered) and verify(remembered):
@@ -162,7 +164,8 @@ def main():
         with YoutubeDL(params) as engine:
             found = prepare(engine, title, artist, album, int(seconds),
                             lambda video: Path('source-id').write_text(video, encoding='ascii'),
-                            (DownloadError, ExtractorError), remembered, lambda marker: print(marker, flush=True))
+                            (DownloadError, ExtractorError), remembered, lambda marker: print(marker, flush=True),
+                            download=not params.get('simulate'))
     except (DownloadError, ExtractorError) as problem:
         # The Android adapter maps this output to small, sanitized failure reasons.
         print(str(problem), file=sys.stderr)

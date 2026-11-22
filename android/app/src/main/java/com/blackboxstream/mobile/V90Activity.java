@@ -45,6 +45,7 @@ public final class V90Activity extends Activity {
             + "frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'";
     private static final Set<String> ART_HOSTS = new HashSet<>(Arrays.asList("image.tmdb.org", "i.ytimg.com", "img.youtube.com", "cdn-images.dzcdn.net", "is1-ssl.mzstatic.com"));
     private static final Set<String> MOBILE_ASSETS = new HashSet<>(Arrays.asList("android-api.js", "android-port.js", "android-catalogue.js", "android-music.js", "android-v90.css"));
+    private static final Set<String> OFFLINE_ASSETS = new HashSet<>(Arrays.asList("offline-music.js", "offline-music.css", "espresso.svg", "kwaku.svg", "mix.svg", "icon.svg"));
     private static final Pattern PLAYING_AUDIO = Pattern.compile("/playing-audio/([a-f0-9]{64})/([a-f0-9]{32})\\.m4a");
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor work = new ThreadPoolExecutor(6, 6, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(80));
@@ -57,13 +58,19 @@ public final class V90Activity extends Activity {
     private WebView view;
     private V90Api api;
     private LinearLayout root;
+    private boolean offlineMusic;
+    private OfflineMusicLibrary musicLibrary;
+    private OfflineMusicPlayer musicPlayer;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         root = Ui.column(this); root.setBackgroundColor(0xff101017);
         Ui.fitWindow(this, root); setContentView(root);
-        api = new V90Api(this);
+        offlineMusic = "com.blackboxstream.mobile.offline".equals(getPackageName());
+        api = offlineMusic ? new V90Api(this, null) : new V90Api(this);
         try {
+            if (offlineMusic && (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0)
+                WebView.setWebContentsDebuggingEnabled(true); // Test APK only, not the distributed build.
             view = new WebView(this);
             view.setBackgroundColor(0xff101017);
             view.setWebViewClient(new ShellClient());
@@ -76,11 +83,25 @@ public final class V90Activity extends Activity {
             // External pages and frames cannot run here or use the bridge.
             s.setMediaPlaybackRequiresUserGesture(false);
             view.addJavascriptInterface(new Bridge(), "BlackBoxAndroid");
+            if (offlineMusic) {
+                musicLibrary = OfflineMusicLibrary.open(this);
+                musicPlayer = new OfflineMusicPlayer(this, musicLibrary);
+                view.addJavascriptInterface(new MusicBridge(), "OfflineMusic");
+                setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC);
+            }
             root.addView(view, new LinearLayout.LayoutParams(-1, -1));
             view.loadUrl(HOME);
         } catch (RuntimeException missing) { showWebViewError(); }
     }
 
+    @Override protected void onStart() {
+        super.onStart();
+        if (musicPlayer != null) musicPlayer.foreground(!V90Api.expired());
+    }
+    @Override protected void onStop() {
+        if (musicPlayer != null) musicPlayer.foreground(false);
+        super.onStop();
+    }
     @Override protected void onResume() {
         super.onResume(); resumed = true;
         if (view != null) { view.onResume(); view.evaluateJavascript("window.bbxAndroidResume?.()", null); }
@@ -97,11 +118,13 @@ public final class V90Activity extends Activity {
     @Override protected void onDestroy() {
         closed = true;
         if (api != null) api.close();
+        if (musicPlayer != null) musicPlayer.close();
         work.shutdownNow();
         musicControl.shutdownNow();
         musicWait.shutdownNow();
         if (view != null) {
             view.removeJavascriptInterface("BlackBoxAndroid");
+            if (offlineMusic) view.removeJavascriptInterface("OfflineMusic");
             view.stopLoading(); root.removeView(view); view.destroy(); view = null;
         }
         super.onDestroy();
@@ -155,6 +178,18 @@ public final class V90Activity extends Activity {
         }
     }
 
+    private final class MusicBridge {
+        @JavascriptInterface public String library() { return closed || V90Api.expired() ? "{}" : musicLibrary.snapshot(); }
+        @JavascriptInterface public String queue(String action, String body) {
+            return closed || V90Api.expired() ? "{\"error\":\"Music is not available.\"}" : musicLibrary.command(action, body);
+        }
+        @JavascriptInterface public String player() { return closed || V90Api.expired() ? "{}" : musicPlayer.snapshot(); }
+        @JavascriptInterface public void playback(String action, String value) {
+            if (action == null || action.length() > 12 || value == null || value.length() > 70000) return;
+            main.post(() -> { if (active()) musicPlayer.command(action, value); });
+        }
+    }
+
     private boolean active() { return resumed && !isFinishing() && !isDestroyed() && !closed && !V90Api.expired(); }
     private void launch(Class<? extends Activity> screen) {
         Intent request = new Intent(this, screen);
@@ -198,6 +233,13 @@ public final class V90Activity extends Activity {
             String path = req.getUrl().getEncodedPath();
             try {
                 if ("/".equals(path)) return response(200, "OK", "text/html", index());
+                if (offlineMusic && path != null && path.startsWith("/offline-music/")) {
+                    String name = path.substring("/offline-music/".length());
+                    if (OFFLINE_ASSETS.contains(name)) {
+                        String type = name.endsWith(".svg") ? "image/svg+xml" : mime(name);
+                        return new WebResourceResponse(type, "UTF-8", 200, "OK", headers(), getAssets().open("v90-offline/" + name));
+                    }
+                }
                 if (path != null && path.startsWith("/playing-audio/")) {
                     if (req.isForMainFrame()) return response(403, "Forbidden", "text/plain", new byte[0]);
                     Matcher route = PLAYING_AUDIO.matcher(path);
@@ -258,7 +300,15 @@ public final class V90Activity extends Activity {
         html = html.replace("</head>", "<link rel=\"stylesheet\" href=\"/android-v90.css\" />\n</head>")
                 .replace("<script src=\"/app.js", "<script src=\"/android-api.js\"></script>\n<script src=\"/app.js")
                 .replaceAll("<script src=\"/(?:fast-source-v74|play-anyway-v74|local-share-v70|ads-v88|source-votes-v74|vote-gate-v75|votes-sync-v74|privacy-panel-v86|anime-media-v74)\\.js[^\"]*\"></script>", "")
-                .replace("</body>", "<script src=\"/android-port.js\"></script>\n<script src=\"/android-catalogue.js\"></script>\n<script src=\"/android-music.js\"></script>\n</body>");
+                .replace("</body>", "<script src=\"/android-port.js\"></script>\n<script src=\"/android-catalogue.js\"></script>\n"
+                        + (offlineMusic ? "<script src=\"/offline-music/offline-music.js\"></script>" : "<script src=\"/android-music.js\"></script>") + "\n</body>");
+        if (offlineMusic) {
+            String panels = new String(TorrentMeta.slurp(getAssets().open("v90-offline/music-panels.html"), 24 * 1024), StandardCharsets.UTF_8);
+            // The original Find shelves and discovery scripts remain unchanged on disk.
+            html = html.replace("</head>", "<link rel=\"stylesheet\" href=\"/offline-music/offline-music.css\" />\n</head>")
+                    .replace("</main>", panels + "\n</main>")
+                    .replaceAll("<script src=\"/music-(?:picker-v78|library-v79|ui-v76)\\.js[^\"]*\"></script>", "");
+        }
         return html.getBytes(StandardCharsets.UTF_8);
     }
 
