@@ -35,7 +35,7 @@ def tap(label, timeout=20):
 
 def launch():
     print(p11.adb('shell', 'am', 'start', '-W', '-n', ACTIVITY, timeout=30))
-    visible('Your music.', 'Test audio only · no provider requests')
+    visible('Playlists', 'Test audio only · no provider requests')
 
 
 def stop():
