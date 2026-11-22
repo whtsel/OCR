@@ -52,6 +52,12 @@ a provider sign-in response for Espresso with no save on a fresh emulator. The s
 p11 (`pilot_only=true`); the first run's pilot tap happened before its UI was ready. Neither run
 verified a fresh live download, and neither identifies the cause of a failure on a physical phone.
 
+The separate [BlackBox Music Save Check](../.github/ci/blackbox-save-check/README.md) is the
+physical-phone comparison. It runs the archived pilot and full v90 save paths for the same
+Espresso recording, with one explicit attempt at a time, separate empty audio staging and
+local result text. It does not import, update or overwrite either installed music app. Its
+fixture gate is not a live provider test.
+
 ## Earlier Fast Start preview
 
 **BlackBox Music Fast Start (ARM64)** is a side-by-side test build of the full v90 Android port

@@ -118,7 +118,7 @@ final class SaveCheck {
         if (!"idle".equals(state(Arm.PILOT)) && !"idle".equals(state(Arm.FULL))) return "Both test slots used. No requests will be repeated.";
         if (link.handle == 0) return "Connect to the Internet to start a save. Saved files can be played offline.";
         long previous = prefs.getLong("network", 0);
-        if (previous != 0 && previous != link.handle) return "The connection changed. Use the original connection for this comparison.";
+        if (previous != 0 && previous != link.handle) return "The connection changed. This comparison cannot continue on a different connection.";
         return "Run both saves on this same connection before checking offline playback.";
     }
 

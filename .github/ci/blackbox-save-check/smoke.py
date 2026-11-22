@@ -32,10 +32,14 @@ def local(*args, **kwargs):
 
 def airplane(enabled):
     p11.adb('shell', 'cmd', 'connectivity', 'airplane-mode', 'enable' if enabled else 'disable')
+    # Use one stable transport in the test. Otherwise the emulator can select LTE
+    # while Wi-Fi reconnects, correctly preventing the second arm from starting.
+    p11.adb('shell', 'svc', 'data', 'disable')
     p11.adb('shell', 'svc', 'wifi', 'disable' if enabled else 'enable')
-    p11.adb('shell', 'svc', 'data', 'disable' if enabled else 'enable')
     if p11.adb('shell', 'settings', 'get', 'global', 'airplane_mode_on') != str(int(enabled)):
         raise RuntimeError('Airplane mode did not change')
+    if not enabled:
+        wait_node('connection', lambda n: n.get('text', '').startswith('Wi-Fi'), timeout=45)
 
 
 def prefs():
@@ -109,7 +113,7 @@ def fixture_server(data, *, refuse=False):
         def log_message(self, _format, *args):
             pass
 
-        def do_GET(self):
+        def serve(self, send_body):
             seen.append(self.path)
             if self.path != EXPECTED:
                 self.send_error(404)
@@ -121,13 +125,20 @@ def fixture_server(data, *, refuse=False):
             self.send_header('Content-Type', 'audio/mp4')
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
-            try:
-                self.wfile.write(data[:65536])
-                self.wfile.flush()
-                release.wait(25)
-                self.wfile.write(data[65536:])
-            except (BrokenPipeError, ConnectionResetError):
-                pass  # The generic extractor may stop its media probe after the header.
+            if send_body:
+                try:
+                    self.wfile.write(data[:65536])
+                    self.wfile.flush()
+                    release.wait(25)
+                    self.wfile.write(data[65536:])
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # The generic extractor may stop its media probe after the header.
+
+        def do_GET(self):
+            self.serve(True)
+
+        def do_HEAD(self):
+            self.serve(False)
 
     with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
         worker = threading.Thread(target=server.serve_forever, daemon=True)
