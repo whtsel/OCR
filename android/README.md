@@ -46,6 +46,12 @@ matching behavior. A live pass requires a newly published, playable file and a s
 after force-stop with networking off. Refusals are reported, not worked around; this diagnostic
 publishes no APK. The test signing key is not a production update key.
 
+The initial [full v90 trial](https://github.com/whtsel/OCR/actions/runs/45016324917) and the
+completed [p11 reference trial](https://github.com/whtsel/OCR/actions/runs/45016793772) each reached
+a provider sign-in response for Espresso with no save on a fresh emulator. The second run tested just
+p11 (`pilot_only=true`); the first run's pilot tap happened before its UI was ready. Neither run
+verified a fresh live download, and neither identifies the cause of a failure on a physical phone.
+
 ## Earlier Fast Start preview
 
 **BlackBox Music Fast Start (ARM64)** is a side-by-side test build of the full v90 Android port
