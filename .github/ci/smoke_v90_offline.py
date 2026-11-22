@@ -4,6 +4,7 @@ Fixtures never request provider audio. The non-debuggable ARM64 deliverable cann
 The separate --live diagnostic requests one catalogue song without a fixture or credentials.
 """
 import argparse
+import base64
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
@@ -171,8 +172,10 @@ def entries(js):
 def stage(track, data):
     directory = 'files/offline-music/staging/' + track['key']
     p11.adb('shell', 'run-as', PKG, 'mkdir', '-p', directory)
-    subprocess.run(['adb', 'exec-in', f"run-as {PKG} sh -c 'cat > {directory}/audio.m4a'"],
-                   input=data, check=True, timeout=14)
+    # Use the shell protocol so ADB waits for the device write to close. A raw exec-in
+    # stream can end without delivering its trailing bytes or reflecting the device exit code.
+    subprocess.run(['adb', 'shell', '-T', f"run-as {PKG} sh -c 'base64 -d > {directory}/audio.m4a'"],
+                   input=base64.b64encode(data), check=True, timeout=14)
     verify_on_device(f'{directory}/audio.m4a', data, 'Staged ' + track['title'])
 
 
@@ -364,8 +367,9 @@ def smoke(apk, root):
             raise RuntimeError('Search suggestions leaked into Downloads')
         print('::notice::PASS v90 artist/album/instant search, direct single-song queue, genre batch, both album paths and grouped selection/pause')
     force_stop()
-    stage(pending[0], tones[KWAKU][:-40000])
-    with recording_server({f"/{TRACKS[ESPRESSO][0]}.m4a": tones[ESPRESSO]}) as received, page() as js:
+    stage(pending[0], tones[KWAKU][:32*1024])
+    routes = {f'/{video}.m4a': tones[title] for title, (video, _) in TRACKS.items()}
+    with recording_server(routes) as received, page() as js:
         open_music(js)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Android reconnected before queue recovery')
         if [t['state'] for t in entries(js)] != ['offline', 'offline']:
@@ -376,11 +380,12 @@ def smoke(apk, root):
         if failed['reason'] != 'incomplete':
             raise RuntimeError('First exact file failed for a different reason: ' + failed['reason'])
         verify_bytes(complete, tones[ESPRESSO])
-        if not received or 'pin verified' not in p11.adb('logcat', '-d', '-s', 'BlackBoxMusic'):
-            raise RuntimeError('The byte-pinned v90 helper did not fetch the loopback AAC fixture')
+        kwaku_route = f'/{TRACKS[KWAKU][0]}.m4a'
+        if (received != {f'/{TRACKS[ESPRESSO][0]}.m4a'}
+                or 'pin verified' not in p11.adb('logcat', '-d', '-s', 'BlackBoxMusic')):
+            raise RuntimeError('Invalid staged file was not rejected independently of the real second transfer')
         airplane(True)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Android did not drop its active network before retry')
-        stage(failed, tones[KWAKU])
         click(js, '#om-tab-downloads')
         retry = f'#om-issues [aria-label="Retry {KWAKU}"]'
         wait(js, f'!!document.querySelector({json.dumps(retry)})', 'The exact failed recording did not appear in Needs attention')
@@ -388,6 +393,8 @@ def smoke(apk, root):
         wait(js, "JSON.parse(OfflineMusic.library()).tracks[0].state==='offline'", 'Retry did not respect offline mode')
         airplane(False)
         wait(js, "JSON.parse(OfflineMusic.library()).tracks.every(t=>t.state==='saved')", 'Retry did not save the verified file', 65)
+        if kwaku_route not in received:
+            raise RuntimeError('Retry did not request the full recording')
         verify_bytes(failed, tones[KWAKU])
         click(js, '#om-tab-collection')
         click(js, '#om-new-playlist')
