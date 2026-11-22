@@ -28,6 +28,7 @@ import org.json.JSONObject;
 final class OfflineMusicLibrary {
     static final int MAX_RECORDS = 1000;
     static final int MAX_BATCH = 120; // The largest packaged v90 album has 100 rows.
+    private static final int MAX_PLAYLISTS = 100;
     static final String TAG = "BlackBoxOfflineMusic";
     private static OfflineMusicLibrary instance;
 
@@ -97,6 +98,7 @@ final class OfflineMusicLibrary {
     private final Downloader downloader;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
     private final Map<String, Entry> entries = new LinkedHashMap<>();
+    private JSONArray playlists = new JSONArray();
     private String active = "";
     private boolean paused;
     private long cooldownUntil;
@@ -108,6 +110,8 @@ final class OfflineMusicLibrary {
         saved = new File(root, "saved"); stage = new File(root, "staging");
         prefs = app.getSharedPreferences("v90-offline-music", Context.MODE_PRIVATE);
         paused = prefs.getBoolean("paused", false);
+        try { playlists = new JSONArray(prefs.getString("playlists", "[]")); }
+        catch (JSONException invalid) { Log.w(TAG, "Unreadable Music playlists"); }
         try {
             JSONArray rows = new JSONArray(prefs.getString("entries", "[]"));
             for (int i = 0; i < Math.min(rows.length(), MAX_RECORDS); i++) {
@@ -158,13 +162,15 @@ final class OfflineMusicLibrary {
     private void persist() throws JSONException, IOException {
         JSONArray rows = new JSONArray();
         for (Entry entry : entries.values()) rows.put(entry.encode());
-        if (!prefs.edit().putString("entries", rows.toString()).putBoolean("paused", paused).commit())
+        if (!prefs.edit().putString("entries", rows.toString()).putString("playlists", playlists.toString())
+                .putBoolean("paused", paused).commit())
             throw new IOException("Unable to record your downloads");
     }
 
     synchronized String command(String action, String value) {
         if (action == null || value == null || value.length() > 150000) return error("Invalid download request.");
         Map<String, Entry> before = new LinkedHashMap<>(entries);
+        JSONArray beforePlaylists = playlists;
         boolean wasPaused = paused;
         try {
             switch (action) {
@@ -197,6 +203,33 @@ final class OfflineMusicLibrary {
                     if (entry != null && !value.equals(active) && ready(entry) == null) entries.remove(value);
                     break;
                 }
+                case "playlist-add": {
+                    if (playlists.length() >= MAX_PLAYLISTS) return error("Remove a playlist before making another.");
+                    JSONObject request = new JSONObject(value);
+                    String name = Entry.text(request, "name", 60);
+                    JSONArray keys = request.getJSONArray("keys");
+                    if (name.isEmpty() || keys.length() < 1 || keys.length() > MAX_BATCH)
+                        return error("Name the playlist and select between 1 and 120 saved songs.");
+                    java.util.Set<String> unique = new java.util.LinkedHashSet<>();
+                    for (int i = 0; i < keys.length(); i++) {
+                        String key = keys.getString(i);
+                        if (saved(key) != null) unique.add(key);
+                    }
+                    if (unique.isEmpty()) return error("These songs are not saved on this device.");
+                    JSONObject list = new JSONObject().put("id", UUID.randomUUID().toString())
+                            .put("name", name).put("keys", new JSONArray(unique));
+                    playlists = new JSONArray(playlists.toString()).put(list);
+                    break;
+                }
+                case "playlist-remove": {
+                    JSONArray keep = new JSONArray();
+                    for (int i = 0; i < playlists.length(); i++) {
+                        JSONObject list = playlists.optJSONObject(i);
+                        if (list != null && !value.equals(list.optString("id"))) keep.put(list);
+                    }
+                    playlists = keep;
+                    break;
+                }
                 case "delete": {
                     Entry entry = entries.get(value);
                     if (entry != null && !value.equals(active) && ready(entry) != null) {
@@ -214,7 +247,7 @@ final class OfflineMusicLibrary {
             kick();
             return snapshot();
         } catch (IOException | JSONException | IllegalArgumentException invalid) {
-            entries.clear(); entries.putAll(before); paused = wasPaused; lastSnapshot = null;
+            entries.clear(); entries.putAll(before); playlists = beforePlaylists; paused = wasPaused; lastSnapshot = null;
             return error("The download list could not be updated. Check your storage and try again.");
         }
     }
@@ -241,7 +274,7 @@ final class OfflineMusicLibrary {
             }
             lastLink = link;
             return lastSnapshot = new JSONObject().put("tracks", rows).put("paused", paused)
-                    .put("available", downloader != null).toString();
+                    .put("playlists", playlists).put("available", downloader != null).toString();
         } catch (JSONException invalid) { return error("Your Music library could not be read."); }
     }
 

@@ -13,12 +13,6 @@
   let page = 'collection', selecting = false, visibleLimit = libraryPageSize;
   let data = {tracks: [], paused: false}, byRef = new Map(), byKey = new Map(), last = '', lastPlayer = '';
   const chosen = new Map();
-  const listKey = 'bbx.offline.playlists.v1';
-  let playlists = [];
-  try {
-    const lists = JSON.parse(localStorage.getItem(listKey) || '[]');
-    if (Array.isArray(lists)) playlists = lists.filter(list => typeof list?.name === 'string' && Array.isArray(list?.keys)).slice(0, 100);
-  } catch { /* Optional, local named playlists. */ }
 
   function node(tag, classes, label) {
     const n = document.createElement(tag);
@@ -313,11 +307,11 @@
     id('om-saved-count').textContent = songs.length || '';
     const rotation = button('▶', () => playList(songs), 'om-round om-primary', 'Play saved rotation'); rotation.disabled = !songs.length;
     const rotationCard = card({title:'Saved rotation'}, songs.length ? `${count(songs.length)} saved` : 'No saved tracks yet', [rotation], true);
-    id('om-playlists').replaceChildren(rotationCard, ...playlists.map(list => {
+    id('om-playlists').replaceChildren(rotationCard, ...(data.playlists || []).map(list => {
       const rows = [...new Set(list.keys)].map(key => byKey.get(key)).filter(isSaved);
       const playButton = button('▶', () => playList(rows), 'om-round', `Play ${list.name}`); playButton.disabled = !rows.length;
       return card({title:list.name}, `${count(rows.length)} saved`, [playButton, button('✕', () => {
-        confirmRemoval(`Remove “${list.name}”?`, 'Saved songs stay on this device.', () => storeLists(playlists.filter(entry => entry !== list)));
+        confirmRemoval(`Remove “${list.name}”?`, 'Saved songs stay on this device.', () => command('playlist-remove', list.id));
       }, 'om-round', `Remove playlist ${list.name}`)], true);
     }));
     for (const track of songs) if (track.album) batchOf(releases, track.albumId || JSON.stringify([track.albumArtist, track.album])).push(track);
@@ -476,10 +470,6 @@
     return originalBack?.() || false;
   };
 
-  function storeLists(lists) {
-    try { localStorage.setItem(listKey, JSON.stringify(lists)); playlists = lists; renderCollection(); return true; }
-    catch { toast('Could not save the playlist to this device.'); return false; }
-  }
   function confirmRemoval(message, description, remove) {
     const dialog = id('om-confirm');
     text('om-confirm-message', message); text('om-confirm-description', description);
@@ -511,9 +501,7 @@
   id('om-playlist-save').onclick = () => {
     const name = id('om-playlist-name').value.trim();
     const keys = [...id('om-playlist-tracks').querySelectorAll(':checked')].map(box => box.value);
-    if (!name || !keys.length) return toast('Name this playlist and select at least one saved song.');
-    if (playlists.length >= 100) return toast('Remove a playlist before making another.');
-    if (storeLists([...playlists, {name,keys}])) id('om-playlist-dialog').close();
+    if (command('playlist-add', JSON.stringify({name,keys}))) id('om-playlist-dialog').close();
   };
   const resume = window.bbxAndroidResume;
   window.bbxAndroidResume = () => { resume?.(); poll(); };
