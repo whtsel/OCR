@@ -5,6 +5,11 @@ original=${1:?Expected archived p11 APK}
 helper=${2:?Expected pinned yt-dlp zipapp}
 output=${3:?Expected APK output path}
 abi=${4:-arm64-v8a}
+mode=${5:-fixtures}
+if [[ "$mode" != fixtures && !( "$mode" == live && "$abi" == x86_64 ) ]]; then
+  echo 'Live comparison is available only for the disposable x86 sibling' >&2
+  exit 2
+fi
 dir=$(cd "$(dirname "$0")" && pwd)
 sdk=${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK required}}
 tools="$sdk/build-tools/35.0.0"
@@ -44,6 +49,7 @@ case "$abi" in
       https://github.com/yausername/youtubedl-android/releases/download/0.18.1/app-x86_64-debug.apk
     echo "c6c8ece57600fe9022b91c026ddb3489fef80496b5627586e3e0fc46e0dcd866  $work/x86.apk" | sha256sum -c
     extra+=(--native-x86 "$work/x86.apk")
+    if [[ "$mode" == live ]]; then extra+=(--live); fi
     ;;
   *) echo 'Choose arm64-v8a (phone) or x86_64 (emulator smoke only)' >&2; exit 2 ;;
 esac

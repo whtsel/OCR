@@ -10,7 +10,9 @@ ROOT = Path(__file__).resolve().parent
 ASSETS = ('index.html', 'music.js', 'music.css', 'kwaku.svg', 'espresso.svg', 'mix.svg', 'icon.svg')
 
 
-def package(original, helper, overlay, manifest, output, native_x86=None):
+def package(original, helper, overlay, manifest, output, native_x86=None, live=False):
+    if live and not native_x86:
+        raise ValueError('Live comparison mode is only for the disposable x86 pilot')
     p11.verify_apk(original)
     helper_bytes = helper.read_bytes()
     p11.verify_refreshed_helper(helper_bytes)
@@ -21,7 +23,7 @@ def package(original, helper, overlay, manifest, output, native_x86=None):
     if len(tracks) != 2 or {tuple(row[k] for k in ('title', 'id', 'seconds')) for row in tracks} != set(p11.SONGS):
         raise ValueError('Pilot catalogue changed the two tested recordings')
     if native_x86:
-        profile['fixtures'] = True
+        profile['fixtures'] = not live
     elif profile.get('fixtures'):
         raise ValueError('Fixtures are not allowed in the ARM64 phone package')
     replacements = {'AndroidManifest.xml': manifest_bytes, 'res/raw/ytdlp': helper_bytes}
@@ -63,4 +65,5 @@ if __name__ == '__main__':
     for arg in ('original', 'helper', 'overlay', 'manifest', 'output'):
         parser.add_argument(arg, type=Path)
     parser.add_argument('--native-x86', type=Path)
+    parser.add_argument('--live', action='store_true')
     package(**vars(parser.parse_args()))

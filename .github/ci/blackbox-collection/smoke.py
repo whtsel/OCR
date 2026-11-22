@@ -122,7 +122,7 @@ def advancing(read, key, title, after):
     raise RuntimeError(f'{title} did not advance past {after / 1000:.1f}s in Now Playing: {payload}')
 
 
-def play_offline(read, key, title):
+def play_offline(read, key, title, kind='fixture'):
     tap('Play ' + title)
     if not read("document.getElementById('open-player').click(); document.getElementById('player').open"):
         # The mini-player may be hidden just until the bridge's next render tick.
@@ -136,7 +136,7 @@ def play_offline(read, key, title):
     sought, _ = advancing(read, key, title, duration // 2)
     advanced, _ = advancing(read, key, title, sought + 900)
     read("document.getElementById('close-player').click()")
-    print(f'::notice::PASS cold offline {title} fixture: {start / 1000:.1f}s → seek {sought / 1000:.1f}s → {advanced / 1000:.1f}s of {duration / 1000:.1f}s')
+    print(f'::notice::PASS cold offline {title} {kind}: {start / 1000:.1f}s → seek {sought / 1000:.1f}s → {advanced / 1000:.1f}s of {duration / 1000:.1f}s')
 
 
 def smoke(apk, directory):

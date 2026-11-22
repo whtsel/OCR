@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       verify_live_catalogue:
-        description: Try one cold provider save from the original v90 Find, without fixtures (does not publish an APK)
+        description: Compare a fresh Espresso save in full v90 Find and the archived-helper pilot (no upload)
         type: boolean
         default: false
   push:
@@ -92,7 +92,7 @@ jobs:
           fi
           echo "$report"
           echo "::notice::$(sha256sum "$apk")"
-      - name: Build the x86 sibling and stage deterministic fixtures
+      - name: Build the x86 v90 sibling and install audio verification tools
         run: |
           log=$(mktemp)
           if ! (cd android && gradle :app:assembleDebug --no-daemon --console=plain -PbbxOfflineMusic=true -PbbxHelperAbi=x86_64) > "$log" 2>&1; then
@@ -106,7 +106,13 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Verify Android downloads and offline restart (fixtures or opt-in live trial)
+      - name: Assemble a live-only x86 pilot from the archived p11 DEX
+        if: ${{ inputs.verify_live_catalogue }}
+        run: |
+          python3 -B -u .github/ci/check_blackbox_p11.py download "$RUNNER_TEMP/p11.apk"
+          bash .github/ci/blackbox-collection/build.sh "$RUNNER_TEMP/p11.apk" android/vendor/ytdlp \
+            "$RUNNER_TEMP/pilot-live.apk" x86_64 live
+      - name: Verify Android downloads and offline restart
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 35
@@ -114,7 +120,12 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
-          script: PYTHONPATH=".github/ci:$RUNNER_TEMP/offline-tools" python3 -B -u .github/ci/smoke_v90_offline.py android/app/build/outputs/apk/debug/app-debug.apk ${{ inputs.verify_live_catalogue && '--live' || '' }}
+          script: >-
+            export PYTHONPATH=".github/ci:$RUNNER_TEMP/offline-tools";
+            if [ "${{ inputs.verify_live_catalogue }}" = true ]; then
+            python3 -B -u .github/ci/compare_v90_offline.py
+            android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/pilot-live.apk";
+            else python3 -B -u .github/ci/smoke_v90_offline.py android/app/build/outputs/apk/debug/app-debug.apk; fi
       - name: Require package verification before upload
         if: ${{ !inputs.verify_live_catalogue && steps.package.outcome != 'success' }}
         run: exit 1
