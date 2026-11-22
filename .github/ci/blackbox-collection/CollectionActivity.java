@@ -38,6 +38,10 @@ public final class CollectionActivity extends Activity {
         try {
             OfflineLibrary library = OfflineLibrary.open(this);
             player = new LocalPlayer(this, library);
+            // The non-distributed emulator sibling uses DevTools to observe the live clock.
+            if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                WebView.setWebContentsDebuggingEnabled(true);
+            }
             web = new WebView(this);
             web.setBackgroundColor(INK);
             WebSettings settings = web.getSettings();

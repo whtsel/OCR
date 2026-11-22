@@ -40,8 +40,10 @@ jobs:
           bash "$build" "$RUNNER_TEMP/p11.apk" "$pin" "$apk"
           echo "::notice::$(sha256sum "$apk")"
           bash "$build" "$RUNNER_TEMP/p11.apk" "$pin" "$RUNNER_TEMP/collection-smoke.apk" x86_64
-      - name: Install the synthetic audio fixture tool
-        run: bash .github/ci/install_audio_probe.sh
+      - name: Install synthetic audio and WebView fixture tools
+        run: |
+          bash .github/ci/install_audio_probe.sh
+          python3 -m pip install --disable-pip-version-check --target "$RUNNER_TEMP/pilot-tools" websocket-client==1.8.0
       - name: Enable KVM for the disposable emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -56,7 +58,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
           script: >-
-            PYTHONPATH=.github/ci python3 -B -u .github/ci/blackbox-collection/smoke.py "$RUNNER_TEMP/collection-smoke.apk"
+            PYTHONPATH=".github/ci:$RUNNER_TEMP/pilot-tools" python3 -B -u .github/ci/blackbox-collection/smoke.py "$RUNNER_TEMP/collection-smoke.apk"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: BlackBox-Music-Offline-Pilot-ARM64
