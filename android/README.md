@@ -4,16 +4,19 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.1 (ARM64)** is the full v90 Android build, not the Music pilot.
-Its test package (`com.blackboxstream.mobile.offline.parallel`) installs beside 1.5.0, the pilot,
-and the other v90 builds. It starts with a separate, empty Collection so it does not overwrite or
-delete existing downloads. Use Android 7.0 or later with an up-to-date System WebView. The original
-v90 expiry still applies (end of 31 March 2027 UTC).
+**BlackBox Stream v90 Offline 1.5.2 (ARM64)** is the full v90 Android test build with the corrected
+Find results and catalogue matcher. Its package (`com.blackboxstream.mobile.offline.catalogue`)
+installs beside 1.5.1, the pilot, and the Music Save Check. It starts with a separate, empty
+Collection; it does not import, overwrite, or delete existing downloads. Keep the older app to
+access its own saved files. Use Android 7.0 or later with an up-to-date System WebView. The
+original v90 expiry still applies (end of 31 March 2027 UTC).
 
-- **Music → Find** is the original v90 Music discovery UI: fourteen genre shelves, instant and
-  structured catalogue search, and ordered album tracklists. The download buttons explicitly add a
-  song, selected group, or album to Downloads. A partial album offers **Play saved** and **Queue
-  missing**. The catalogue includes metadata, not bundled audio.
+- **Music → Find** keeps the original v90 Music discovery UI: fourteen genre shelves, instant and
+  structured results, and ordered album tracklists. Suggestions and submitted results use the same
+  included albums and genre picks. Distinct releases and durations stay separate; a miss is not sent to
+  a provider or filled with an unrelated song. The download buttons explicitly add a song, selected
+  group, or album. A partial album offers **Play saved** and **Queue missing**. The catalogue holds
+  metadata, not bundled audio or a live provider-wide search.
 - **Downloads** starts up to five independent jobs when Android has an Internet connection,
   including mobile data. There is no app-level network choice. Pause lets active jobs finish but
   does not start another; a provider rate limit pauses new jobs briefly. Progress rings show actual
@@ -22,9 +25,11 @@ v90 expiry still applies (end of 31 March 2027 UTC).
   The bundled v90 Android helper resolves and downloads a catalogue recording in one session,
   preferring AAC when available. The known v90 IDs (including Espresso, bad guy, and On the Low)
   go directly to those recordings. Published source hints for other tracks require an exact metadata
-  match. For example, the original 3:59 Calm Down pick omits Selena Gomez from its visible credit;
-  that row checks for the duet, not the 3:40 solo master. Missing evidence or a refusal shows in Needs
-  attention rather than saving a substitute.
+  match. The two 3:59 Calm Down catalogue rows display and check the duet credits, not the 3:40
+  solo master; their existing queue keys are unchanged. The two Black Sherif releases *The
+  Villain I Never Was* and *IRON BOY* can use the official EMPIRE distribution metadata on the
+  Black Sherif Music channel when the channel ID, track, release, credits and duration agree.
+  Missing evidence or a refusal shows in Needs attention rather than saving a substitute.
 - **Collection** plays its saved, app-private files without the helper or a connection. To check it on
   a phone, save one song, force-stop the app, turn on airplane mode with Wi‑Fi off, reopen, and play
   and seek from Collection. The source must still allow a fresh download before this test.
@@ -35,9 +40,11 @@ Build the offline package with `cd android && gradle :app:assembleRelease -PbbxO
 (Gradle 8.9, JDK 17 and Android SDK 35; allow up to 3 GiB of Java heap for release dependencies).
 The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) signs the ARM64 test APK,
 checks the bundled v90 assets and pinned Android helper, and tests an x86 sibling with synthetic
-media. The suite tests five overlapping real byte transfers on metered reconnect, exact and
-unknown-length progress rings, pause and retry, both album queue routes, and playback/seek after a
-force-stop in airplane mode. It does not establish live-provider availability. Dispatch the workflow
+media. The suite tests five overlapping byte transfers, exact and unknown-length progress rings,
+pause and retry, and both album queue routes. It also queues the unpinned IRON BOY row for *The
+Victory Song*, checks the exact loopback bytes saved for that row, then plays and seeks after a
+force-stop in airplane mode. This is a synthetic-audio check, not live-provider availability.
+Dispatch the workflow
 with `verify_live_catalogue=true` to compare a fresh **Espresso** save from the original Find
 with a fresh save in the archived-helper pilot. Both select `51zjlMhdSTE` and run on the same x86
 emulator, without preseeded files or account credentials. The pilot calls the archived `audio(id)`
@@ -57,6 +64,32 @@ physical-phone comparison. It runs the archived pilot and full v90 save paths fo
 Espresso recording, with one explicit attempt at a time, separate empty audio staging and
 local result text. It does not import, update or overwrite either installed music app. Its
 fixture gate is not a live provider test.
+
+### Find and album-recording regression tests
+
+Run `node --test android/tests/test_offline_find.cjs` against the included catalogue. It checks
+that both Find surfaces can return curated singles such as Joro, keep the two versions of Calm
+Down on *Rave & Roses Ultra*, and report catalogue misses without suggesting unrelated tracks.
+`python3 -B android/tests/test_catalogue_music.py` checks that the EMPIRE label metadata for
+[The Homeless Song](https://www.youtube.com/watch?v=XRnLYE4WN6I) and
+[The Victory Song](https://www.youtube.com/watch?v=f1YjlWCgc2U) can verify under the original
+album and artist, and rejects different publishers, editions or durations. These controlled
+checks establish neither that other audio is available nor that a live download will complete.
+
+### Confirmed phone save: Espresso
+
+The [ARM64 diagnostic](https://github.com/whtsel/OCR/actions/runs/45020742313), at `f8a23a4`,
+reported a fresh **Full v90** save of **Espresso** from *Short n’ Sweet* (`album:1752214909:1:7`,
+`51zjlMhdSTE`, 175 s). It verified a 2,839,061-byte file in 63.3 s and recorded **Cold offline
+seek passed**. Pilot was not attempted, so this establishes a working Full save, not a paired result.
+
+For this recording, the [distributed Offline 1.5.1 build](https://github.com/whtsel/OCR/actions/runs/45013309755)
+at `9bbd29c` and the diagnostic use the same direct recording pin, helper version, transfer options,
+deadlines and file verifier. The tester supplies the row directly and publishes to its own storage;
+it does not exercise the main app's Find selection, Downloads queue, or Collection player. Use one
+new, verified save through those existing screens as the full-app regression target before testing
+batches. Do not count a file imported from the tester or infer the cause of earlier failures from
+this single pass.
 
 ## Earlier Fast Start preview
 

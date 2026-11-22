@@ -45,7 +45,7 @@ with zipfile.ZipFile(Path(sys.argv[1])) as apk:
     if offline:
         for name in (b'OfflineMusicLibrary', b'OfflineMusicPlayer', b'WholeFileMusicRuntime'):
             assert any(b'Lcom/blackboxstream/mobile/' + name + b';' in dex for dex in dexes), name
-        for name in ('offline-music.js', 'offline-music.css', 'music-panels.html', 'icon.svg', 'mix.svg', 'kwaku.svg', 'espresso.svg'):
+        for name in ('offline-find.js', 'offline-music.js', 'offline-music.css', 'music-panels.html', 'icon.svg', 'mix.svg', 'kwaku.svg', 'espresso.svg'):
             assert 'assets/v90-offline/' + name in apk.namelist(), name
     assert not any(b'Lcom/blackboxstream/mobile/MusicVideoActivity;' in dex for dex in dexes), 'Song video player shipped'
     assert apk.testzip() is None

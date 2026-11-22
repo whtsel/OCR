@@ -31,7 +31,7 @@ def assemble(original, pin, linked, overlay, output, x86):
             raise ValueError('Unexpected code or media in the resource APK')
         verify_refreshed_helper(resources.read('res/raw/ytdlp'))
         companion = resources.read('res/raw/catalogue_music.py')
-        if not 1 <= len(companion) < 16 * 1024:
+        if not 1 <= len(companion) <= 24 * 1024:
             raise ValueError('The supplied v90 matcher does not fit the app loader')
         with ZipFile(output, 'w', compression=ZIP_DEFLATED) as apk:
             for info in resources.infolist():

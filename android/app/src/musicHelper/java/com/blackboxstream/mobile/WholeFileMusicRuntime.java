@@ -47,10 +47,13 @@ final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
     }
 
     static String lookupArtist(PreparedMusic.Track track) {
-        // The original single pick omits the second performer. Only correct that
-        // exact row for the lookup; keep the packaged catalogue and saved key intact.
-        if (track.ref.equals("pick:1873297197") && track.seconds == 239 && track.artist.equals("Rema")
-                && track.title.equals("Calm Down") && track.album.equals("Calm Down")) return "Rema & Selena Gomez";
+        // Both 3:59 rows omit the second performer. Keep their keys and releases;
+        // use the full credits only when resolving those exact catalogue entries.
+        if (track.seconds == 239 && track.artist.equals("Rema") && track.title.equals("Calm Down")
+                && (track.ref.equals("pick:1873297197") && track.album.equals("Calm Down")
+                    || track.ref.equals("album:d432510347:1:22") && track.album.equals("Rave & Roses Ultra"))) {
+            return "Rema & Selena Gomez";
+        }
         return track.artist;
     }
 }

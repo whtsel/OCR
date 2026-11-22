@@ -105,10 +105,18 @@
   renderMusicDownloads = () => {};
   refreshMusicPlayingMarkers = () => {};
   primeMusicFrequencyAnalyser = () => {};
-  getCachedMusicSearchResults = async text => window.bbxMusicSearchV76?.search(text, {limit:30})?.songs.map(row => row.track) || [];
+  const find = window.BbxOfflineFind;
+  let findIndex;
+  function findLocal(catalogue, query, limit) {
+    if (!findIndex) findIndex = find.index(catalogue.albums, musicAlbumTracksV63,
+      MUSIC_GENRES_V50.flatMap(genre => genre.results.map(track => ({...track, genre:genre.title}))));
+    return findIndex(query, limit);
+  }
+  musicCatalogSearchV63 = findLocal;
+  getCachedMusicSearchResults = async query => findLocal(await loadMusicAlbumCatalogV63(), query).songs;
   renderMusicProviderFallbackV63 = async () => {
-    id('musicMsg').textContent = 'No matching recording in the v90 catalogue.';
-    id('musicTorrGrid').replaceChildren(node('p', 'sub', 'Try a song, artist or release. No other recording will be downloaded.'));
+    id('musicMsg').textContent = 'No match in the included v90 catalogue.';
+    id('musicTorrGrid').replaceChildren(node('p', 'sub', 'Find searches the songs and releases included in this version. Nothing else was queued.'));
     return [];
   };
   loadMusicFeatured = ((original) => (...args) => {
@@ -153,7 +161,14 @@
   wireMusicWarmup = (root, item) => decorate(root, recording(item));
   renderMusicTrackRowsV63 = ((original) => (target, tracks, label) => {
     original(target, tracks, label);
-    [...(target?.children || [])].forEach((root, index) => decorate(root, recording(tracks[index])));
+    [...(target?.children || [])].forEach((root, index) => {
+      const item = tracks[index];
+      decorate(root, recording(item));
+      const line = root.querySelector(':scope > div > span');
+      const credits = find.credits(item);
+      if (line && credits !== (item.artist || item.channel || ''))
+        line.textContent = `${credits} · ${item.album} · ${musicDuration(item.duration)}`;
+    });
   })(renderMusicTrackRowsV63);
   const albumCache = new WeakMap();
   function albumRows(album) {
@@ -205,8 +220,7 @@
     root.querySelector('[data-genre-queue]').onclick = () => enqueue(genre.results.map(recording), genre.title);
     syncFind();
   })(openMusicGenre);
-  // v76's instant suggestions keep their own click dispatcher. Route the plus action here
-  // once, with an ordered album as one batch instead of N independent requests.
+  // Suggestions share the queue actions used by submitted results, including one batch per album.
   document.addEventListener('click', event => {
     const add = event.target.closest('[data-instant-action="add"]');
     const row = add?.closest('[data-instant-row]');
@@ -230,7 +244,7 @@
   toolbar.append(chooseButton, selectedCount, queueChosen);
   id('musicGenreChips').before(toolbar);
   const heroCopy = document.querySelector('#viewMusic .music-hero-content > p');
-  if (heroCopy) heroCopy.textContent = 'Search artists, songs and albums. Queue the recordings you want, then play them from Collection.';
+  if (heroCopy) heroCopy.textContent = 'Search the included v90 catalogue. Queue the songs you want, then play them from Collection.';
   const genreTools = node('div', 'om-select-tools');
   const genreChoose = button('Select songs', () => chooseButton.click(), 'secondary');
   const genreQueue = button('Queue selection', () => queueChosen.click(), 'primary');
@@ -258,22 +272,23 @@
       detail.querySelector('[data-album-job-v63]').textContent = `${summary.saved} of ${summary.total} saved`;
     }
   }
-  // Instant search rebuilds its rows as the user types, independent of the other v90 renderers.
-  const instantMount = new MutationObserver(() => {
-    const instant = id('musicInstantV76');
-    if (instant) {
-      instantMount.disconnect();
-      const update = () => {
-        if (state.view === 'music' && page === 'find') syncFind();
-        else if (!instant.hidden) window.bbxMusicSearchV76?._close();
-      };
-      new MutationObserver(records => {
-        if (records.some(record => record.target === instant)) update();
-      }).observe(instant, {childList:true});
-      update();
-    }
+  const instant = find.wire(id('musicQuery'), {
+    search: async query => findLocal(await loadMusicAlbumCatalogV63(), query, 7),
+    visible: () => state.view === 'music' && page === 'find',
+    artwork: safeArtwork,
+    activate: (kind, hit) => {
+      if (kind === 'song') playMusicList([hit.track], 0);
+      else {
+        const query = kind === 'artist' ? hit.name : `${hit.title} ${hit.artist}`;
+        id('musicQuery').value = query;
+        searchMusic(query, 'audio');
+      }
+    },
+    render: syncFind,
   });
-  instantMount.observe(document.body, {childList:true});
+  const submitFind = searchMusic;
+  searchMusic = (...args) => { instant.close(); return submitFind(...args); };
+  id('musicClear').addEventListener('click', instant.close);
 
   const artwork = track => {
     if (norm(track?.title) === 'kwaku the traveller' && norm(track?.artist) === 'black sherif') return '/offline-music/kwaku.svg';
@@ -484,7 +499,7 @@
     id('offline-downloads').hidden = !music || page !== 'downloads';
     id('viewMusic').hidden = !find;
     id('om-tabs').hidden = !music;
-    if (!find) window.bbxMusicSearchV76?._close();
+    if (!find) instant.close();
     if (!music && id('om-playlist-dialog').open) id('om-playlist-dialog').close();
     doc.classList.toggle('bbx-offline-active', music);
     doc.classList.toggle('bbx-offline-find', find);
@@ -516,7 +531,7 @@
   window.bbxAndroidBack = () => {
     for (const dialog of [id('om-confirm'), id('om-player'), id('om-playlist-dialog')]) if (dialog.open) { dialog.close(); return true; }
     if (!id('settingsWrap').hidden) return originalBack?.() || false;
-    if (id('musicInstantV76') && !id('musicInstantV76').hidden) { window.bbxMusicSearchV76?._close(); return true; }
+    if (!id('musicInstantV76').hidden) { instant.close(); return true; }
     if (state.view === 'musicGenre' || state.view === 'musicDetail') { show('find'); return true; }
     if (state.view === 'music') {
       if (page === 'find' && !id('musicSearchPane').hidden && id('musicTorrGrid').querySelector('.music-album-back-v63')) {

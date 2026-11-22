@@ -63,7 +63,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             } finally { tmp.delete(); }
         }
         try (InputStream in = app.getResources().openRawResource(R.raw.catalogue_music)) {
-            companion = new String(TorrentMeta.slurp(in, 16 * 1024), StandardCharsets.UTF_8);
+            // One small packaged Python program; keep the same bound in the diagnostic assembler.
+            companion = new String(TorrentMeta.slurp(in, 24 * 1024), StandardCharsets.UTF_8);
         }
         ready = true;
         Log.i("BlackBoxMusic", "Packaged v90 helper ready; pin verified");

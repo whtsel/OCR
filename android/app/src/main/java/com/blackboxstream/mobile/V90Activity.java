@@ -45,7 +45,7 @@ public final class V90Activity extends Activity {
             + "frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'";
     private static final Set<String> ART_HOSTS = new HashSet<>(Arrays.asList("image.tmdb.org", "i.ytimg.com", "img.youtube.com", "cdn-images.dzcdn.net", "is1-ssl.mzstatic.com"));
     private static final Set<String> MOBILE_ASSETS = new HashSet<>(Arrays.asList("android-api.js", "android-port.js", "android-catalogue.js", "android-music.js", "android-v90.css"));
-    private static final Set<String> OFFLINE_ASSETS = new HashSet<>(Arrays.asList("offline-music.js", "offline-music.css", "espresso.svg", "kwaku.svg", "mix.svg", "icon.svg"));
+    private static final Set<String> OFFLINE_ASSETS = new HashSet<>(Arrays.asList("offline-find.js", "offline-music.js", "offline-music.css", "espresso.svg", "kwaku.svg", "mix.svg", "icon.svg"));
     private static final Pattern PLAYING_AUDIO = Pattern.compile("/playing-audio/([a-f0-9]{64})/([a-f0-9]{32})\\.m4a");
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor work = new ThreadPoolExecutor(6, 6, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(80));
@@ -66,7 +66,7 @@ public final class V90Activity extends Activity {
         super.onCreate(state);
         root = Ui.column(this); root.setBackgroundColor(0xff101017);
         Ui.fitWindow(this, root); setContentView(root);
-        offlineMusic = "com.blackboxstream.mobile.offline.parallel".equals(getPackageName());
+        offlineMusic = "com.blackboxstream.mobile.offline.catalogue".equals(getPackageName());
         api = offlineMusic ? new V90Api(this, null) : new V90Api(this);
         try {
             if (offlineMusic && (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0)
@@ -302,13 +302,14 @@ public final class V90Activity extends Activity {
                 .replace("<script src=\"/app.js", "<script src=\"/android-api.js\"></script>\n<script src=\"/app.js")
                 .replaceAll("<script src=\"/(?:fast-source-v74|play-anyway-v74|local-share-v70|ads-v88|source-votes-v74|vote-gate-v75|votes-sync-v74|privacy-panel-v86|anime-media-v74)\\.js[^\"]*\"></script>", "")
                 .replace("</body>", "<script src=\"/android-port.js\"></script>\n<script src=\"/android-catalogue.js\"></script>\n"
-                        + (offlineMusic ? "<script src=\"/offline-music/offline-music.js\"></script>" : "<script src=\"/android-music.js\"></script>") + "\n</body>");
+                        + (offlineMusic ? "<script src=\"/offline-music/offline-find.js\"></script>\n<script src=\"/offline-music/offline-music.js\"></script>"
+                                : "<script src=\"/android-music.js\"></script>") + "\n</body>");
         if (offlineMusic) {
             String panels = new String(TorrentMeta.slurp(getAssets().open("v90-offline/music-panels.html"), 24 * 1024), StandardCharsets.UTF_8);
             // The original Find shelves and discovery scripts remain unchanged on disk.
             html = html.replace("</head>", "<link rel=\"stylesheet\" href=\"/offline-music/offline-music.css\" />\n</head>")
                     .replace("</main>", panels + "\n</main>")
-                    .replaceAll("<script src=\"/music-(?:picker-v78|library-v79|ui-v76)\\.js[^\"]*\"></script>", "");
+                    .replaceAll("<script src=\"/music-(?:search-v76|picker-v78|library-v79|ui-v76)\\.js[^\"]*\"></script>", "");
         }
         return html.getBytes(StandardCharsets.UTF_8);
     }

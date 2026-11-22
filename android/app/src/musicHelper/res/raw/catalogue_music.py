@@ -54,6 +54,8 @@ PUBLISHED = {
         Published('qwpswojKj8M', 'UCXg6YtKpgC59gRKUfxQw8Fw', 192),
     ('calm down', 'rema selena gomez', 'calm down'):
         Published('OkEFHhDBK74', 'UCy6qn2oxmoXA4_gBA5Q7zPw', 239),
+    ('calm down', 'rema selena gomez', 'rave roses ultra'):
+        Published('DKrelwjugQA', 'UCy6qn2oxmoXA4_gBA5Q7zPw', 239),
     ('joro', 'wizkid', 'joro'):
         Published('l45lgQJZWt0', 'UC25DGtgYk5TwdksvtpeWYvA', 262),
     ('water', 'tyla', 'water'):
@@ -64,6 +66,17 @@ PUBLISHED = {
 def published(title, artist, album, seconds):
     hint = PUBLISHED.get((norm(title), norm(artist), norm(album)))
     return hint if hint and close_length(seconds, hint.seconds) else None
+
+
+# The label art tracks for these two releases use the artist's official channel ID,
+# displayed as "Black Sherif Music", not the bare credit or a Topic channel.
+LABEL_CHANNELS = {('black sherif', album): ('UC1IZ-tDYT2IrA-__AMqNOHA', 'Provided to YouTube by EMPIRE Distribution')
+                  for album in ('the villain i never was', 'iron boy')}
+
+
+def label_channel(info, artist, album):
+    channel, label = LABEL_CHANNELS.get((norm(artist), norm(album)), ('', ''))
+    return label if channel and info.get('channel_id') == channel else ''
 
 
 def credit_parts(value):
@@ -161,6 +174,17 @@ def matches(info, expected_id, title, artist, album, seconds):
     known_publisher = hint is not None and expected_id == hint.video and info.get('channel_id') == hint.channel
     verified = info.get('channel_is_verified') is True
     generated = release_fields(info, verified or known_publisher)
+    distributor = label_channel(info, artist, album)
+    description = info.get('description')
+    label_album = False
+    if distributor and isinstance(description, str) and description.startswith(distributor + '\n'):
+        label_fields = release_fields(info, True)
+        if label_fields:
+            name, credits, release_name = label_fields
+            label_album = (norm(song_title(name)[0]) == norm(wanted) and same_credits(credits, artist)
+                           and same_release(release_name, album, is_live))
+            if label_album and generated is None:
+                generated = label_fields
     track_tag, credits_hint, release_hint = generated if generated is not None else ('', [], '')
     track, tag_guests = song_title(info.get('track') or track_tag)
     release = info.get('album') or release_hint
@@ -198,13 +222,13 @@ def matches(info, expected_id, title, artist, album, seconds):
     publisher_channel = known_publisher and track_tag and credits_hint and release_hint and (
         norm(song_title(track_tag)[0]) == norm(wanted) and same_credits(credits_hint, artist)
         and same_release(release_hint, hint.release or album, is_live))
-    if channel not in named and not publisher_channel and not (
+    if channel not in named and not publisher_channel and not label_album and not (
             verified and any(channel.replace(' ', '') == name.replace(' ', '') + 'vevo' for name in named)):
         return False
     return verified or generated is not None
 
 
-def candidates(entries, title, artist, seconds, inspected=()):
+def candidates(entries, title, artist, album, seconds, inspected=()):
     ranked = []
     seen = set(inspected)
     credits = {norm(artist), *credit_parts(artist)}
@@ -220,7 +244,8 @@ def candidates(entries, title, artist, seconds, inspected=()):
                 or not (same_video_title(item.get('title'), title, artist) or same_video_title(item.get('title'), short, artist))):
             continue
         seen.add(video)
-        ranked.append((2 * (channel_artist(item) in credits) + (duration is not None), video))
+        ranked.append((4 * bool(label_channel(item, artist, album))
+                       + 2 * (channel_artist(item) in credits) + (duration is not None), video))
     ranked.sort(key=lambda pair: pair[0], reverse=True)
     return [video for _, video in ranked]
 
@@ -279,7 +304,7 @@ def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembere
         stage('BBX_CATALOGUE_ALTERNATE' if index else 'BBX_CATALOGUE_QUERY')
         rows = engine.extract_info(f'ytsearch{SEARCH_COUNT}:{query}', download=False, process=False)
         limit = INSPECTIONS - len(checked) - (1 if index == 0 else 0)
-        for video in candidates((rows or {}).get('entries'), title, artist, seconds, checked)[:limit]:
+        for video in candidates((rows or {}).get('entries'), title, artist, album, seconds, checked)[:limit]:
             if verify(video):
                 return True
     if rejected and not inspected:

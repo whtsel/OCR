@@ -20,7 +20,7 @@ from websocket import create_connection
 
 import check_blackbox_p11 as p11
 
-PKG = 'com.blackboxstream.mobile.offline.parallel'
+PKG = 'com.blackboxstream.mobile.offline.catalogue'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -274,6 +274,94 @@ def check_parallel(js, tone):
     print('::notice::PASS five helpers started automatically on metered reconnect; byte-accurate rings, pause, and sixth indeterminate transfer')
 
 
+def check_find(js):
+    query(js, 'Joro Wizkid', submit=False)
+    wait(js, "!!document.querySelector('#musicInstantV76:not([hidden]) [aria-label=\"Queue Joro\"]')",
+         'Curated Joro single missing from instant Find')
+    query(js, 'Calm Down Rave & Roses Ultra')
+    wait(js, "[...document.querySelectorAll('#musicTorrGrid .music-catalog-track-v63')].filter(row=>"
+             "row._omTrack?.title==='Calm Down').map(row=>row._omTrack.seconds).sort().join(',')==='220,239'",
+         'Submitted Find hid a Calm Down edition')
+    if not js("[...document.querySelectorAll('#musicTorrGrid [data-om-track]')].some(row=>"
+              "row._omTrack.ref==='album:d432510347:1:22' && row.textContent.includes('Selena Gomez'))"):
+        raise RuntimeError('Verified duet credit did not render on the exact album row')
+    query(js, 'Calm Down Selena Gomez', submit=False)
+    selector = '#musicInstantV76:not([hidden]) [data-kind="song"]'
+    wait(js, f"[...document.querySelectorAll({json.dumps(selector)})].map(row=>row._omTrack?.seconds).join(',')==='239,239'",
+         'Instant duet search missed the two 3:59 rows or suggested the solo')
+    if not js(f"(()=>{{const row=[...document.querySelectorAll({json.dumps(selector)})].find(item=>"
+              "item._omTrack?.ref==='album:d432510347:1:22'); const b=row?.querySelector('[data-om-add]');"
+              "if(!b||b.disabled)return false; b.click();return true})()"):
+        raise RuntimeError('Cannot queue the verified duet album row')
+    row, = entries(js)
+    if (row['ref'], row['artist'], row['state']) != ('album:d432510347:1:22', 'Rema', 'offline'):
+        raise RuntimeError('Presentation changed the durable queue identity')
+    js(f"OfflineMusic.queue('remove',{json.dumps(row['key'])})")
+    query(js, 'zzzz no such recording')
+    wait(js, "document.querySelector('#musicMsg').textContent.includes('No match in the included v90 catalogue')"
+             " && !document.querySelector('#musicTorrGrid [data-om-track]')", 'Find substituted for a missing catalogue entry')
+    click(js, '#musicClear')
+    print('::notice::PASS instant and submitted Find keep curated singles and both Calm Down editions, without altering Downloads keys')
+
+
+def check_cold_seek(js, track, seconds):
+    title, key = track['title'], track['key']
+    click(js, f'#om-saved [aria-label="Play {title}"]')
+    wait(js, "!document.querySelector('#om-mini').hidden", 'No mini-player')
+    click(js, '#om-now')
+    duration = int(wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.player());return p.key==='{key}'"
+                            "&&p.playing&&p.position>700&&p.duration})()", 'Offline clock did not advance'))
+    if abs(duration - 1000*seconds) > 1000:
+        raise RuntimeError('Wrong duration for ' + title)
+    wait(js, f"document.querySelector('#om-player').open && document.querySelector('#om-now-title').textContent==={json.dumps(title)}"
+             " && !document.querySelector('#om-seek').disabled", 'Now Playing did not show the ready recording')
+    js("(()=>{const el=document.getElementById('om-seek');el.value=Number(el.max)*.72;"
+       "el.dispatchEvent(new Event('input'));el.dispatchEvent(new Event('change'))})()")
+    jump = wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.player());return p.position>{duration//2}&&p.position}})()",
+                'Offline seek did not reach the far side of the file')
+    wait(js, f"JSON.parse(OfflineMusic.player()).position>{jump+800}", 'Clock did not advance after seek')
+    click(js, '#om-player-close')
+    print(f'::notice::PASS {title} synthetic fixture played and sought after a force-stop in airplane mode ({duration} ms, seek {jump} ms)')
+
+
+def check_unpinned_album(tone):
+    title, ref, seconds = 'The Victory Song', 'album:d735721521:1:1', 175
+    airplane(True)
+    with page() as js:
+        open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Queue is not offline for album fixture setup')
+        if any(t['ref'] == ref or t['state'] != 'saved' for t in entries(js)):
+            raise RuntimeError('Unpinned album trial requires a fresh slot with no other pending job')
+        click(js, '#om-tab-find')
+        query(js, 'Black Sherif The Victory Song')
+        control = '#musicTorrGrid [aria-label="Queue The Victory Song"]:not(:disabled)'
+        wait(js, f'!!document.querySelector({json.dumps(control)})', 'The exact IRON BOY row is not listed in Find')
+        click(js, control)
+        row, = [t for t in entries(js) if t['ref'] == ref]
+        if (row['title'], row['artist'], row['album'], row['seconds'], row['state']) != (
+                title, 'Black Sherif', 'IRON BOY', seconds, 'offline'):
+            raise RuntimeError('Find lost the exact album recording identity')
+    key = row['key']
+    for file in (f'files/offline-music/staging/{key}', f'files/offline-music/saved/{key}.m4a'):
+        p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', file)
+    # The fixture must use the fresh catalogue key, not one of the known video IDs.
+    route = f'/{key}.m4a'
+    with recording_server({route: tone}) as requests, page() as js:
+        airplane(False)
+        wait(js, f"JSON.parse(OfflineMusic.library()).tracks.some(t=>t.key==='{key}'&&t.state==='saved')",
+             'The unpinned album fixture was not verified and saved', 75)
+        if requests != {route}:
+            raise RuntimeError('The unpinned album recording did not use its own fixture transfer')
+        verify_bytes(row, tone)
+    force_stop()
+    airplane(True)
+    with page() as js:
+        open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Cold album playback was not offline')
+        check_cold_seek(js, row, seconds)
+    print('::notice::PASS a third, unpinned catalogue row (The Victory Song) went from Find through Downloads to a verified Collection file (loopback tone only)')
+
+
 def smoke(apk, root):
     tones = {}
     for i, (title, (video, seconds)) in enumerate(TRACKS.items()):
@@ -302,6 +390,7 @@ def smoke(apk, root):
         if not js("!document.querySelector('#music-shelf-trending-now').hidden"):
             raise RuntimeError('Missing v90 trending shelf')
         print('::notice::PASS full v90 launch, Movies, Library and Settings; Find uses the original Music hero, 14 genres and shelves')
+        check_find(js)
 
         query(js, 'Sabrina Carpenter')
         wait(js, "!!document.querySelector('.music-artist-card-v63') && !!document.querySelector('[data-album-open-v63=\"1752214909\"]')", 'Structured v90 artist and album results missing')
@@ -411,19 +500,7 @@ def smoke(apk, root):
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'The cold playback test phone is not offline')
         wait(js, "document.querySelector('#om-collection-count').textContent==='2 songs available offline' && !!document.querySelector('[aria-label=\"Play Offline fixture\"]')", 'Offline collection or playlist did not persist')
         for track in pending:
-            title, key = track['title'], track['key']
-            click(js, f'#om-saved [aria-label="Play {title}"]')
-            wait(js, "!document.querySelector('#om-mini').hidden", 'No mini-player')
-            click(js, '#om-now')
-            duration = int(wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.player());return p.key==='{key}'&&p.playing&&p.position>700&&p.duration}})()", 'Offline clock did not advance'))
-            if abs(duration - 1000*TRACKS[title][1]) > 1000:
-                raise RuntimeError('Wrong duration for ' + title)
-            wait(js, f"document.querySelector('#om-player').open && document.querySelector('#om-now-title').textContent==={json.dumps(title)} && !document.querySelector('#om-seek').disabled", 'Now Playing did not show the ready recording')
-            js("(()=>{const el=document.getElementById('om-seek');el.value=Number(el.max)*.72;el.dispatchEvent(new Event('input'));el.dispatchEvent(new Event('change'))})()")
-            jump = wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.player());return p.position>{duration//2}&&p.position}})()", 'Offline seek did not reach the far side of the file')
-            wait(js, f"JSON.parse(OfflineMusic.player()).position>{jump+800}", 'Clock did not advance after seek')
-            click(js, '#om-player-close')
-            print(f'::notice::PASS {title} synthetic fixture played and sought after a force-stop in airplane mode ({duration} ms, seek {jump} ms)')
+            check_cold_seek(js, track, TRACKS[track['title']][1])
         click(js, '#om-now')
         click(js, '#om-stop')
         wait(js, "!JSON.parse(OfflineMusic.player()).key", 'Stop did not clear the local player')
@@ -447,6 +524,10 @@ def smoke(apk, root):
     with page() as js:
         open_music(js)
         check_parallel(js, tones[ESPRESSO])
+    album_tone = root / 'album-control.m4a'
+    p11.run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=960:duration=175',
+            '-c:a', 'aac', '-movflags', '+faststart', album_tone, timeout=30)
+    check_unpinned_album(album_tone.read_bytes())
 
 
 def live_trial(apk):

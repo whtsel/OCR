@@ -626,9 +626,13 @@ public final class BlackBoxSmoke extends Instrumentation {
         PreparedMusic.Track duet = new PreparedMusic.Track(spec("pick:1873297197", "Calm Down", "Rema", "Calm Down", 239, ""));
         PreparedMusic.Track solo = new PreparedMusic.Track(spec("pick:other", "Calm Down", "Rema", "Calm Down", 220, ""));
         PreparedMusic.Track unconfirmed = new PreparedMusic.Track(spec("pick:other", "Calm Down", "Rema", "Calm Down", 239, ""));
-        assertPass("Only the known 3:59 Calm Down row gets the duet credits, without re-keying the saved track",
+        PreparedMusic.Track albumDuet = new PreparedMusic.Track(spec("album:d432510347:1:22", "Calm Down", "Rema", "Rave & Roses Ultra", 239, ""));
+        PreparedMusic.Track albumSolo = new PreparedMusic.Track(spec("album:d432510347:1:4", "Calm Down", "Rema", "Rave & Roses Ultra", 220, ""));
+        assertPass("Only the two known 3:59 Calm Down rows get duet credits, without re-keying saved tracks",
                 "Rema & Selena Gomez".equals(credits.invoke(null, duet)) && "Rema".equals(duet.artist)
-                        && "Rema".equals(credits.invoke(null, solo)) && "Rema".equals(credits.invoke(null, unconfirmed)));
+                        && "Rema & Selena Gomez".equals(credits.invoke(null, albumDuet)) && "Rema".equals(albumDuet.artist)
+                        && "Rema".equals(credits.invoke(null, solo)) && "Rema".equals(credits.invoke(null, albumSolo))
+                        && "Rema".equals(credits.invoke(null, unconfirmed)));
     }
 
     private void verifyMusicBudget() throws Exception {
