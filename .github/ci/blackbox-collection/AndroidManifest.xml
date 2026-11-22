@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.blackbox.stream.collectionpilot">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Separate process, UID and files from p11 and .phonetest; no imports or migration. -->
+    <application android:label="BlackBox Music" android:icon="@*com.blackbox.stream:drawable/ic_launcher"
+        android:theme="@*com.blackbox.stream:style/AppTheme" android:allowBackup="false"
+        android:hardwareAccelerated="true" android:extractNativeLibs="true" android:usesCleartextTraffic="false">
+        <activity android:name="com.blackbox.stream.collectionpilot.CollectionActivity" android:exported="true" android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

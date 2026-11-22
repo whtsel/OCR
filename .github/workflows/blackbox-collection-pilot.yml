@@ -1,0 +1,64 @@
+name: BlackBox Music offline pilot
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/**']
+    paths:
+      - '.github/ci/blackbox-collection/**'
+      - '.github/workflows/blackbox-collection-pilot.yml'
+      - '.github/ci/check_blackbox_p11.py'
+      - 'android/vendor/ytdlp'
+permissions:
+  contents: read
+concurrency:
+  group: blackbox-collection-pilot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - name: Verify input and offline UI code
+        run: |
+          pilot=.github/ci/blackbox-collection
+          node --check "$pilot/ui/music.js"
+          javac -d "$RUNNER_TEMP/failure-test" "$pilot/DownloadFailure.java" "$pilot/FailureTest.java"
+          java -cp "$RUNNER_TEMP/failure-test" com.blackbox.stream.collectionpilot.FailureTest
+          python3 -B -u .github/ci/check_blackbox_p11.py download "$RUNNER_TEMP/p11.apk"
+      - name: Build isolated ARM64 phone package and emulator sibling
+        run: |
+          apk="$RUNNER_TEMP/BlackBox-Music-Offline-Pilot-ARM64.apk"
+          pin=android/vendor/ytdlp
+          build=.github/ci/blackbox-collection/build.sh
+          bash "$build" "$RUNNER_TEMP/p11.apk" "$pin" "$apk"
+          echo "::notice::$(sha256sum "$apk")"
+          bash "$build" "$RUNNER_TEMP/p11.apk" "$pin" "$RUNNER_TEMP/collection-smoke.apk" x86_64
+      - name: Enable KVM for the disposable emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Check queue, recovery, verified files and cold offline playback
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -noaudio
+          script: >-
+            PYTHONPATH=.github/ci python3 -B -u .github/ci/blackbox-collection/smoke.py "$RUNNER_TEMP/collection-smoke.apk"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: BlackBox-Music-Offline-Pilot-ARM64
+          path: ${{ runner.temp }}/BlackBox-Music-Offline-Pilot-ARM64.apk
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#141317">
+  <title>BlackBox Music</title>
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="stylesheet" href="music.css">
+  <script src="music.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <main id="scroll">
+      <header class="masthead">
+        <div class="brand"><img src="icon.svg" width="28" height="28" alt=""> BLACKBOX <span>MUSIC</span></div>
+        <button class="icon-button shortcut" type="button" data-tab="find" aria-label="Find music"></button>
+      </header>
+      <p id="testing" class="notice" hidden>Test audio only · no provider requests</p>
+      <p id="problem" class="notice" role="status" hidden></p>
+      <section id="collection" class="page" aria-labelledby="collection-title">
+        <header class="heading">
+          <h1 id="collection-title">Your music<span>.</span></h1>
+          <p id="collection-sub">Opening your collection…</p>
+        </header>
+        <section class="group" aria-labelledby="playlists-title">
+          <div class="section-header"><h2 id="playlists-title">Playlists</h2><span>ON THIS DEVICE</span></div>
+          <div class="mix-card">
+            <img src="mix.svg" alt="" width="92" height="92" class="mix-art">
+            <div class="mix-copy"><h3>Saved rotation</h3><p id="mix-count">No saved tracks yet</p></div>
+            <button id="play-mix" class="round primary" type="button" aria-label="Play saved rotation" disabled></button>
+          </div>
+        </section>
+        <section class="group" aria-labelledby="saved-title">
+          <div class="section-header"><h2 id="saved-title">Saved songs</h2><span id="track-count"></span></div>
+          <div id="saved-songs" class="track-list"></div>
+        </section>
+        <section id="releases" class="group" aria-labelledby="releases-title" hidden>
+          <div class="section-header"><h2 id="releases-title">Albums &amp; singles</h2></div>
+          <div id="release-list" class="release-list"></div>
+        </section>
+      </section>
+      <section id="find" class="page" aria-labelledby="find-title" hidden>
+        <header class="heading"><h1 id="find-title">Find<span>.</span></h1><p>Queue a recording now. Listen when it’s saved.</p></header>
+        <label class="search"><span class="search-icon" aria-hidden="true"></span><input type="search" id="filter" placeholder="Song, artist or release" autocomplete="off" aria-label="Search these recordings"></label>
+        <section class="group" aria-labelledby="find-results-title">
+          <div class="section-header"><h2 id="find-results-title">Pilot recordings</h2><span id="matches"></span></div>
+          <div id="results" class="track-list"></div>
+          <div class="find-actions"><span id="selection-count" aria-live="polite"></span><button id="queue-selection" class="primary pill" type="button" disabled>Queue both</button></div>
+        </section>
+      </section>
+      <section id="downloads" class="page" aria-labelledby="downloads-title" hidden>
+        <header class="heading"><h1 id="downloads-title">Downloads<span>.</span></h1><p>Saved songs are ready to play offline.</p></header>
+        <div class="download-actions"><button class="outline pill add-songs" type="button" data-tab="find">Add songs</button><span class="wifi-note">Starts on Wi-Fi by default</span></div>
+        <section class="group" aria-labelledby="queue-title">
+          <div class="section-header"><h2 id="queue-title">Queue</h2><button id="pause-queue" class="link" type="button" hidden>Pause after current</button></div>
+          <div id="queue-list"></div>
+        </section>
+        <section id="issues" class="group" aria-labelledby="issues-title" hidden>
+          <div class="section-header"><h2 id="issues-title">Needs attention</h2></div>
+          <div id="issue-list" class="track-list"></div>
+        </section>
+        <section class="group" aria-labelledby="downloaded-title">
+          <div class="section-header"><h2 id="downloaded-title">Saved</h2><button class="link" type="button" data-tab="collection">Open Collection</button></div>
+          <div id="downloaded-list" class="track-list"></div>
+        </section>
+      </section>
+    </main>
+    <section id="mini" class="mini" aria-label="Playback" hidden>
+      <button id="open-player" class="mini-track" type="button" aria-label="Open now playing"><img id="mini-art" alt="" width="38" height="38"><span><strong id="mini-title"></strong><small id="mini-status"></small></span></button>
+      <button id="mini-toggle" class="round bare" type="button" aria-label="Play"></button>
+    </section>
+    <nav class="tabs" aria-label="Music">
+      <button id="tab-collection" type="button" data-tab="collection" aria-current="page">Collection</button>
+      <button id="tab-find" type="button" data-tab="find">Find</button>
+      <button id="tab-downloads" type="button" data-tab="downloads">Downloads<span class="badge" id="pending-count" hidden></span></button>
+    </nav>
+  </div>
+  <dialog id="player" aria-labelledby="now-title">
+    <div class="player-sheet">
+      <div class="player-header"><span>NOW PLAYING</span><button id="close-player" class="icon-button" type="button" aria-label="Close now playing"></button></div>
+      <img id="full-art" width="220" height="220" alt="">
+      <h2 id="now-title"></h2>
+      <p id="now-artist"></p>
+      <p id="now-problem" class="notice" role="status" hidden></p>
+      <input id="seek" type="range" value="0" min="0" max="1" disabled aria-label="Seek playback">
+      <div id="clock">0:00 / 0:00</div>
+      <div class="transport"><button id="previous" class="round bare" type="button" aria-label="Previous song"></button><button id="toggle" class="round primary" type="button" aria-label="Play"></button><button id="next" class="round bare" type="button" aria-label="Next song"></button></div>
+    </div>
+  </dialog>
+</body>
+</html>
