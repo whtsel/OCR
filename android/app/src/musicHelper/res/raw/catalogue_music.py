@@ -50,6 +50,14 @@ PUBLISHED = {
     ('gracefully broken', 'tasha cobbs leonard', 'heart passion pursuit deluxe edition'):
         # The fourth track on both editions, not a rule that all deluxe albums share audio.
         Published('aXyVXhU13sI', 'UCprgXS1VcxyAfFvQXZTjfdA', 377, release='Heart. Passion. Pursuit.'),
+    ('me u', 'tems', 'me u'):
+        Published('qwpswojKj8M', 'UCXg6YtKpgC59gRKUfxQw8Fw', 192),
+    ('calm down', 'rema selena gomez', 'calm down'):
+        Published('OkEFHhDBK74', 'UCy6qn2oxmoXA4_gBA5Q7zPw', 239),
+    ('joro', 'wizkid', 'joro'):
+        Published('l45lgQJZWt0', 'UC25DGtgYk5TwdksvtpeWYvA', 262),
+    ('water', 'tyla', 'water'):
+        Published('Z_4uvlzSlgE', 'UCnZBreGKMYsBpE5Vqxevewg', 200),
 }
 
 
@@ -185,7 +193,13 @@ def matches(info, expected_id, title, artist, album, seconds):
         return False
     named = {norm(artist), *credit_parts(artist), *guests}
     channel = channel_artist(info)
-    if channel not in named and not (verified and any(channel.replace(' ', '') == name.replace(' ', '') + 'vevo' for name in named)):
+    # A publisher can use a label channel name (e.g. StarBoy TV). Only accept this
+    # when the exact published video/channel IDs and distributor music fields agree.
+    publisher_channel = known_publisher and track_tag and credits_hint and release_hint and (
+        norm(song_title(track_tag)[0]) == norm(wanted) and same_credits(credits_hint, artist)
+        and same_release(release_hint, hint.release or album, is_live))
+    if channel not in named and not publisher_channel and not (
+            verified and any(channel.replace(' ', '') == name.replace(' ', '') + 'vevo' for name in named)):
         return False
     return verified or generated is not None
 

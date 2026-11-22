@@ -181,6 +181,14 @@ class TestSelection(unittest.TestCase):
             (('Gracefully Broken', 'Tasha Cobbs Leonard', 'Heart. Passion. Pursuit. (Deluxe Edition)', 377),
              'aXyVXhU13sI', 'UCprgXS1VcxyAfFvQXZTjfdA', 'Tasha Cobbs Leonard',
              'Gracefully Broken', 'Heart. Passion. Pursuit.', 'Tasha Cobbs Leonard'),
+            (('Me & U', 'Tems', 'Me & U', 192),
+             'qwpswojKj8M', 'UCXg6YtKpgC59gRKUfxQw8Fw', 'Tems', 'Me & U', 'Me & U', 'Tems'),
+            (('Calm Down', 'Rema & Selena Gomez', 'Calm Down', 239),
+             'OkEFHhDBK74', 'UCy6qn2oxmoXA4_gBA5Q7zPw', 'Rema', 'Calm Down', 'Calm Down', 'Rema · Selena Gomez'),
+            (('Joro', 'Wizkid', 'Joro', 262),
+             'l45lgQJZWt0', 'UC25DGtgYk5TwdksvtpeWYvA', 'StarBoy TV', 'Joro', 'Joro', 'Wizkid'),
+            (('Water', 'Tyla', 'Water', 200),
+             'Z_4uvlzSlgE', 'UCnZBreGKMYsBpE5Vqxevewg', 'Tyla', 'Water', 'Water', 'Tyla'),
         )
         for record, video, channel_id, channel, title, album, credits in cases:
             with self.subTest(record=record[0]):
@@ -199,6 +207,17 @@ class TestSelection(unittest.TestCase):
                     engine = Engine([], {video: dict(metadata, **change)})
                     self.assertFalse(resolver.prepare(engine, *record, lambda _: self.fail('wrong recording'), LookupError), change)
                     self.assertEqual(engine.downloads, [])
+
+    def test_calm_down_duet_hint_does_not_accept_solo_or_another_collaboration(self):
+        row = ('Calm Down', 'Rema & Selena Gomez', 'Calm Down', 239)
+        hint = resolver.published(*row)
+        self.assertIsNone(resolver.published('Calm Down', 'Rema', 'Calm Down', 220))
+        self.assertIsNone(resolver.published(*row[:3], 220))
+        metadata = dict(id=hint.video, channel_id=hint.channel, channel='Rema', title='Calm Down',
+                        track='Calm Down', album='Calm Down', duration=239, channel_is_verified=True)
+        for artists in (['Rema'], ['Rema', 'Another Artist'], ['Rema', 'Selena Gomez', 'Another Artist']):
+            self.assertFalse(resolver.matches(dict(metadata, artists=artists), hint.video, *row))
+        self.assertTrue(resolver.matches(dict(metadata, artists=['Selena Gomez', 'Rema']), hint.video, *row))
 
     def test_bot_check_does_not_try_an_alternate_query(self):
         engine = Engine([official], {official['id']: LookupError('Sign in to confirm you are not a bot')})

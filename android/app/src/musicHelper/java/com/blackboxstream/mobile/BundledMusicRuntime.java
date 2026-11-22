@@ -130,7 +130,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         }
         // A remembered provider ID is a hint, not a pin. It must pass the same matcher.
         new File(scratch, "source-id").delete();
-        options.addAll(0, Arrays.asList(track.title, track.artist, track.album, Integer.toString(track.seconds), remembered(track.key)));
+        String artist = progress == null ? track.artist : WholeFileMusicRuntime.lookupArtist(track);
+        options.addAll(0, Arrays.asList(track.title, artist, track.album, Integer.toString(track.seconds), remembered(track.key)));
         execute(control, scratch, true, progress, options.toArray(new String[0]));
         if (control.cancelled) return null;
         return new PreparedMusic.Result(audio, sourceId(scratch));

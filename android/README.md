@@ -20,9 +20,11 @@ v90 expiry still applies (end of 31 March 2027 UTC).
   received bytes against a known transfer size, or spin without a percentage during lookup and
   unknown-length transfers. A downloaded file only enters Collection after verification.
   The bundled v90 Android helper resolves and downloads a catalogue recording in one session,
-  preferring AAC when available. Exact live and studio versions are kept distinct. Published source
-  hints for the reported Gospel picks skip a search only when the provider's recording metadata still
-  matches. Missing evidence or a refusal shows in Needs attention rather than saving a substitute.
+  preferring AAC when available. The known v90 IDs (including Espresso, bad guy, and On the Low)
+  go directly to those recordings. Published source hints for other tracks require an exact metadata
+  match. For example, the original 3:59 Calm Down pick omits Selena Gomez from its visible credit;
+  that row checks for the duet, not the 3:40 solo master. Missing evidence or a refusal shows in Needs
+  attention rather than saving a substitute.
 - **Collection** plays its saved, app-private files without the helper or a connection. To check it on
   a phone, save one song, force-stop the app, turn on airplane mode with Wi‑Fi off, reopen, and play
   and seek from Collection. The source must still allow a fresh download before this test.
@@ -36,9 +38,13 @@ checks the bundled v90 assets and pinned Android helper, and tests an x86 siblin
 media. The suite tests five overlapping real byte transfers on metered reconnect, exact and
 unknown-length progress rings, pause and retry, both album queue routes, and playback/seek after a
 force-stop in airplane mode. It does not establish live-provider availability. Dispatch the workflow
-with `verify_live_catalogue=true` to separately try a cold save of CeCe Winans's **Goodness of God
-(Live)** from the original Find, followed by offline playback if the save succeeds. This trial
-stops on a refusal and produces no APK. The test signing key is not a production update key.
+with `verify_live_catalogue=true` to compare a fresh **Espresso** save from the original Find
+with a fresh save in the archived-helper pilot. Both select `51zjlMhdSTE` and run on the same x86
+emulator, without preseeded files or account credentials. The pilot calls the archived `audio(id)`
+method, whereas full v90 uses its own bounded helper runner. Matching helper hashes are not proof of
+matching behavior. A live pass requires a newly published, playable file and a seek beyond halfway
+after force-stop with networking off. Refusals are reported, not worked around; this diagnostic
+publishes no APK. The test signing key is not a production update key.
 
 ## Earlier Fast Start preview
 
