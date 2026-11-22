@@ -173,12 +173,19 @@ def stage(track, data):
     p11.adb('shell', 'run-as', PKG, 'mkdir', '-p', directory)
     subprocess.run(['adb', 'exec-in', f"run-as {PKG} sh -c 'cat > {directory}/audio.m4a'"],
                    input=data, check=True, timeout=14)
+    verify_on_device(f'{directory}/audio.m4a', data, 'Staged ' + track['title'])
+
+
+def verify_on_device(path, data, label):
+    # Hash the bytes in app storage, rather than reading a large binary buffer through ADB.
+    output = p11.adb('shell', 'run-as', PKG, 'sha256sum', path)
+    expected = hashlib.sha256(data).hexdigest()
+    if not output.startswith(expected + ' '):
+        raise RuntimeError(f'{label} bytes differ (expected {expected}, saw {output[:64]})')
 
 
 def verify_bytes(track, data):
-    payload = p11.adb('exec-out', 'run-as', PKG, 'cat', f'files/offline-music/saved/{track["key"]}.m4a', binary=True)
-    if hashlib.sha256(payload).digest() != hashlib.sha256(data).digest():
-        raise RuntimeError('Saved bytes differ for ' + track['title'])
+    verify_on_device(f'files/offline-music/saved/{track["key"]}.m4a', data, 'Saved ' + track['title'])
 
 
 def open_music(js):
@@ -439,6 +446,8 @@ def live_trial(apk):
     """One cold request from the original Find. A refusal is a result, not a retry trigger."""
     title = 'Goodness of God (Live)'
     p11.adb('install', apk, timeout=100)
+    p11.adb('shell', 'run-as', PKG, 'mkdir', '-p', 'files/offline-music')
+    p11.adb('shell', 'run-as', PKG, 'touch', 'files/offline-music/provider-probe')
     airplane(False)
     with page() as js:
         open_music(js)
@@ -468,7 +477,10 @@ def live_trial(apk):
                          'Live catalogue transfer did not finish within the helper budget', 265, finished)['row']
         elapsed = time.monotonic() - started
         if completed['state'] != 'saved':
-            raise RuntimeError(f"Live provider trial: {title} not saved after {elapsed:.1f}s ({completed['reason']}). No fallback.")
+            log = p11.adb('logcat', '-d', '-s', 'BlackBoxMusic')
+            probe = '\n'.join(l.split('BBX_PUBLIC_PROBE:', 1)[1] for l in log.splitlines() if 'BBX_PUBLIC_PROBE:' in l)
+            raise RuntimeError(f"Live provider trial: {title} not saved after {elapsed:.1f}s ({completed['reason']}). "
+                               f"No fallback. Publisher sample: {probe[:620] or 'No metadata.'}")
         print(f'::notice::Live provider file verified after {elapsed:.1f}s' +
               (f'; first observed bytes after {first_byte:.1f}s' if first_byte is not None else ''))
     force_stop()

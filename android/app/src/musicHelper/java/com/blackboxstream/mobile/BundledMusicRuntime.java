@@ -240,6 +240,10 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         env.put("PYTHONUNBUFFERED", "1");
         env.put("TMPDIR", scratch.getAbsolutePath());
         env.put("PATH", "/system/bin:" + nativeDir.getAbsolutePath());
+        boolean probe = (app.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                && new File(app.getFilesDir(), "offline-music/provider-probe").isFile();
+        env.remove("BBX_PUBLIC_PROBE");
+        if (probe) env.put("BBX_PUBLIC_PROBE", "1");
         control.stage(discover ? "helper ready, search" : "helper ready, resolve");
         Process child;
         try { child = builder.start(); } catch (IOException denied) { throw new IOException("Android could not launch the bundled music runtime."); }
@@ -254,6 +258,10 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                     else if ("BBX_CATALOGUE_QUERY".equals(line)) control.stage("search catalogue");
                     else if ("BBX_CATALOGUE_ALTERNATE".equals(line)) control.stage("search alternate wording");
                     else if ("BBX_CATALOGUE_VERIFY".equals(line)) control.stage("verify source metadata");
+                    if (line.startsWith("BBX_PUBLIC_PROBE:")) {
+                        if (probe && line.length() <= 1000) Log.i("BlackBoxMusic", line);
+                        continue; // Diagnostics must never influence the failure classification.
+                    }
                     if (progress == null) maybeOfferStream(line, discover, scratch, control);
                     else reportProgress(line, progress);
                     // Capture bounded output for diagnostics; never impose a line reading limit on the child.
