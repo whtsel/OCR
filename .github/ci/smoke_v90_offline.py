@@ -74,8 +74,10 @@ def wait(js, check, note, seconds=20):
         if result:
             return result
         time.sleep(.28)
-    state = js("JSON.stringify({view:window.__BBX_STATE__?.view,menu:document.documentElement.className,"
-               "msg:document.querySelector('#musicMsg')?.textContent,queue:window.OfflineMusic&&JSON.parse(OfflineMusic.library()).tracks?.map(t=>[t.title,t.state,t.reason])})")
+    state = js("(()=>{const l=JSON.parse(window.OfflineMusic?.library()||'{}');return JSON.stringify({"
+               "view:window.__BBX_STATE__?.view,connected:l.connected,collection:document.querySelector('#om-collection-count')?.textContent,"
+               "lists:l.playlists?.map(p=>p.name),queue:l.tracks?.slice(0,4).map(t=>[t.title,t.state,t.reason]),"
+               "player:window.OfflineMusic&&JSON.parse(OfflineMusic.player())})})()")
     raise RuntimeError(f'{note}: {state}')
 
 
@@ -183,6 +185,7 @@ def smoke(apk, root):
     airplane(True)
     with page() as js:
         open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Android did not enter offline mode')
         click(js, '[data-nav=movies]')
         wait(js, "!document.querySelector('#viewBrowse').hidden && document.querySelector('#browseGrid').textContent.includes('TMDB key') && document.querySelector('#om-tabs').hidden", 'Movies/TMDB navigation regressed')
         click(js, '[data-nav=library]')
@@ -210,7 +213,7 @@ def smoke(apk, root):
             js(f"OfflineMusic.queue('remove',{json.dumps(track['key'])})")
         click(js, '#musicClear')
         query(js, 'Short n Sweet', submit=False)
-        instant = '#musicInstantV76:not([hidden]) [data-kind="album"] [aria-label*="Short n"]'
+        instant = '#musicInstantV76:not([hidden]) [data-kind="album"] [aria-label*="Short n"]:not(:disabled)'
         wait(js, f'!!document.querySelector({json.dumps(instant)})', 'Instant album control missing')
         click(js, instant)
         tracks = entries(js)
@@ -263,6 +266,7 @@ def smoke(apk, root):
     stage(pending[0], tones[KWAKU][:-40000])
     with recording_server(tones[ESPRESSO]) as received, page() as js:
         open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Android reconnected before queue recovery')
         if [t['state'] for t in entries(js)] != ['offline', 'offline']:
             raise RuntimeError('Queue did not survive force-stop')
         airplane(False)
@@ -274,6 +278,7 @@ def smoke(apk, root):
         if not received:
             raise RuntimeError('The whole-file runtime did not fetch the loopback AAC fixture')
         airplane(True)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Android did not drop its active network before retry')
         stage(failed, tones[KWAKU])
         click(js, '#om-tab-downloads')
         retry = f'#om-issues [aria-label="Retry {KWAKU}"]'
@@ -295,6 +300,7 @@ def smoke(apk, root):
     p11.adb('logcat', '-c')
     with page() as js:
         open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'The cold playback test phone is not offline')
         wait(js, "document.querySelector('#om-collection-count').textContent==='2 songs available offline' && !!document.querySelector('[aria-label=\"Play Offline fixture\"]')", 'Offline collection or playlist did not persist')
         for track in pending:
             title, key = track['title'], track['key']

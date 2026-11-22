@@ -274,7 +274,7 @@ final class OfflineMusicLibrary {
             }
             lastLink = link;
             return lastSnapshot = new JSONObject().put("tracks", rows).put("paused", paused)
-                    .put("playlists", playlists).put("available", downloader != null).toString();
+                    .put("connected", link > 0).put("playlists", playlists).put("available", downloader != null).toString();
         } catch (JSONException invalid) { return error("Your Music library could not be read."); }
     }
 
