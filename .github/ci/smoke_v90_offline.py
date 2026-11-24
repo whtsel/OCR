@@ -20,7 +20,7 @@ from websocket import create_connection
 
 import check_blackbox_p11 as p11
 
-PKG = 'com.blackboxstream.mobile.offline.catalogue'
+PKG = 'com.blackboxstream.mobile.offline.resolver'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -108,9 +108,10 @@ def force_stop():
 
 
 @contextmanager
-def recording_server(payloads, holds=None, unknown=()):
+def recording_server(payloads, holds=None, unknown=(), before_headers=None, started=None):
     """Real helper subprocesses over adb reverse; never contact a music provider."""
     holds = holds or {}
+    before_headers = before_headers or {}
     seen = set()
 
     class Fixture(BaseHTTPRequestHandler):
@@ -118,6 +119,15 @@ def recording_server(payloads, holds=None, unknown=()):
             data = payloads.get(self.path)
             if data is None:
                 self.send_error(404)
+                return
+            if started is not None:
+                started.add(self.path)
+            gate = before_headers.get(self.path)
+            if gate is not None and not gate.wait(timeout=18):
+                self.send_error(504)
+                return
+            if isinstance(data, int):
+                self.send_error(data)
                 return
             self.send_response(200)
             self.send_header('Content-Type', 'audio/mp4')
@@ -158,7 +168,7 @@ def recording_server(payloads, holds=None, unknown=()):
             p11.adb('reverse', 'tcp:19090', 'tcp:' + str(server.server_port))
             yield seen
         finally:
-            for hold in set(holds.values()):
+            for hold in set(holds.values()) | set(before_headers.values()):
                 hold.set()
             p11.adb('reverse', '--remove', 'tcp:19090', check=False)
             server.shutdown()
@@ -237,8 +247,21 @@ def check_parallel(js, tone):
     gate, last_gate = threading.Event(), threading.Event()
     paths = [f'/{key}.m4a' for key in keys]
     holds = {path: gate if i < 5 else last_gate for i, path in enumerate(paths)}
-    with recording_server(dict.fromkeys(paths, tone), holds, unknown=(paths[-1],)) as seen:
+    first, second = threading.Event(), threading.Event()
+    started = set()
+    with recording_server(dict.fromkeys(paths, tone), holds, unknown=(paths[-1],),
+                          before_headers={paths[0]: first, paths[1]: second}, started=started) as seen:
         metered_connection(js)  # Pending jobs must start automatically, without a Resume tap.
+        wait(js, f"Object.keys(JSON.parse(OfflineMusic.progress())).sort().join(',')==="
+             f"{json.dumps(','.join(sorted(keys[:2])))}", 'Two unresolved jobs did not start on reconnect', 11,
+             accept=lambda ready: ready and paths[0] in started and paths[1] in started)
+        if started != set(paths[:2]):
+            raise RuntimeError('More than two unresolved jobs made a request')
+        first.set()
+        wait(js, f"JSON.parse(OfflineMusic.progress())[{json.dumps(keys[0])}]?.phase==='downloading'",
+             'The next resolver did not start while the first transfer was still in flight', 10,
+             accept=lambda ready: ready and paths[2] in started)
+        second.set()
         wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.progress()),keys={json.dumps(keys[:5])};"
                  f"return Object.keys(p).length===5 && keys.every(k=>p[k]?.phase==='downloading' && "
                  f"p[k].total==={len(tone)} && p[k].received>0 && p[k].received<p[k].total)}})()",
@@ -271,7 +294,7 @@ def check_parallel(js, tone):
             raise RuntimeError('The last job bypassed the fixture transfer')
         for row in rows:
             verify_bytes(row, tone)
-    print('::notice::PASS five helpers started automatically on metered reconnect; byte-accurate rings, pause, and sixth indeterminate transfer')
+    print('::notice::PASS two unresolved jobs at a time, then five overlapping transfers with byte-accurate rings, pause, and sixth indeterminate transfer')
 
 
 def check_find(js):
@@ -360,6 +383,36 @@ def check_unpinned_album(tone):
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Cold album playback was not offline')
         check_cold_seek(js, row, seconds)
     print('::notice::PASS a third, unpinned catalogue row (The Victory Song) went from Find through Downloads to a verified Collection file (loopback tone only)')
+
+
+def check_provider_refusal():
+    airplane(True)
+    with page() as js:
+        open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Refusal trial started too early')
+        record = dict(ref='fixture:provider-refused', title='Synthetic refusal', artist='Test artist',
+                      album='Test album', seconds=172)
+        request = json.dumps(dict(tracks=[record], label=''))
+        js(f"OfflineMusic.queue('enqueue',{json.dumps(request)})")
+        row, = [t for t in entries(js) if t['ref'] == record['ref']]
+        if row['state'] != 'offline':
+            raise RuntimeError('Synthetic refusal row did not wait for the fixture server')
+        key = row['key']
+        route = f'/{key}.m4a'
+        started = set()
+        click(js, '#om-tab-downloads')
+        with recording_server({route: 403}, started=started):
+            airplane(False)
+            wait(js, f"(()=>{{const t=JSON.parse(OfflineMusic.library()).tracks.find(t=>t.key==='{key}');"
+                     "return t.state==='failed' && t.reason==='refused' && !t.retryable})()",
+                 'A provider refusal was treated as a retryable lookup or transfer error', 35)
+            if started != {route}:
+                raise RuntimeError('The helper did not reach the synthetic refusal')
+        wait(js, "document.querySelector('#om-issues').textContent.includes('Provider refused this recording')"
+                 " && !document.querySelector('[aria-label=\"Retry Synthetic refusal\"]')",
+             'Downloads did not show a non-retryable refusal')
+        p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', f'files/offline-music/saved/{key}.m4a')
+        print('PASS explicit HTTP refusal stayed unsaved and appeared separately from interruptions')
 
 
 def smoke(apk, root):
@@ -528,6 +581,7 @@ def smoke(apk, root):
     p11.run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=960:duration=175',
             '-c:a', 'aac', '-movflags', '+faststart', album_tone, timeout=30)
     check_unpinned_album(album_tone.read_bytes())
+    check_provider_refusal()
 
 
 def live_trial(apk):

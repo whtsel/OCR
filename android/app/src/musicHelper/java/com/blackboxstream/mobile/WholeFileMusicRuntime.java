@@ -15,6 +15,17 @@ final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
                 && new File(app.getFilesDir(), "offline-music/fixture-only").isFile();
     }
 
+    @Override public boolean needsLookup(PreparedMusic.Track track, File staging) {
+        return pinned(track).isEmpty() && !new File(staging, "audio.m4a").isFile();
+    }
+
+    @Override public void published(PreparedMusic.Track track, File staging) {
+        if (fixtureOnly || !pinned(track).isEmpty()) return;
+        // A hint from a failed transfer or a rejected file must not survive into another attempt.
+        try { resolver.rememberSource(track, BundledMusicRuntime.sourceId(staging)); }
+        catch (java.io.IOException ignored) { /* A hint is optional and will be verified on reuse. */ }
+    }
+
     @Override public File fetch(PreparedMusic.Track track, File staging, OfflineMusicLibrary.Progress progress) throws Exception {
         File candidate = new File(staging, "audio.m4a");
         // A force-stop can leave a fully staged candidate. The caller verifies it before publish.

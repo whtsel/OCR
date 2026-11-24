@@ -252,6 +252,7 @@ public final class BlackBoxSmoke extends Instrumentation {
             byte[] orbit = TorrentMeta.slurp(getContext().getAssets().open("fixtures/orbit.m4a"), 512 * 1024);
             verifyProgressiveRanges(scratch, orbit);
             verifyMusicBudget();
+            verifyOfflineFailureStages(runtime);
             File audio = new File(scratch, "audio.m4a");
             PreparedMusic.verifyAudio(audio, 14);
             assertPass("Bundled FFmpeg extracts complete audio on Android", audio.isFile());
@@ -638,7 +639,7 @@ public final class BlackBoxSmoke extends Instrumentation {
     private void verifyMusicBudget() throws Exception {
         MusicPreparationBudget tracker = new MusicPreparationBudget(1000);
         assertPass("Lookup can run past the progressive tester cutoff, but cannot run forever",
-                tracker.timeout(24_000) == null && tracker.timeout(81_000).startsWith("Finding the exact recording"));
+                tracker.timeout(24_000) == null && tracker.timeout(81_000) == MusicPreparationBudget.Limit.LOOKUP);
         assertPass("A resolved format gets its own transfer budget, separate from lookup",
                 tracker.marker("BBX_DOWNLOAD_START m4a", 79_000) == MusicPreparationBudget.Phase.TRANSFER
                         && tracker.timeout(100_000) == null);
@@ -646,14 +647,35 @@ public final class BlackBoxSmoke extends Instrumentation {
         tracker.sawBytes(2048, 149_000);
         tracker.marker("BBX_MEDIA:downloading", 149_000);
         assertPass("Only new file bytes extend the idle guard, not duplicate progress text",
-                tracker.timeout(149_999) == null && tracker.timeout(150_000).contains("stopped receiving data"));
+                tracker.timeout(149_999) == null && tracker.timeout(150_000) == MusicPreparationBudget.Limit.IDLE);
         tracker.sawBytes(4096, 223_000);
-        assertPass("Even a growing transfer has a hard end", tracker.timeout(224_000).startsWith("Downloading the full audio"));
+        assertPass("Even a growing transfer has a hard end", tracker.timeout(224_000) == MusicPreparationBudget.Limit.TRANSFER);
         assertPass("Conversion has a separate hard end and the UI is not the first deadline",
                 tracker.marker("BBX_MEDIA:finished", 223_000) == MusicPreparationBudget.Phase.FINALIZE
-                        && tracker.timeout(247_999) == null && tracker.timeout(248_000).startsWith("Finishing")
+                        && tracker.timeout(247_999) == null && tracker.timeout(248_000) == MusicPreparationBudget.Limit.FINALIZE
                         && PreparedMusic.SELECTION_WAIT_MS > MusicPreparationBudget.LOOKUP_MS
                                 + MusicPreparationBudget.TRANSFER_MS + MusicPreparationBudget.FINALIZE_MS);
+    }
+
+    private void verifyOfflineFailureStages(Class<?> runtime) throws Exception {
+        java.lang.reflect.Method classify = runtime.getDeclaredMethod("providerFailure", String.class, MusicPreparationBudget.Phase.class);
+        classify.setAccessible(true);
+        for (String[] test : new String[][] {
+                {"LOOKUP", "ERROR: The request timed out", "lookup-io"},
+                {"TRANSFER", "ERROR: The request timed out", "transfer-io"},
+                {"FINALIZE", "ERROR: Encoder timed out", "finalize"},
+                {"LOOKUP", "BBX_NO_EXACT_RECORDING", "exact"},
+                {"LOOKUP", "BBX_PROVIDER_SIGNIN", "signin"},
+                {"LOOKUP", "ERROR: HTTP Error 429", "limited"},
+                {"LOOKUP", "ERROR: This video is only available to Music Premium members", "refused"},
+                {"FINALIZE", "ERROR: No space left on device", "storage"},
+                {"LOOKUP", "WARNING: HTTP Error 429\nERROR: No supported format", "helper"}}) {
+            Throwable failure = (Throwable) classify.invoke(null, test[1], MusicPreparationBudget.Phase.valueOf(test[0]));
+            assertPass("Offline failure keeps its stage and reason: " + test[2], test[2].equals(OfflineMusicLibrary.classify(failure)));
+        }
+        for (MusicPreparationBudget.Limit limit : MusicPreparationBudget.Limit.values())
+            assertPass("Deadline is not labelled a connection error: " + limit.code,
+                    limit.code.equals(OfflineMusicLibrary.classify(new OfflineMusicLibrary.Refusal(limit.code, limit.message))));
     }
 
     private void verifyMobileLookahead(File scratch, File fixture) throws Exception {

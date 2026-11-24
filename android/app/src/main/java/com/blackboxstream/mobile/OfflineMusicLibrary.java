@@ -31,11 +31,16 @@ final class OfflineMusicLibrary {
     static final int MAX_BATCH = 120; // The largest packaged v90 album has 100 rows.
     private static final int MAX_PLAYLISTS = 100;
     private static final int PARALLEL_DOWNLOADS = 5;
+    private static final int PARALLEL_LOOKUPS = 2;
     static final String TAG = "BlackBoxOfflineMusic";
     private static OfflineMusicLibrary instance;
 
     // Loading the standalone v90 build does not load any helper dependencies.
-    interface Downloader { File fetch(PreparedMusic.Track track, File staging, Progress progress) throws Exception; }
+    interface Downloader {
+        File fetch(PreparedMusic.Track track, File staging, Progress progress) throws Exception;
+        default boolean needsLookup(PreparedMusic.Track track, File staging) { return true; }
+        default void published(PreparedMusic.Track track, File staging) { }
+    }
     interface Progress { void report(String phase, long received, long total); }
 
     static synchronized OfflineMusicLibrary open(Context context) {
@@ -45,7 +50,8 @@ final class OfflineMusicLibrary {
 
     static final class Refusal extends IOException {
         final String code;
-        Refusal(String code) { super(code); this.code = code; }
+        Refusal(String code) { this(code, code); }
+        Refusal(String code, String message) { super(message); this.code = code; }
     }
 
     private static final class Entry {
@@ -101,6 +107,8 @@ final class OfflineMusicLibrary {
     private static final class Job {
         String phase = "preparing";
         long received, total;
+        boolean resolving;
+        Job(boolean resolving) { this.resolving = resolving; }
     }
 
     private final ExecutorService workers = Executors.newFixedThreadPool(PARALLEL_DOWNLOADS);
@@ -309,18 +317,29 @@ final class OfflineMusicLibrary {
         job.received = Math.max(job.received, received);
         if (total > 0) job.total = total;
         if (job.received > job.total) job.total = 0; // No trustworthy denominator yet.
+        if (job.resolving && ("downloading".equals(phase) || "finishing".equals(phase) || "verifying".equals(phase))) {
+            // The same helper proceeds into transfer. Allow the next lookup without restarting it.
+            job.resolving = false;
+            kick();
+        }
     }
 
     private synchronized void kick() {
         if (paused || active.size() >= PARALLEL_DOWNLOADS || downloader == null || V90Api.expired()
                 || cooldownUntil > SystemClock.elapsedRealtime() || link() == 0) return;
+        int lookups = 0;
+        for (Job job : active.values()) if (job.resolving) lookups++;
         for (Entry entry : entries.values()) {
             if (active.size() >= PARALLEL_DOWNLOADS) break;
             if (entry.complete || !entry.failure.isEmpty() || active.containsKey(entry.track.key) || ready(entry) != null) continue;
-            Job job = new Job();
+            File work = new File(stage, entry.track.key);
+            boolean lookup = downloader.needsLookup(entry.track, work);
+            if (lookup && lookups >= PARALLEL_LOOKUPS) continue;
+            if (lookup) lookups++;
+            Job job = new Job(lookup);
             active.put(entry.track.key, job);
             lastSnapshot = null;
-            workers.execute(() -> download(entry, job));
+            workers.execute(() -> download(entry, job, work));
         }
     }
 
@@ -328,10 +347,9 @@ final class OfflineMusicLibrary {
         return folder.isDirectory() || folder.mkdirs() || folder.isDirectory(); // Other workers may create the parent.
     }
 
-    private void download(Entry entry, Job job) {
+    private void download(Entry entry, Job job, File work) {
         String failure = "", key = entry.track.key;
         boolean deferred = false, attempted = false;
-        File work = new File(stage, key);
         try {
             synchronized (this) {
                 deferred = paused || link() == 0 || V90Api.expired() || cooldownUntil > SystemClock.elapsedRealtime();
@@ -344,11 +362,13 @@ final class OfflineMusicLibrary {
                 report(key, job, "verifying", 0, 0);
                 verify(result, entry.track.seconds);
                 if (!result.renameTo(file(entry))) throw new Refusal("storage");
+                try { downloader.published(entry.track, work); }
+                catch (RuntimeException ignored) { /* Optional source hints cannot undo a completed save. */ }
             }
         } catch (Exception | LinkageError stopped) {
             failure = classify(stopped);
-            // If the active transport disappeared, wait for a connection rather than lose the job.
-            deferred = link() == 0 && ("network".equals(failure) || "helper".equals(failure));
+            // A lost transport can defer the attempt; a refusal or file failure cannot.
+            deferred = link() == 0 && waitForConnection(failure);
         } finally {
             if (attempted) {
                 File[] files = work.listFiles();
@@ -368,6 +388,14 @@ final class OfflineMusicLibrary {
             active.remove(key);
             lastSnapshot = null;
             kick();
+        }
+    }
+
+    private static boolean waitForConnection(String reason) {
+        switch (reason) {
+            case "network": case "lookup-io": case "transfer-io": case "lookup-timeout":
+            case "transfer-timeout": case "transfer-idle": return true;
+            default: return false;
         }
     }
 

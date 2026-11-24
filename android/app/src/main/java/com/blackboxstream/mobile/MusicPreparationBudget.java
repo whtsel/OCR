@@ -9,6 +9,16 @@ final class MusicPreparationBudget {
 
     enum Phase { LOOKUP, TRANSFER, FINALIZE }
 
+    enum Limit {
+        LOOKUP("lookup-timeout", "Finding the exact recording took too long. Nothing played."),
+        TRANSFER("transfer-timeout", "Downloading the full audio took too long. Nothing played."),
+        IDLE("transfer-idle", "The audio download stopped receiving data. Nothing played."),
+        FINALIZE("finalize-timeout", "Finishing the audio file took too long. Nothing played.");
+
+        final String code, message;
+        Limit(String code, String message) { this.code = code; this.message = message; }
+    }
+
     private Phase phase = Phase.LOOKUP;
     private long phaseAt, bytesAt, highWater;
 
@@ -36,14 +46,14 @@ final class MusicPreparationBudget {
         bytesAt = now;
     }
 
-    synchronized String timeout(long now) {
+    synchronized Limit timeout(long now) {
         long age = now - phaseAt;
-        if (phase == Phase.LOOKUP && age >= LOOKUP_MS) return "Finding the exact recording took too long. Nothing played.";
+        if (phase == Phase.LOOKUP && age >= LOOKUP_MS) return Limit.LOOKUP;
         if (phase == Phase.TRANSFER) {
-            if (age >= TRANSFER_MS) return "Downloading the full audio took too long. Nothing played.";
-            if (now - bytesAt >= IDLE_MS) return "The audio download stopped receiving data. Nothing played.";
+            if (age >= TRANSFER_MS) return Limit.TRANSFER;
+            if (now - bytesAt >= IDLE_MS) return Limit.IDLE;
         }
-        if (phase == Phase.FINALIZE && age >= FINALIZE_MS) return "Finishing the audio file took too long. Nothing played.";
+        if (phase == Phase.FINALIZE && age >= FINALIZE_MS) return Limit.FINALIZE;
         return null;
     }
 }

@@ -93,11 +93,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
     File saveOffline(PreparedMusic.Track track, File scratch, String pinned, String fixture,
             OfflineMusicLibrary.Progress progress) throws Exception {
         PreparedMusic.Result result = fetch(track, scratch, new PreparedMusic.Control(), pinned, fixture, progress);
-        if (result == null) return null;
-        // This hint is never sufficient for publication. The queue verifies the full file
-        // and any future use of the ID goes through exact metadata validation again.
-        if (fixture == null && pinned.isEmpty() && result.audio.isFile()) rememberSource(track, result.source);
-        return result.audio;
+        return result == null ? null : result.audio;
     }
 
     private PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control,
@@ -138,7 +134,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         return new PreparedMusic.Result(audio, sourceId(scratch));
     }
 
-    private static String sourceId(File scratch) throws IOException {
+    static String sourceId(File scratch) throws IOException {
         try (FileInputStream in = new FileInputStream(new File(scratch, "source-id"))) {
             return new String(TorrentMeta.slurp(in, 16), StandardCharsets.US_ASCII);
         }
@@ -215,11 +211,14 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
 
     private String execute(PreparedMusic.Control control, File scratch, boolean discover,
             OfflineMusicLibrary.Progress progress, String... args) throws Exception {
-        MusicPreparationBudget budget = new MusicPreparationBudget(SystemClock.elapsedRealtime());
+        long initAt = SystemClock.elapsedRealtime();
         try { start(); }
-        catch (Exception | LinkageError failed) { throw new IOException("The bundled music helper could not start on this device."); }
+        catch (Exception | LinkageError failed) {
+            throw new OfflineMusicLibrary.Refusal("setup", "The bundled music helper could not start on this device.");
+        }
         if (control.cancelled) return "";
-        if (budget.timeout(SystemClock.elapsedRealtime()) != null) throw new IOException("The helper took too long to start.");
+        if (SystemClock.elapsedRealtime() - initAt >= MusicPreparationBudget.LOOKUP_MS)
+            throw new OfflineMusicLibrary.Refusal("setup-timeout", "The helper took too long to start.");
         File python = new File(root, "packages/python/usr"), ffmpeg = new File(root, "packages/ffmpeg/usr");
         ArrayList<String> command = new ArrayList<>();
         command.add(new File(nativeDir, "libpython.so").getAbsolutePath());
@@ -248,7 +247,12 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         if (probe) env.put("BBX_PUBLIC_PROBE", "1");
         control.stage(discover ? "helper ready, search" : "helper ready, resolve");
         Process child;
-        try { child = builder.start(); } catch (IOException denied) { throw new IOException("Android could not launch the bundled music runtime."); }
+        try { child = builder.start(); } catch (IOException denied) {
+            throw new OfflineMusicLibrary.Refusal("setup", "Android could not launch the bundled music runtime.");
+        }
+        // Local initialization and waiting for the helper lock do not spend an Offline lookup's
+        // provider deadline. Keep the existing absolute selection guard for the streaming preview.
+        MusicPreparationBudget budget = new MusicPreparationBudget(progress == null ? initAt : SystemClock.elapsedRealtime());
         control.attach(child);
         StringBuffer captured = new StringBuffer();
         Thread reader = new Thread(() -> {
@@ -283,13 +287,14 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                 File[] files = scratch.listFiles();
                 if (files != null) for (File f : files) if (f.isFile() && f.getName().startsWith("audio.")) {
                     long length = f.length();
-                    if (length > PreparedMusic.MAX_AUDIO) throw new IOException("This recording is above the preparation size limit.");
+                    if (length > PreparedMusic.MAX_AUDIO)
+                        throw new OfflineMusicLibrary.Refusal("size", "This recording is above the preparation size limit.");
                     bytes += length;
                 }
                 long now = SystemClock.elapsedRealtime();
                 budget.sawBytes(bytes, now);
-                String timeout = budget.timeout(now);
-                if (timeout != null) throw new IOException(timeout);
+                MusicPreparationBudget.Limit timeout = budget.timeout(now);
+                if (timeout != null) throw new OfflineMusicLibrary.Refusal(timeout.code, timeout.message);
             }
             reader.join(2000);
             if (control.cancelled) return "";
@@ -302,18 +307,38 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         }
     }
 
-    private static IOException providerFailure(String output, MusicPreparationBudget.Phase phase) {
-        String message = output.toLowerCase(Locale.ROOT);
-        if (message.contains("http error 429") || message.contains("too many requests") || message.contains("bbx_provider_limited")) return new PreparedMusic.ProviderRateLimited();
-        String reason;
-        if (message.contains("bbx_no_exact_recording")) reason = "No exact full recording could be verified. Nothing else was played.";
-        else if (message.contains("sign in") || message.contains("not a bot")) reason = "The provider requires sign-in. No account session was used.";
-        else if (message.contains("http error 403") || message.contains("video unavailable")) reason = "The provider did not allow this recording.";
-        else if (message.contains("timed out") || message.contains("failed to resolve") || message.contains("no address")) {
-            reason = phase == MusicPreparationBudget.Phase.TRANSFER ? "Could not complete the connection while downloading audio. Nothing played."
-                    : "Could not complete the connection while finding the recording. Nothing played.";
+    static IOException providerFailure(String output, MusicPreparationBudget.Phase phase) {
+        // Use only failure lines and fixed companion markers, not progress or upload titles.
+        StringBuilder problems = new StringBuilder();
+        for (String line : output.split("\n")) {
+            if (line.startsWith("ERROR:") || line.startsWith("BBX_PROVIDER_") || line.equals("BBX_NO_EXACT_RECORDING"))
+                problems.append(line).append('\n');
         }
-        else reason = "The helper could not prepare this exact recording.";
-        return new IOException(reason);
+        String message = problems.toString().toLowerCase(Locale.ROOT);
+        if (message.contains("bbx_provider_limited") || message.contains("http error 429") || message.contains("too many requests"))
+            return new PreparedMusic.ProviderRateLimited();
+        if (message.contains("bbx_provider_signin") || message.contains("http error 401") || message.contains("sign in")
+                || message.contains("sign-in") || message.contains("not a bot") || message.contains("login_required")
+                || message.contains("login required"))
+            return new OfflineMusicLibrary.Refusal("signin", "The provider requires sign-in. No account session was used.");
+        if (message.contains("bbx_provider_refused") || message.contains("http error 403") || message.contains("video unavailable")
+                || message.contains("private video") || message.contains("video is private") || message.contains("music premium")
+                || message.contains("premium members") || message.contains("members-only") || message.contains("members only")
+                || message.contains("subscriber-only") || message.contains("not available in your country")
+                || message.contains("not available in your region"))
+            return new OfflineMusicLibrary.Refusal("refused", "The provider did not allow this recording.");
+        if (message.contains("bbx_no_exact_recording"))
+            return new OfflineMusicLibrary.Refusal("exact", "No exact full recording could be verified. Nothing else was played.");
+        if (message.contains("no space left"))
+            return new OfflineMusicLibrary.Refusal("storage", "There is not enough storage to save this recording.");
+        if (phase == MusicPreparationBudget.Phase.FINALIZE)
+            return new OfflineMusicLibrary.Refusal("finalize", "The helper could not finish the audio file.");
+        if (message.contains("timed out") || message.contains("failed to resolve") || message.contains("no address")
+                || message.contains("connection reset") || message.contains("remote end closed") || message.contains("incomplete read")) {
+            if (phase == MusicPreparationBudget.Phase.TRANSFER)
+                return new OfflineMusicLibrary.Refusal("transfer-io", "The audio transfer was interrupted. Nothing played.");
+            return new OfflineMusicLibrary.Refusal("lookup-io", "The provider lookup was interrupted. Nothing played.");
+        }
+        return new OfflineMusicLibrary.Refusal("helper", "The helper could not prepare this exact recording.");
     }
 }

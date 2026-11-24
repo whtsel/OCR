@@ -90,8 +90,8 @@ class TestSelection(unittest.TestCase):
                      duration=180, album='Cover Album')
         right = dict(cover, id='RIGHTED1111', title='Singer B & Singer A — After Midnight [Official Video]',
                      artists=['Singer B', 'Singer A'], album=record[2])
-        engine = Engine({f'{record[1]} {record[0]}': [cover],
-                         f'{record[0]} {record[1]} {record[2]} official audio': [cover, right]},
+        engine = Engine({f'{record[1]} {record[0]} {record[2]}': [cover],
+                         f'{record[1]} {record[0]}': [cover, right]},
                         {cover['id']: cover, right['id']: right})
         self.assertTrue(resolver.prepare(engine, *record, lambda _: None, LookupError))
         self.assertEqual(engine.inspections, [cover['id'], right['id']])
@@ -102,6 +102,40 @@ class TestSelection(unittest.TestCase):
                        dict(title='Singer B & Singer A — After Midnight (Radio Edit)'),
                        dict(channel='Other Channel'), dict(duration=200)):
             self.assertFalse(resolver.matches(dict(right, **change), right['id'], *record), change)
+
+    def test_unpinned_editions_are_resolved_from_the_album_and_matching_publisher_evidence(self):
+        # The detailed response can lack the owner badge and flatten the credit list.
+        # Fixtures are invented; none can use a published or remembered ID.
+        for i, (title, artist, album, seconds) in enumerate((
+                ('Low Orbit', 'North Signal & Vela', 'Night Transit', 183),
+                ('Cerca del Río', 'Luz & Mar', 'Otras Orillas', 204),
+                ('星空', 'ミナ & ソラ', '夜の便り', 146))):
+            with self.subTest(title=title):
+                record = (title, artist, album, seconds)
+                channel_id = f'UC{i:022d}'
+                lead, guest = artist.split(' & ')
+                exact = dict(id=f'RELEASE{i:04d}', title=title, track=title, album=album,
+                             # A provider Artist badge is one string and may put the guest first.
+                             artists=[f'{guest} · {lead}'], duration=seconds, channel=lead,
+                             channel_id=channel_id, availability='public', live_status='not_live')
+                self.assertIsNone(resolver.published(*record))
+                listing = dict(id=exact['id'], title=title, duration=seconds, channel=lead,
+                               channel_id=channel_id, ie_key='Youtube', channel_is_verified=True)
+                lookalikes = [dict(listing, id=f'REPOST{i}{n:04d}', channel_is_verified=None) for n in range(8)]
+                primary = f'{artist} {title} {album}'
+                engine = Engine({primary: lookalikes + [listing]}, {exact['id']: exact})
+                self.assertTrue(resolver.prepare(engine, *record, lambda _: None, LookupError))
+                self.assertEqual(engine.queries, [primary])
+                self.assertEqual(engine.inspections, [exact['id']])
+                self.assertEqual(engine.downloads, [exact['id']])
+                # Borrow no evidence from a different uploader, video or extractor.
+                for change in (dict(channel_id='UC' + 'x'*22), dict(id='DIFFERENT12'),
+                               dict(ie_key='Other'), dict(channel_is_verified=False)):
+                    self.assertFalse(resolver.matches(exact, exact['id'], *record, dict(listing, **change)))
+                for change in (dict(album=album + ' (Deluxe)'), dict(artists=[lead]),
+                               dict(title=title + ' (Live)'), dict(availability='premium_only'),
+                               dict(duration=seconds+7), dict(channel_is_verified=False)):
+                    self.assertFalse(resolver.matches(dict(exact, **change), exact['id'], *record, listing))
 
     def test_remembered_id_has_no_search_when_valid_but_stale_metadata_cannot_play(self):
         engine = Engine([], {official['id']: official})
@@ -249,12 +283,19 @@ class TestSelection(unittest.TestCase):
             self.assertFalse(resolver.matches(dict(metadata, artists=artists), hint.video, *row))
         self.assertTrue(resolver.matches(dict(metadata, artists=['Selena Gomez', 'Rema']), hint.video, *row))
 
-    def test_bot_check_does_not_try_an_alternate_query(self):
-        engine = Engine([official], {official['id']: LookupError('Sign in to confirm you are not a bot')})
-        with self.assertRaisesRegex(LookupError, 'not a bot'):
-            resolver.prepare(engine, *track, lambda _: self.fail('must not fetch'), LookupError)
-        self.assertEqual(len(engine.queries), 1)
-        self.assertEqual(engine.downloads, [])
+    def test_access_refusals_do_not_try_an_alternate_query(self):
+        for message, outcome in (('Sign in to confirm you are not a bot', 'SIGNIN'),
+                                 ('This video is only available to Music Premium members', 'REFUSED'),
+                                 ('HTTP Error 401: Unauthorized', 'SIGNIN'), ('Private video', 'REFUSED'),
+                                 ('HTTP Error 403: Forbidden', 'REFUSED'), ('HTTP Error 429', 'LIMITED')):
+            with self.subTest(message=message):
+                engine = Engine([official], {official['id']: LookupError(message)})
+                with self.assertRaises(LookupError) as stopped:
+                    resolver.prepare(engine, *track, lambda _: self.fail('must not fetch'), LookupError)
+                self.assertEqual(resolver.provider_stop(stopped.exception), outcome)
+                self.assertEqual(len(engine.queries), 1)
+                self.assertEqual(engine.inspections, [official['id']])
+                self.assertEqual(engine.downloads, [])
 
     def test_non_latin_recording_is_supported(self):
         info = dict(official, title='夜に駆ける', track='夜に駆ける', artists=['YOASOBI'], album='THE BOOK',

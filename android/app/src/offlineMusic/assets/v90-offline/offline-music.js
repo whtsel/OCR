@@ -353,8 +353,12 @@
 
   const jobStatus = {working:'Preparing recording…', offline:'Waiting for internet',
     paused:'Paused', queued:'Queued', cooldown:'Waiting for the provider cooldown'};
-  const failures = { metadata:'Recording details missing in the catalogue', exact:'Exact recording not verified', signin:'Sign-in required', refused:'Provider refused this recording',
-    network:'Connection interrupted', limited:'Provider rate limited this request', storage:'Could not save · check storage',
+  const failures = { metadata:'Recording details missing in the catalogue', exact:'Exact recording not verified', signin:'Provider requires sign-in', refused:'Provider refused this recording',
+    'lookup-timeout':'Recording lookup timed out', 'lookup-io':'Provider lookup interrupted',
+    'transfer-timeout':'Audio transfer timed out', 'transfer-idle':'Audio transfer stopped receiving data', 'transfer-io':'Audio transfer interrupted',
+    'finalize-timeout':'Finishing audio timed out', finalize:'Could not finish the audio file',
+    'setup-timeout':'Audio helper took too long to start', setup:'Could not start the audio helper', size:'Recording is above the download size limit',
+    network:'Request interrupted', limited:'Provider rate limited this request', storage:'Could not save · check storage',
     incomplete:'A complete, playable file was not verified', missing:'Saved file missing', helper:'Download didn’t finish' };
   const progressRows = new Map();
   let lastProgress = '';

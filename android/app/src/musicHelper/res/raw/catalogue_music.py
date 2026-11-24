@@ -16,7 +16,8 @@ from pathlib import Path
 VIDEO_ID = re.compile(r'[A-Za-z0-9_-]{11}\Z')
 # Presentation labels, not edits, live versions, lyric versions or remixes.
 PRESENTATION = re.compile(r'\s*[\[(]\s*(?:official\s+(?:music\s+)?(?:audio|video)|audio)\s*[\])]\s*$', re.I)
-CREDIT_SPLIT = re.compile(r'\s*[,;]\s*|\s+(?:&|×|feat(?:uring)?\.?|ft\.?)\s+', re.I)
+CREDIT_SPLIT = re.compile(r'\s*[,;]\s*|\s+(?:&|×|·|feat(?:uring)?\.?|ft\.?)\s+', re.I)
+CHANNEL_ID = re.compile(r'UC[A-Za-z0-9_-]{22}\Z')
 FEATURE = re.compile(r'\s*[\[(]\s*(?:feat(?:uring)?|ft)\.?\s+([^()\[\]]+)[\])]', re.I)
 LIVE = re.compile(r'\s*[\[(]\s*live(?: version)?\s*[\])]\s*$', re.I)
 STUDIO = re.compile(r'\s*[\[(]\s*studio(?: version)?\s*[\])]\s*$', re.I)
@@ -116,7 +117,8 @@ def same_credits(values, expected):
         return True
     expected_parts = credit_parts(expected)
     # Only interchange explicitly separated credits, not arbitrary words within a stage name.
-    return len(expected_parts) > 1 and sorted(expected_parts) == sorted(norm(value) for value in values)
+    return len(expected_parts) > 1 and sorted(expected_parts) == sorted(
+        credit for value in values for credit in credit_parts(value))
 
 
 def same_video_title(value, title, artist):
@@ -163,7 +165,17 @@ def release_fields(info, trusted_publisher):
     return title, credits, lines[2]
 
 
-def matches(info, expected_id, title, artist, album, seconds):
+def verified_listing(info, listing):
+    # The pinned extractor can receive an owner badge in search but not on the watch
+    # page. Keep that evidence only when both responses identify the same upload AND channel.
+    channel_id = info.get('channel_id')
+    return (info.get('channel_is_verified') is None and isinstance(channel_id, str)
+            and bool(CHANNEL_ID.fullmatch(channel_id)) and isinstance(listing, dict)
+            and listing.get('channel_is_verified') is True and listing.get('ie_key') == 'Youtube'
+            and listing.get('channel_id') == channel_id and listing.get('id') == info.get('id'))
+
+
+def matches(info, expected_id, title, artist, album, seconds, listing=None):
     wanted, guests = song_title(title)
     is_live = bool(LIVE.search(wanted))
     if (not isinstance(info, dict) or info.get('id') != expected_id or info.get('_type', 'video') != 'video'
@@ -172,7 +184,7 @@ def matches(info, expected_id, title, artist, album, seconds):
         return False
     hint = published(title, artist, album, seconds)
     known_publisher = hint is not None and expected_id == hint.video and info.get('channel_id') == hint.channel
-    verified = info.get('channel_is_verified') is True
+    verified = info.get('channel_is_verified') is True or verified_listing(info, listing)
     generated = release_fields(info, verified or known_publisher)
     distributor = label_channel(info, artist, album)
     description = info.get('description')
@@ -244,15 +256,29 @@ def candidates(entries, title, artist, album, seconds, inspected=()):
                 or not (same_video_title(item.get('title'), title, artist) or same_video_title(item.get('title'), short, artist))):
             continue
         seen.add(video)
-        ranked.append((4 * bool(label_channel(item, artist, album))
-                       + 2 * (channel_artist(item) in credits) + (duration is not None), video))
+        on_artist = channel_artist(item) in credits
+        owner = item.get('channel') or item.get('uploader') or ''
+        # Ranking is not verification. Spend the limited watch-page checks on likely
+        # official releases first, not results that merely have a similar length.
+        score = (bool(label_channel(item, artist, album)),
+                 on_artist and (item.get('channel_is_verified') is True or bool(TOPIC.search(str(owner)))),
+                 on_artist, norm(item['title']) == norm(title), duration is not None)
+        ranked.append((score, item))
     ranked.sort(key=lambda pair: pair[0], reverse=True)
-    return [video for _, video in ranked]
+    return [item for _, item in ranked]
 
 
-def provider_refused(problem):
+def provider_stop(problem):
     text = str(problem).casefold()
-    return any(reason in text for reason in ('http error 429', 'http error 403', 'too many requests', 'not a bot', 'sign in'))
+    if any(word in text for word in ('http error 429', 'too many requests')):
+        return 'LIMITED'
+    if any(word in text for word in ('http error 401', 'not a bot', 'sign in', 'sign-in', 'login_required', 'login required')):
+        return 'SIGNIN'
+    if any(word in text for word in ('http error 403', 'music premium', 'premium members', 'members-only',
+                                     'members only', 'subscriber-only', 'private video', 'video is private',
+                                     'not available in your country', 'not available in your region')):
+        return 'REFUSED'
+    return ''
 
 
 def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembered='', stage=lambda _: None, download=True):
@@ -262,7 +288,7 @@ def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembere
     hint = published(title, artist, album, seconds)
     probe = hint and os.environ.get('BBX_PUBLIC_PROBE') == '1'
 
-    def verify(video):
+    def verify(video, listing=None):
         nonlocal rejected, inspected
         checked.add(video)
         stage('BBX_CATALOGUE_VERIFY')
@@ -272,12 +298,12 @@ def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembere
             if probe and video == hint.video:
                 message = re.sub(r'https?://\S+', '[url]', str(problem))
                 stage('BBX_PUBLIC_PROBE:' + json.dumps({'error': message[-400:]}, ensure_ascii=True))
-            if provider_refused(problem):
+            if provider_stop(problem):
                 raise
             rejected = problem
             return False
         inspected = True
-        accepted = matches(info, video, title, artist, album, seconds)
+        accepted = matches(info, video, title, artist, album, seconds, listing)
         if probe and video == hint.video and isinstance(info, dict):
             view = {key: info.get(key) for key in ('id', '_type', 'channel', 'channel_id', 'channel_is_verified',
                     'title', 'track', 'album', 'artists', 'artist', 'duration', 'availability', 'live_status', 'was_live')}
@@ -297,15 +323,20 @@ def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembere
         return True
     if hint and hint.video not in checked and verify(hint.video):
         return True
-    # Search only after a tap/preparation request. Reserve a candidate check for the
-    # edition-aware alternate wording; both searches share the same overall deadline.
+    # Lead with the release. A bare title query often fills the inspection window
+    # with music videos, covers or a different edition before the real album appears.
     query_title, _ = song_title(title)
-    for index, query in enumerate((f'{artist} {query_title}', f'{query_title} {artist} {album} official audio')):
+    broad = f'{artist} {query_title}'
+    queries = (broad,) if not norm(album) or norm(album) == norm(query_title) else (f'{broad} {album}', broad)
+    for index, query in enumerate(queries):
+        remaining = INSPECTIONS - len(checked)
+        if not remaining:
+            break
         stage('BBX_CATALOGUE_ALTERNATE' if index else 'BBX_CATALOGUE_QUERY')
         rows = engine.extract_info(f'ytsearch{SEARCH_COUNT}:{query}', download=False, process=False)
-        limit = INSPECTIONS - len(checked) - (1 if index == 0 else 0)
-        for video in candidates((rows or {}).get('entries'), title, artist, album, seconds, checked)[:limit]:
-            if verify(video):
+        limit = remaining - (1 if index + 1 < len(queries) else 0)
+        for listing in candidates((rows or {}).get('entries'), title, artist, album, seconds, checked)[:limit]:
+            if verify(listing['id'], listing):
                 return True
     if rejected and not inspected:
         raise rejected
@@ -326,8 +357,12 @@ def main():
                             (DownloadError, ExtractorError), remembered, lambda marker: print(marker, flush=True),
                             download=not params.get('simulate'))
     except (DownloadError, ExtractorError) as problem:
-        # The Android adapter maps this output to small, sanitized failure reasons.
-        print(str(problem), file=sys.stderr)
+        # Give Android a fixed status for a refusal; never use it to try another source.
+        outcome = provider_stop(problem)
+        if outcome:
+            print('BBX_PROVIDER_' + outcome, file=sys.stderr)
+        else:
+            print('ERROR: ' + str(problem).removeprefix('ERROR: '), file=sys.stderr)
         return 2
     if not found:
         print('BBX_NO_EXACT_RECORDING', file=sys.stderr)

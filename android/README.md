@@ -4,9 +4,9 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.2 (ARM64)** is the full v90 Android test build with the corrected
-Find results and catalogue matcher. Its package (`com.blackboxstream.mobile.offline.catalogue`)
-installs beside 1.5.1, the pilot, and the Music Save Check. It starts with a separate, empty
+**BlackBox Stream v90 Offline 1.5.3 (ARM64)** is the full v90 Android test build with the revised
+shared recording resolver and download queue. Its package (`com.blackboxstream.mobile.offline.resolver`)
+installs beside 1.5.2, 1.5.1, the pilot, and the Music Save Check. It starts with a separate, empty
 Collection; it does not import, overwrite, or delete existing downloads. Keep the older app to
 access its own saved files. Use Android 7.0 or later with an up-to-date System WebView. The
 original v90 expiry still applies (end of 31 March 2027 UTC).
@@ -17,15 +17,17 @@ original v90 expiry still applies (end of 31 March 2027 UTC).
   a provider or filled with an unrelated song. The download buttons explicitly add a song, selected
   group, or album. A partial album offers **Play saved** and **Queue missing**. The catalogue holds
   metadata, not bundled audio or a live provider-wide search.
-- **Downloads** starts up to five independent jobs when Android has an Internet connection,
-  including mobile data. There is no app-level network choice. Pause lets active jobs finish but
-  does not start another; a provider rate limit pauses new jobs briefly. Progress rings show actual
-  received bytes against a known transfer size, or spin without a percentage during lookup and
-  unknown-length transfers. A downloaded file only enters Collection after verification.
-  The bundled v90 Android helper resolves and downloads a catalogue recording in one session,
-  preferring AAC when available. The known v90 IDs (including Espresso, bad guy, and On the Low)
-  go directly to those recordings. Published source hints for other tracks require an exact metadata
-  match. The two 3:59 Calm Down catalogue rows display and check the duet credits, not the 3:40
+- **Downloads** allows up to five active jobs, with at most two unresolved recording lookups at
+  once. A job releases its lookup slot as it starts transferring, without reopening the source.
+  Known source IDs can transfer without a lookup. Pause lets active jobs finish but does not start
+  another; a provider rate limit pauses new jobs briefly. Progress rings show actual received bytes
+  against a known transfer size, or spin during lookup and unknown-length transfers.
+  The bundled v90 Android helper searches by release first, prioritizes credible publisher results,
+  and downloads only after checking the exact edition. It resolves and transfers in one session and
+  prefers AAC when available. Source hints are remembered only after a complete file is verified and
+  published to Collection; a hint still needs exact metadata on reuse. Lookup and audio-transfer
+  timeouts, file finalization, and provider refusals now have distinct statuses in Needs attention.
+  A lookup timeout is not a diagnosis of the device connection. The two 3:59 Calm Down catalogue rows display and check the duet credits, not the 3:40
   solo master; their existing queue keys are unchanged. The two Black Sherif releases *The
   Villain I Never Was* and *IRON BOY* can use the official EMPIRE distribution metadata on the
   Black Sherif Music channel when the channel ID, track, release, credits and duration agree.
@@ -40,10 +42,11 @@ Build the offline package with `cd android && gradle :app:assembleRelease -PbbxO
 (Gradle 8.9, JDK 17 and Android SDK 35; allow up to 3 GiB of Java heap for release dependencies).
 The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) signs the ARM64 test APK,
 checks the bundled v90 assets and pinned Android helper, and tests an x86 sibling with synthetic
-media. The suite tests five overlapping byte transfers, exact and unknown-length progress rings,
-pause and retry, and both album queue routes. It also queues the unpinned IRON BOY row for *The
-Victory Song*, checks the exact loopback bytes saved for that row, then plays and seeks after a
-force-stop in airplane mode. This is a synthetic-audio check, not live-provider availability.
+media. The suite holds two unresolved jobs, checks that another starts as soon as one transfers,
+and verifies five overlapping byte transfers. It also checks progress with and without a known size,
+pause and retry, a non-retryable server refusal, and both album queue routes. It queues an unpinned
+album row, checks the exact loopback bytes saved for it, then plays and seeks after a force-stop in
+airplane mode. These are controlled checks of the app's queue and player, not live-provider availability.
 Dispatch the workflow
 with `verify_live_catalogue=true` to compare a fresh **Espresso** save from the original Find
 with a fresh save in the archived-helper pilot. Both select `51zjlMhdSTE` and run on the same x86
@@ -75,6 +78,10 @@ Down on *Rave & Roses Ultra*, and report catalogue misses without suggesting unr
 [The Victory Song](https://www.youtube.com/watch?v=f1YjlWCgc2U) can verify under the original
 album and artist, and rejects different publishers, editions or durations. These controlled
 checks establish neither that other audio is available nor that a live download will complete.
+The same resolver tests cover invented, unpinned tracks in different languages with matching
+publisher evidence from search and watch responses, including rejection of wrong editions,
+borrowed channel badges, missing credits, and access restrictions. No source IDs for the recent
+reported songs were added.
 
 ### Confirmed phone save: Espresso
 
@@ -120,10 +127,11 @@ As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 
 The full v90 catalogue has **2,620 albums and 35,995 track rows**. The engine checks an exact
 recording's title, credited artists, release, full duration and publisher metadata. A few confirmed
-source IDs skip the lookup. For other cards, there are at most two searches (the second includes
-release and official-audio wording) and four source inspections in total. Presentation labels and
-separator/order differences in credited collaborations don't invalidate an otherwise verified
-recording. Missing release evidence, a wrong edition, or a remix still cannot play. After complete
+source IDs skip the lookup. For other cards, the resolver searches with the release first (a
+broader query is optional), with at most two searches and four source inspections. If only the
+search result has a verified owner badge, the watch response must name the same video and channel
+before the matcher can use it as publisher evidence. Presentation labels and separator/order
+differences in credited collaborations don't invalidate an otherwise verified recording. Missing release evidence, a wrong edition, or a remix still cannot play. After complete
 audio is validated, the app remembers the provider ID privately as a lookup hint; it rechecks the
 metadata if audio has to be fetched again. Card, queue and Downloads keys do not change. No login,
 browser session, remote helper updates or alternate editions are used. Provider availability and exact metadata vary by track
