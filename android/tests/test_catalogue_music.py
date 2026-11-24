@@ -303,5 +303,47 @@ class TestSelection(unittest.TestCase):
         self.assertTrue(resolver.matches(info, info['id'], '夜に駆ける', 'YOASOBI', 'The Book', 261))
 
 
+class TestDesktopSave(unittest.TestCase):
+    wanted = ('Low Orbit', 'North Signal', 183)
+    source = dict(id='SOURCE00001', title='Low Orbit', channel='North Signal - Topic', duration=218)
+    alternative = dict(source, id='OTHER000001', title='Low Orbit (Official Audio)', duration=187)
+
+    def test_cold_desktop_selection_passes_selected_duration_to_verifier(self):
+        book = {item['id']: item for item in (self.source, self.alternative)}
+        engine = Engine({'North Signal Low Orbit': [self.alternative, self.source]}, book)
+        chosen, stages = [], []
+        problem = resolver.prepare_pc(engine, *self.wanted, lambda *value: chosen.append(value), stage=stages.append)
+        self.assertEqual(problem, '')
+        self.assertEqual(engine.queries, ['North Signal Low Orbit'])
+        self.assertEqual(engine.inspections, [self.source['id']])
+        self.assertEqual(engine.downloads, [self.source['id']])
+        self.assertEqual(chosen, [(self.source['id'], self.source['duration'])])
+        self.assertEqual(stages, ['BBX_CATALOGUE_QUERY', 'BBX_CATALOGUE_VERIFY'])
+
+        cached = Engine([], book)
+        problem = resolver.prepare_pc(cached, *self.wanted, lambda *value: None, remembered=self.source['id'])
+        self.assertFalse(problem)
+        self.assertEqual(cached.queries, [], 'Reuse the already-saved row ID like desktop')
+        self.assertEqual(cached.downloads, [self.source['id']])
+
+    def test_no_substitution_when_primary_video_has_no_usable_audio_or_is_refused(self):
+        for bad, code in ((dict(self.source, availability='premium_only'), 'BBX_PROVIDER_REFUSED'),
+                          (dict(self.source, availability='needs_auth'), 'BBX_PROVIDER_SIGNIN'),
+                          (dict(self.source, _type='playlist'), 'BBX_PC_INCOMPLETE_SOURCE'),
+                          (dict(self.source, is_live=True), 'BBX_PC_INCOMPLETE_SOURCE'),
+                          (dict(self.source, title='Low Orbit (Radio Edit)'), 'BBX_PC_INCOMPLETE_SOURCE'),
+                          (dict(self.source, duration=None), 'BBX_PC_INCOMPLETE_SOURCE'),
+                          (dict(self.source, duration=30), 'BBX_PC_INCOMPLETE_SOURCE'),
+                          (dict(self.source, id='SOMETHING12'), 'BBX_PC_INCOMPLETE_SOURCE')):
+            with self.subTest(bad=bad):
+                engine = Engine([self.source, self.alternative], {self.source['id']: bad, self.alternative['id']: self.alternative})
+                self.assertEqual(resolver.prepare_pc(engine, *self.wanted, lambda *_: self.fail('invalid source selected')), code)
+                self.assertEqual(engine.inspections, [self.source['id']])
+                self.assertEqual(engine.downloads, [])
+        engine = Engine([dict(self.source, title='Low Orbit (Cover)')], {})
+        self.assertEqual(resolver.prepare_pc(engine, *self.wanted, lambda *_: self.fail('cover selected')), 'BBX_NO_PC_MATCH')
+        self.assertFalse(engine.inspections)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -353,7 +353,9 @@
 
   const jobStatus = {working:'Preparing recording…', offline:'Waiting for internet',
     paused:'Paused', queued:'Queued', cooldown:'Waiting for the provider cooldown'};
-  const failures = { metadata:'Recording details missing in the catalogue', exact:'Exact recording not verified', signin:'Provider requires sign-in', refused:'Provider refused this recording',
+  const failures = { metadata:'Recording details missing in the catalogue', exact:'Exact recording not verified',
+    'no-source':'No matching source found', 'incomplete-source':'Selected source did not report complete audio',
+    signin:'Provider requires sign-in', refused:'Provider refused this recording',
     'lookup-timeout':'Recording lookup timed out', 'lookup-io':'Provider lookup interrupted',
     'transfer-timeout':'Audio transfer timed out', 'transfer-idle':'Audio transfer stopped receiving data', 'transfer-io':'Audio transfer interrupted',
     'finalize-timeout':'Finishing audio timed out', finalize:'Could not finish the audio file',

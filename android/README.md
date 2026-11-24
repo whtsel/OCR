@@ -4,9 +4,9 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.3 (ARM64)** is the full v90 Android test build with the revised
-shared recording resolver and download queue. Its package (`com.blackboxstream.mobile.offline.resolver`)
-installs beside 1.5.2, 1.5.1, the pilot, and the Music Save Check. It starts with a separate, empty
+**BlackBox Stream v90 Offline 1.5.4 (ARM64)** is the full Android test build with **v90 PC source
+selection** for ordinary Music downloads. Its package (`com.blackboxstream.mobile.offline.desktop`)
+installs alongside previous previews, the pilot, and Music Save Check. It starts with a separate, empty
 Collection; it does not import, overwrite, or delete existing downloads. Keep the older app to
 access its own saved files. Use Android 7.0 or later with an up-to-date System WebView. The
 original v90 expiry still applies (end of 31 March 2027 UTC).
@@ -22,16 +22,14 @@ original v90 expiry still applies (end of 31 March 2027 UTC).
   Known source IDs can transfer without a lookup. Pause lets active jobs finish but does not start
   another; a provider rate limit pauses new jobs briefly. Progress rings show actual received bytes
   against a known transfer size, or spin during lookup and unknown-length transfers.
-  The bundled v90 Android helper searches by release first, prioritizes credible publisher results,
-  and downloads only after checking the exact edition. It resolves and transfers in one session and
-  prefers AAC when available. Source hints are remembered only after a complete file is verified and
-  published to Collection; a hint still needs exact metadata on reuse. Lookup and audio-transfer
-  timeouts, file finalization, and provider refusals now have distinct statuses in Needs attention.
-  A lookup timeout is not a diagnosis of the device connection. The two 3:59 Calm Down catalogue rows display and check the duet credits, not the 3:40
-  solo master; their existing queue keys are unchanged. The two Black Sherif releases *The
-  Villain I Never Was* and *IRON BOY* can use the official EMPIRE distribution metadata on the
-  Black Sherif Music channel when the channel ID, track, release, credits and duration agree.
-  Missing evidence or a refusal shows in Needs attention rather than saving a substitute.
+  On a cold lookup, the helper searches **artist + song** and ranks title, artist/channel, duration
+  and official-audio signals like the shipped v90 PC code. Absence of an album tag does not block
+  an otherwise eligible result. Obvious alternate versions are filtered by the desktop rules,
+  with Android checking again that the chosen ID describes a complete recording. Android uses the
+  selected source's reported duration to verify the finished file, not the PC's wider matching
+  tolerance. It remembers the ID only after a successful save. The previous exact resolver is kept
+  for titles the PC's word tokenizer cannot represent. Provider refusals still stop the attempt;
+  there is no account fallback. PC matching does not certify an exact album edition.
 - **Collection** plays its saved, app-private files without the helper or a connection. To check it on
   a phone, save one song, force-stop the app, turn on airplane mode with Wi‑Fi off, reopen, and play
   and seek from Collection. The source must still allow a fresh download before this test.
@@ -42,11 +40,11 @@ Build the offline package with `cd android && gradle :app:assembleRelease -PbbxO
 (Gradle 8.9, JDK 17 and Android SDK 35; allow up to 3 GiB of Java heap for release dependencies).
 The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) signs the ARM64 test APK,
 checks the bundled v90 assets and pinned Android helper, and tests an x86 sibling with synthetic
-media. The suite holds two unresolved jobs, checks that another starts as soon as one transfers,
-and verifies five overlapping byte transfers. It also checks progress with and without a known size,
-pause and retry, a non-retryable server refusal, and both album queue routes. It queues an unpinned
-album row, checks the exact loopback bytes saved for it, then plays and seeks after a force-stop in
-airplane mode. These are controlled checks of the app's queue and player, not live-provider availability.
+media. The suite checks lookup limits, five overlapping transfers, pause/retry, and refusal handling.
+An unpinned album test uses the PC resolver with synthetic metadata (no album field and a runtime
+that differs from the catalogue), rejects a file that is the wrong length for that source, then
+checks the selected source's byte-verified save and a cold offline seek. These checks do not
+establish live-provider availability.
 Dispatch the workflow
 with `verify_live_catalogue=true` to compare a fresh **Espresso** save from the original Find
 with a fresh save in the archived-helper pilot. Both select `51zjlMhdSTE` and run on the same x86
@@ -68,20 +66,15 @@ Espresso recording, with one explicit attempt at a time, separate empty audio st
 local result text. It does not import, update or overwrite either installed music app. Its
 fixture gate is not a live provider test.
 
-### Find and album-recording regression tests
+### Find, PC selection, and recording regression tests
 
-Run `node --test android/tests/test_offline_find.cjs` against the included catalogue. It checks
-that both Find surfaces can return curated singles such as Joro, keep the two versions of Calm
-Down on *Rave & Roses Ultra*, and report catalogue misses without suggesting unrelated tracks.
-`python3 -B android/tests/test_catalogue_music.py` checks that the EMPIRE label metadata for
-[The Homeless Song](https://www.youtube.com/watch?v=XRnLYE4WN6I) and
-[The Victory Song](https://www.youtube.com/watch?v=f1YjlWCgc2U) can verify under the original
-album and artist, and rejects different publishers, editions or durations. These controlled
-checks establish neither that other audio is available nor that a live download will complete.
-The same resolver tests cover invented, unpinned tracks in different languages with matching
-publisher evidence from search and watch responses, including rejection of wrong editions,
-borrowed channel badges, missing credits, and access restrictions. No source IDs for the recent
-reported songs were added.
+- `node --test android/tests/test_offline_find.cjs` exercises the original bundled catalogue in
+  both Find surfaces, editions, Unicode titles, and catalogue misses.
+- `node --test android/tests/test_pc_offline_selection.cjs` runs the shipped PC selector and the
+  Android mirror on the same listings and compares their selected IDs. This tests the ranking,
+  not whether a provider returns the same listing on each platform.
+- `python3 -B android/tests/test_catalogue_music.py` covers selection and refusal handling with
+  controlled metadata, and checks the existing exact resolver used in the streaming preview.
 
 ### Confirmed phone save: Espresso
 
@@ -123,9 +116,10 @@ As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
   community rooms still work through the Android engine. The Android and Windows sharing
   protocols are not interchangeable.
 
-## Music engine and offline listening
+## Streaming preview Music engine and offline listening
 
-The full v90 catalogue has **2,620 albums and 35,995 track rows**. The engine checks an exact
+The **Fast Start preview** uses the full v90 catalogue (**2,620 albums and 35,995 track rows**).
+Its exact resolver is distinct from PC selection in Offline 1.5.4. It checks an exact
 recording's title, credited artists, release, full duration and publisher metadata. A few confirmed
 source IDs skip the lookup. For other cards, the resolver searches with the release first (a
 broader query is optional), with at most two searches and four source inspections. If only the

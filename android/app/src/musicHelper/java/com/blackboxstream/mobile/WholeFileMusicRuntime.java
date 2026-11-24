@@ -19,6 +19,13 @@ final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
         return pinned(track).isEmpty() && !new File(staging, "audio.m4a").isFile();
     }
 
+    @Override public int expectedSeconds(PreparedMusic.Track track, File staging) throws java.io.IOException {
+        // Pinned routes still use the catalogue length. PC selection may choose the same song
+        // with a different runtime; verify the file against independent metadata for that ID.
+        if (!pinned(track).isEmpty() || fixtureOnly && !BundledMusicRuntime.hasPcFixture(staging)) return track.seconds;
+        return BundledMusicRuntime.sourceSeconds(staging);
+    }
+
     @Override public void published(PreparedMusic.Track track, File staging) {
         if (fixtureOnly || !pinned(track).isEmpty()) return;
         // A hint from a failed transfer or a rejected file must not survive into another attempt.

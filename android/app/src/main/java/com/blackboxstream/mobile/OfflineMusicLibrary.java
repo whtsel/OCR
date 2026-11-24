@@ -39,6 +39,7 @@ final class OfflineMusicLibrary {
     interface Downloader {
         File fetch(PreparedMusic.Track track, File staging, Progress progress) throws Exception;
         default boolean needsLookup(PreparedMusic.Track track, File staging) { return true; }
+        default int expectedSeconds(PreparedMusic.Track track, File staging) throws IOException { return track.seconds; }
         default void published(PreparedMusic.Track track, File staging) { }
     }
     interface Progress { void report(String phase, long received, long total); }
@@ -360,7 +361,7 @@ final class OfflineMusicLibrary {
                 File result = downloader.fetch(entry.track, work, (phase, received, total) -> report(key, job, phase, received, total));
                 if (result == null || !work.getCanonicalFile().equals(result.getCanonicalFile().getParentFile())) throw new Refusal("incomplete");
                 report(key, job, "verifying", 0, 0);
-                verify(result, entry.track.seconds);
+                verify(result, downloader.expectedSeconds(entry.track, work));
                 if (!result.renameTo(file(entry))) throw new Refusal("storage");
                 try { downloader.published(entry.track, work); }
                 catch (RuntimeException ignored) { /* Optional source hints cannot undo a completed save. */ }

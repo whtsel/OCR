@@ -17,6 +17,7 @@ on:
       - 'android/vendor/**'
       - 'android/tests/test_catalogue_music.py'
       - 'android/tests/test_offline_find.cjs'
+      - 'android/tests/test_pc_offline_selection.cjs'
       - '.github/ci/smoke_v90_offline.py'
       - '.github/ci/verify_blackbox_v90_helper.py'
       - '.github/workflows/blackbox-v90-offline.yml'
@@ -45,12 +46,12 @@ jobs:
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-      - name: Verify v90 sources and the exact-recording matcher
+      - name: Verify v90 sources and PC selection parity
         run: |
           (cd android/vendor && sha256sum -c ytdlp.sha256)
           (cd android/app/src/main/assets/v90 && sha256sum -c ../../../../../V90-ASSETS.sha256)
           node --check android/app/src/offlineMusic/assets/v90-offline/offline-music.js
-          node --test android/tests/test_offline_find.cjs
+          node --test android/tests/test_offline_find.cjs android/tests/test_pc_offline_selection.cjs
           python3 -B android/tests/test_catalogue_music.py
       - name: Build the full v90 ARM64 release candidate
         if: ${{ !inputs.verify_live_catalogue }}
@@ -72,7 +73,7 @@ jobs:
           phase=alignment
           trap 'code=$?; echo "::error::ARM64 verification failed during $phase (exit $code)"; exit "$code"' ERR
           tools="$ANDROID_HOME/build-tools/35.0.0"
-          apk="$RUNNER_TEMP/BlackBox-Stream-v90-Offline-1.5.3-ARM64.apk"
+          apk="$RUNNER_TEMP/BlackBox-Stream-v90-Offline-1.5.4-ARM64.apk"
           "$tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/v90-unsigned.apk" "$RUNNER_TEMP/aligned.apk"
           phase=key-generation
           keytool -genkeypair -keystore "$RUNNER_TEMP/offline-preview.p12" -storepass test-only -keypass test-only \
@@ -86,8 +87,8 @@ jobs:
           "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
           metadata=$(grep -E '^(package:|application-label:|launchable-activity:|native-code:|application-debuggable)' "$RUNNER_TEMP/badging.txt")
           echo "::notice::${metadata//$'\n'/' / '}"
-          grep -q "^package: name='com.blackboxstream.mobile.offline.resolver' versionCode='17' versionName='1.5.3-offline'" "$RUNNER_TEMP/badging.txt"
-          grep -q "^application-label:'BlackBox Stream v90 Offline 1.5.3'$" "$RUNNER_TEMP/badging.txt"
+          grep -q "^package: name='com.blackboxstream.mobile.offline.desktop' versionCode='18' versionName='1.5.4-offline'" "$RUNNER_TEMP/badging.txt"
+          grep -q "^application-label:'BlackBox Stream v90 Offline 1.5.4'$" "$RUNNER_TEMP/badging.txt"
           grep -q "^launchable-activity: name='com.blackboxstream.mobile.V90Activity'" "$RUNNER_TEMP/badging.txt"
           grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
           if grep -q '^application-debuggable' "$RUNNER_TEMP/badging.txt"; then echo '::error::Debuggable phone package'; exit 1; fi
@@ -138,8 +139,8 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ !inputs.verify_live_catalogue }}
         with:
-          name: BlackBox-Stream-v90-Offline-1.5.3-ARM64
-          path: ${{ runner.temp }}/BlackBox-Stream-v90-Offline-1.5.3-ARM64.apk
+          name: BlackBox-Stream-v90-Offline-1.5.4-ARM64
+          path: ${{ runner.temp }}/BlackBox-Stream-v90-Offline-1.5.4-ARM64.apk
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

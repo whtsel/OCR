@@ -665,6 +665,8 @@ public final class BlackBoxSmoke extends Instrumentation {
                 {"TRANSFER", "ERROR: The request timed out", "transfer-io"},
                 {"FINALIZE", "ERROR: Encoder timed out", "finalize"},
                 {"LOOKUP", "BBX_NO_EXACT_RECORDING", "exact"},
+                {"LOOKUP", "BBX_NO_PC_MATCH", "no-source"},
+                {"LOOKUP", "BBX_PC_INCOMPLETE_SOURCE", "incomplete-source"},
                 {"LOOKUP", "BBX_PROVIDER_SIGNIN", "signin"},
                 {"LOOKUP", "ERROR: HTTP Error 429", "limited"},
                 {"LOOKUP", "ERROR: This video is only available to Music Premium members", "refused"},

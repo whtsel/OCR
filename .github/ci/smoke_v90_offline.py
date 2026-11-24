@@ -20,7 +20,7 @@ from websocket import create_connection
 
 import check_blackbox_p11 as p11
 
-PKG = 'com.blackboxstream.mobile.offline.resolver'
+PKG = 'com.blackboxstream.mobile.offline.desktop'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -179,15 +179,19 @@ def entries(js):
     return js('JSON.parse(OfflineMusic.library()).tracks')
 
 
-def stage(track, data):
+def write_staged(track, name, data):
     directory = 'files/offline-music/staging/' + track['key']
     p11.adb('shell', 'run-as', PKG, 'mkdir', '-p', directory)
     # Use the shell protocol so ADB waits for the device write to close. A raw exec-in
-    # stream can end without delivering its trailing bytes or reflecting the device exit code.
-    subprocess.run(['adb', 'shell', '-T', f"run-as {PKG} sh -c 'base64 -d > {directory}/audio.m4a'"],
+    # stream can lose its trailing bytes or fail to reflect the device exit code.
+    target = f'{directory}/{name}'
+    subprocess.run(['adb', 'shell', '-T', f"run-as {PKG} sh -c 'base64 -d > {target}'"],
                    input=base64.b64encode(data), check=True, timeout=14)
-    verify_on_device(f'{directory}/audio.m4a', data, 'Staged ' + track['title'])
+    verify_on_device(target, data, 'Staged ' + track['title'])
 
+
+def stage(track, data):
+    write_staged(track, 'audio.m4a', data)
 
 def verify_on_device(path, data, label):
     # Hash the bytes in app storage, rather than reading a large binary buffer through ADB.
@@ -347,7 +351,7 @@ def check_cold_seek(js, track, seconds):
     print(f'::notice::PASS {title} synthetic fixture played and sought after a force-stop in airplane mode ({duration} ms, seek {jump} ms)')
 
 
-def check_unpinned_album(tone):
+def check_unpinned_album(tone, wrong_length):
     title, ref, seconds = 'The Victory Song', 'album:d735721521:1:1', 175
     airplane(True)
     with page() as js:
@@ -367,23 +371,40 @@ def check_unpinned_album(tone):
     key = row['key']
     for file in (f'files/offline-music/staging/{key}', f'files/offline-music/saved/{key}.m4a'):
         p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', file)
-    # The fixture must use the fresh catalogue key, not one of the known video IDs.
-    route = f'/{key}.m4a'
-    with recording_server({route: tone}) as requests, page() as js:
-        airplane(False)
-        wait(js, f"JSON.parse(OfflineMusic.library()).tracks.some(t=>t.key==='{key}'&&t.state==='saved')",
-             'The unpinned album fixture was not verified and saved', 75)
-        if requests != {route}:
-            raise RuntimeError('The unpinned album recording did not use its own fixture transfer')
-        verify_bytes(row, tone)
+    # Give the real selection path only the provider-shaped search/watch responses,
+    # not a pin or pre-seeded file. The audio-only source has no album tag and a
+    # different (PC-eligible) duration. The wrong file matches the catalogue duration.
+    selected, remix, source_seconds = 'AUDIO000004', 'REMIX000004', 201
+    source = dict(id=selected, title=title, channel='Black Sherif - Topic', duration=source_seconds)
+    alternate = dict(source, id=remix, title=title + ' (Remix)', duration=seconds)
+    metadata = json.dumps(dict(entries=[alternate, source], watch={selected: source, remix: alternate})).encode('utf8')
+    route = f'/{selected}.m4a'
+    state = f"JSON.parse(OfflineMusic.library()).tracks.find(t=>t.key==='{key}')"
+    for file, correct in ((wrong_length, False), (tone, True)):
+        write_staged(row, 'pc-fixture.json', metadata)
+        with recording_server({route: file, f'/{remix}.m4a': tone}) as requests, page() as js:
+            airplane(False)
+            check = "t.state==='saved'" if correct else "t.state==='failed' && t.reason==='incomplete'"
+            wait(js, f"(()=>{{const t={state};return {check}}})()",
+                 'File verification did not follow the duration of the selected PC source', 75)
+            if requests != {route}:
+                raise RuntimeError('The PC selector did not transfer just the non-remix source')
+            if correct:
+                verify_bytes(row, tone)
+            else:
+                p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', f'files/offline-music/saved/{key}.m4a')
+                airplane(True)
+                wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Retry setup requires an offline queue')
+                js(f"OfflineMusic.queue('retry',{json.dumps(key)})")
+                wait(js, f"({state}).state==='offline'", 'The failed source did not wait for a manual retry')
+    print('PASS PC ranking selected one unpinned source without an album tag and the file gate rejected the wrong duration')
     force_stop()
     airplane(True)
     with page() as js:
         open_music(js)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Cold album playback was not offline')
-        check_cold_seek(js, row, seconds)
-    print('::notice::PASS a third, unpinned catalogue row (The Victory Song) went from Find through Downloads to a verified Collection file (loopback tone only)')
-
+        check_cold_seek(js, row, source_seconds)
+    print('PASS PC-style resolution, transfer and byte-verified offline playback with loopback media only')
 
 def check_provider_refusal():
     airplane(True)
@@ -578,9 +599,9 @@ def smoke(apk, root):
         open_music(js)
         check_parallel(js, tones[ESPRESSO])
     album_tone = root / 'album-control.m4a'
-    p11.run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=960:duration=175',
+    p11.run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=960:duration=201',
             '-c:a', 'aac', '-movflags', '+faststart', album_tone, timeout=30)
-    check_unpinned_album(album_tone.read_bytes())
+    check_unpinned_album(album_tone.read_bytes(), tones[ESPRESSO])
     check_provider_refusal()
 
 
@@ -635,7 +656,7 @@ def live_trial(apk):
         click(js, play)
         wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.player());return p.key==='{row['key']}' && p.playing && p.position>700}})()",
              'The live recording did not play offline')
-        print('::notice::PASS real catalogue lookup, exact save, and cold offline playback of Goodness of God (Live)')
+        print('::notice::PASS real catalogue lookup, verified save, and cold offline playback of Goodness of God (Live)')
 
 
 if __name__ == '__main__':

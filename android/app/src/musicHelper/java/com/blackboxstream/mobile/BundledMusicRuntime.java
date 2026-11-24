@@ -86,18 +86,18 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             + "BBX_BYTES:%(progress.status)s:%(progress.downloaded_bytes)s:%(progress.total_bytes)s";
 
     @Override public PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control) throws Exception {
-        return fetch(track, scratch, control, track.source, null, null);
+        return fetch(track, scratch, control, track.source, null, false, null);
     }
 
-    /** The original v90 resolve-and-transfer path with no progressive playback or second lookup. */
+    /** Resolve like v90 desktop, then save one complete file without progressive playback. */
     File saveOffline(PreparedMusic.Track track, File scratch, String pinned, String fixture,
             OfflineMusicLibrary.Progress progress) throws Exception {
-        PreparedMusic.Result result = fetch(track, scratch, new PreparedMusic.Control(), pinned, fixture, progress);
+        PreparedMusic.Result result = fetch(track, scratch, new PreparedMusic.Control(), pinned, fixture, true, progress);
         return result == null ? null : result.audio;
     }
 
     private PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control,
-            String directId, String fixture, OfflineMusicLibrary.Progress progress) throws Exception {
+            String directId, String fixture, boolean offline, OfflineMusicLibrary.Progress progress) throws Exception {
         if (control.cancelled) return null;
         // Download the accepted recording from the same v90 extractor session. Prefer AAC
         // when offered, no speculative second transfer, and no retry of a provider refusal.
@@ -109,9 +109,10 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                 "--max-filesize", "24M", "-f", "bestaudio[ext=m4a]/bestaudio",
                 "-x", "--audio-format", "m4a", "--audio-quality", "0", "-o", new File(scratch, "audio.%(ext)s").getAbsolutePath()));
         // A fresh resolution may pick a different transfer format; never append to old audio bytes.
-        if (progress != null) options.add("--no-continue");
+        if (offline) options.add("--no-continue");
         File audio = new File(scratch, "audio.m4a");
-        if (fixture != null) {
+        boolean pcFixture = fixture != null && directId.isEmpty() && hasPcFixture(scratch);
+        if (fixture != null && !pcFixture) {
             // Only the test APK may supply a native-generated local tone path; never a bridge URL.
             options.add("http://127.0.0.1:19090/" + fixture + ".m4a");
             execute(control, scratch, false, progress, options.toArray(new String[0]));
@@ -125,13 +126,28 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             execute(control, scratch, false, progress, options.toArray(new String[0]));
             return new PreparedMusic.Result(audio, directId);
         }
-        // A remembered provider ID is a hint, not a pin. It must pass the same matcher.
         new File(scratch, "source-id").delete();
-        String artist = progress == null ? track.artist : WholeFileMusicRuntime.lookupArtist(track);
-        options.addAll(0, Arrays.asList(track.title, artist, track.album, Integer.toString(track.seconds), remembered(track.key)));
+        new File(scratch, "source-seconds").delete();
+        String artist = offline ? WholeFileMusicRuntime.lookupArtist(track) : track.artist;
+        String policy = pcFixture ? "pc-fixture" : offline ? "pc" : "exact";
+        options.addAll(0, Arrays.asList(track.title, artist, track.album, Integer.toString(track.seconds),
+                pcFixture ? "" : remembered(track.key), policy));
         execute(control, scratch, true, progress, options.toArray(new String[0]));
         if (control.cancelled) return null;
         return new PreparedMusic.Result(audio, sourceId(scratch));
+    }
+
+    static boolean hasPcFixture(File scratch) { return new File(scratch, "pc-fixture.json").isFile(); }
+
+    static int sourceSeconds(File scratch) throws IOException {
+        try (FileInputStream in = new FileInputStream(new File(scratch, "source-seconds"))) {
+            String length = new String(TorrentMeta.slurp(in, 4), StandardCharsets.US_ASCII);
+            if (length.matches("[1-9][0-9]{0,3}") && PreparedMusic.videoId(sourceId(scratch))) {
+                int seconds = Integer.parseInt(length);
+                if (seconds <= PreparedMusic.MAX_SECONDS) return seconds;
+            }
+        } catch (IOException missing) { /* No independent duration means no safe publication. */ }
+        throw new OfflineMusicLibrary.Refusal("incomplete");
     }
 
     static String sourceId(File scratch) throws IOException {
@@ -224,7 +240,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         command.add(new File(nativeDir, "libpython.so").getAbsolutePath());
         if (discover) command.addAll(Arrays.asList("-c", companion));
         command.add(script.getAbsolutePath());
-        int positional = discover ? 5 : 0;
+        int positional = discover ? 6 : 0;
         command.addAll(Arrays.asList(args).subList(0, positional));
         command.addAll(Arrays.asList("--ignore-config", "--no-update", "--no-cache-dir", "--no-plugin-dirs",
                 "--no-remote-components", "--js-runtimes", "quickjs:" + new File(nativeDir, "libqjs.so").getAbsolutePath(),
@@ -311,7 +327,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         // Use only failure lines and fixed companion markers, not progress or upload titles.
         StringBuilder problems = new StringBuilder();
         for (String line : output.split("\n")) {
-            if (line.startsWith("ERROR:") || line.startsWith("BBX_PROVIDER_") || line.equals("BBX_NO_EXACT_RECORDING"))
+            if (line.startsWith("ERROR:") || line.startsWith("BBX_PROVIDER_") || line.equals("BBX_NO_EXACT_RECORDING")
+                    || line.equals("BBX_NO_PC_MATCH") || line.equals("BBX_PC_INCOMPLETE_SOURCE"))
                 problems.append(line).append('\n');
         }
         String message = problems.toString().toLowerCase(Locale.ROOT);
@@ -327,6 +344,10 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                 || message.contains("subscriber-only") || message.contains("not available in your country")
                 || message.contains("not available in your region"))
             return new OfflineMusicLibrary.Refusal("refused", "The provider did not allow this recording.");
+        if (message.contains("bbx_no_pc_match"))
+            return new OfflineMusicLibrary.Refusal("no-source", "No matching source was returned by the provider.");
+        if (message.contains("bbx_pc_incomplete_source"))
+            return new OfflineMusicLibrary.Refusal("incomplete-source", "The selected source did not describe complete audio.");
         if (message.contains("bbx_no_exact_recording"))
             return new OfflineMusicLibrary.Refusal("exact", "No exact full recording could be verified. Nothing else was played.");
         if (message.contains("no space left"))
