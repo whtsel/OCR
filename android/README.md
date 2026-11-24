@@ -4,12 +4,13 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.5 (ARM64)** is the full Android test build with **v90 PC source
-selection** for ordinary Music downloads. Its package (`com.blackboxstream.mobile.offline.transfer`)
-installs alongside previous previews, the pilot, and Music Save Check. It starts with a separate, empty
-Collection; it does not import, overwrite, or delete existing downloads. Keep the older app to
-access its own saved files. Use Android 7.0 or later with an up-to-date System WebView. The
-original v90 expiry still applies (end of 31 March 2027 UTC).
+**BlackBox Stream v90 Offline 1.5.4.1** is a narrow patch to the working 1.5.4 build. It keeps
+its package (`com.blackboxstream.mobile.offline.desktop`), catalogue identities, saved files,
+queue and playlists. Android can retain that data on an in-place update only with the original
+signer. The published 1.5.4 APK used a per-run CI key that the workflow did not retain. Keep the
+installed 1.5.4 and its data; the temporary-key CI build of this patch is not published as an
+update. Android 7.0 or later and an up-to-date System WebView are required. The original v90
+expiry still applies (end of 31 March 2027 UTC).
 
 - **Music → Find** keeps the original v90 Music discovery UI: fourteen genre shelves, instant and
   structured results, and ordered album tracklists. Suggestions and submitted results use the same
@@ -22,13 +23,13 @@ original v90 expiry still applies (end of 31 March 2027 UTC).
   Known source IDs can transfer without a lookup. Pause lets active jobs finish but does not start
   another; a provider rate limit pauses new jobs briefly. Progress rings show actual received bytes
   against a known transfer size, or spin during lookup and unknown-length transfers.
-  On a cold lookup, the helper searches **artist + song** and ranks results like v90 PC. A missing
-  album or catalogue duration does not block a request. Titles the PC tokenizer cannot represent
-  use Unicode words with the same ranking rules. The app passes the chosen ID straight to yt-dlp;
-  there is no separate watch-page verification, provider-duration check, or post-download media probe.
-  A successful helper run can publish its nonempty, bounded output by an atomic move. Unfinished
-  staging files are never reused, and refusals are still reported without a substitute. IDs are
-  remembered only after publication. This is PC-style selection, not exact edition certification.
+  The 1.5.4 **artist + song** ranking, known IDs, and existing fallback for titles that the PC
+  tokenizer cannot represent are unchanged. After choosing a source with the PC ranker, the
+  downloader opens that URL directly instead of requiring another metadata decision. Regular
+  Downloads no longer probe the finished file for audio or compare its duration. A save still
+  needs a successful helper run and a new, bounded output in the job directory, moved atomically
+  to Collection. Previously interrupted staging is discarded, not accepted as a save. Sign-in
+  requests and refusals remain failures, not a reason to substitute another source.
 - **Collection** plays its saved, app-private files without the helper or a connection. To check it on
   a phone, save one song, force-stop the app, turn on airplane mode with Wi‑Fi off, reopen, and play
   and seek from Collection. The source must still allow a fresh download before this test.
@@ -37,14 +38,14 @@ original v90 expiry still applies (end of 31 March 2027 UTC).
 
 Build the offline package with `cd android && gradle :app:assembleRelease -PbbxOfflineMusic=true`
 (Gradle 8.9, JDK 17 and Android SDK 35; allow up to 3 GiB of Java heap for release dependencies).
-The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) signs the ARM64 test APK,
-checks the bundled v90 assets and pinned Android helper, and tests an x86 sibling with synthetic
-media. The suite checks lookup limits, five overlapping transfers, pause/retry, and refusal handling.
-An unpinned test supplies search results only, downloads the selected non-remix source, and
-plays and seeks after an offline restart, even though the tone's duration differs from both
-recorded runtimes. A separate interrupted transfer leaves an otherwise complete-looking stale
-staging file unsaved; a successful retry publishes only fresh bytes. These are controlled checks,
-not live-provider availability.
+The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) verifies the ARM64
+package with a temporary signer and runs controlled x86 tests. It installs the original 1.5.4
+code, saves a synthetic song and playlist, and checks that a second completed audio file is
+flagged for its duration. Updating with the same **test** signer preserves the first song,
+playlist and Retry item. Retrying with the same audio now saves it. Other fixtures test direct
+transfer without separate watch metadata, offline restart and seek, concurrency, provider
+refusals and interrupted transfer recovery. These checks do not test live provider availability
+or the signing key on an installed phone APK.
 Dispatch the workflow
 with `verify_live_catalogue=true` to compare a fresh **Espresso** save from the original Find
 with a fresh save in the archived-helper pilot. Both select `51zjlMhdSTE` and run on the same x86
@@ -120,7 +121,7 @@ As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 ## Streaming preview Music engine and offline listening
 
 The **Fast Start preview** uses the full v90 catalogue (**2,620 albums and 35,995 track rows**).
-Its exact resolver is distinct from PC selection in Offline 1.5.5. It checks an exact
+Its exact resolver is distinct from PC selection in Offline 1.5.4.1. It checks an exact
 recording's title, credited artists, release, full duration and publisher metadata. A few confirmed
 source IDs skip the lookup. For other cards, the resolver searches with the release first (a
 broader query is optional), with at most two searches and four source inspections. If only the

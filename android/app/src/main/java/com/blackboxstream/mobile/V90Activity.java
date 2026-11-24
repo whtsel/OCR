@@ -66,7 +66,7 @@ public final class V90Activity extends Activity {
         super.onCreate(state);
         root = Ui.column(this); root.setBackgroundColor(0xff101017);
         Ui.fitWindow(this, root); setContentView(root);
-        offlineMusic = "com.blackboxstream.mobile.offline.transfer".equals(getPackageName());
+        offlineMusic = "com.blackboxstream.mobile.offline.desktop".equals(getPackageName());
         api = offlineMusic ? new V90Api(this, null) : new V90Api(this);
         try {
             if (offlineMusic && (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0)

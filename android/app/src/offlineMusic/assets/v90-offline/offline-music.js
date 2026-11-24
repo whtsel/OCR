@@ -354,14 +354,14 @@
   const jobStatus = {working:'Preparing recording…', offline:'Waiting for internet',
     paused:'Paused', queued:'Queued', cooldown:'Waiting for the provider cooldown'};
   const failures = { metadata:'Recording details missing in the catalogue', exact:'Exact recording not verified',
-    'no-source':'No matching source found',
+    'no-source':'No matching source found', 'incomplete-source':'Selected source did not report complete audio',
     signin:'Provider requires sign-in', refused:'Provider refused this recording',
     'lookup-timeout':'Recording lookup timed out', 'lookup-io':'Provider lookup interrupted',
     'transfer-timeout':'Audio transfer timed out', 'transfer-idle':'Audio transfer stopped receiving data', 'transfer-io':'Audio transfer interrupted',
     'finalize-timeout':'Finishing audio timed out', finalize:'Could not finish the audio file',
     'setup-timeout':'Audio helper took too long to start', setup:'Could not start the audio helper', size:'Recording is above the download size limit',
     network:'Request interrupted', limited:'Provider rate limited this request', storage:'Could not save · check storage',
-    incomplete:'Download did not produce an audio file', missing:'Saved file missing', helper:'Download didn’t finish' };
+    incomplete:'Download could not be saved', missing:'Saved file missing', helper:'Download didn’t finish' };
   const progressRows = new Map();
   let lastProgress = '';
   const size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB`

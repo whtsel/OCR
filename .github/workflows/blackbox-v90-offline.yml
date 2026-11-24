@@ -36,6 +36,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0 # Build the exact 1.5.4 source for the same-package upgrade test.
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
@@ -64,7 +65,7 @@ jobs:
             exit 1
           fi
           cp android/app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/v90-unsigned.apk"
-      - name: Sign and verify the non-debuggable ARM64 APK
+      - name: Verify the non-debuggable ARM64 APK with a temporary test key
         if: ${{ !inputs.verify_live_catalogue }}
         id: package
         continue-on-error: true # Still capture emulator results; the final gate requires both.
@@ -73,7 +74,7 @@ jobs:
           phase=alignment
           trap 'code=$?; echo "::error::ARM64 verification failed during $phase (exit $code)"; exit "$code"' ERR
           tools="$ANDROID_HOME/build-tools/35.0.0"
-          apk="$RUNNER_TEMP/BlackBox-Stream-v90-Offline-1.5.5-ARM64.apk"
+          apk="$RUNNER_TEMP/BlackBox-Stream-v90-Offline-1.5.4.1-test-only.apk"
           "$tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/v90-unsigned.apk" "$RUNNER_TEMP/aligned.apk"
           phase=key-generation
           keytool -genkeypair -keystore "$RUNNER_TEMP/offline-preview.p12" -storepass test-only -keypass test-only \
@@ -87,8 +88,8 @@ jobs:
           "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
           metadata=$(grep -E '^(package:|application-label:|launchable-activity:|native-code:|application-debuggable)' "$RUNNER_TEMP/badging.txt")
           echo "::notice::${metadata//$'\n'/' / '}"
-          grep -q "^package: name='com.blackboxstream.mobile.offline.transfer' versionCode='19' versionName='1.5.5-offline'" "$RUNNER_TEMP/badging.txt"
-          grep -q "^application-label:'BlackBox Stream v90 Offline 1.5.5'$" "$RUNNER_TEMP/badging.txt"
+          grep -q "^package: name='com.blackboxstream.mobile.offline.desktop' versionCode='19' versionName='1[.]5[.]4[.]1-offline'" "$RUNNER_TEMP/badging.txt"
+          grep -q "^application-label:'BlackBox Stream v90 Offline 1.5.4[.]1'$" "$RUNNER_TEMP/badging.txt"
           grep -q "^launchable-activity: name='com.blackboxstream.mobile.V90Activity'" "$RUNNER_TEMP/badging.txt"
           grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
           if grep -q '^application-debuggable' "$RUNNER_TEMP/badging.txt"; then echo '::error::Debuggable phone package'; exit 1; fi
@@ -113,6 +114,19 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Build the 1.5.4 x86 reference with the same CI debug signer
+        if: ${{ !inputs.verify_live_catalogue }}
+        run: |
+          set -euo pipefail
+          reference="$RUNNER_TEMP/v90-offline-reference"
+          mkdir -p "$reference"
+          git archive f3e1c00be153c152ae88a6cc5b97b8c2392fae0e android | tar -x -C "$reference"
+          log=$(mktemp)
+          if ! (cd "$reference/android" && gradle :app:assembleDebug --no-daemon --console=plain -PbbxOfflineMusic=true -PbbxHelperAbi=x86_64) > "$log" 2>&1; then
+            tail -80 "$log"
+            echo '::error::Could not build the 1.5.4 x86 upgrade reference'
+            exit 1
+          fi
       - name: Assemble a live-only x86 pilot from the archived p11 DEX
         if: ${{ inputs.verify_live_catalogue }}
         run: |
@@ -132,15 +146,9 @@ jobs:
             if [ "${{ inputs.verify_live_catalogue }}" = true ]; then
             python3 -B -u .github/ci/compare_v90_offline.py
             android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/pilot-live.apk" ${{ inputs.pilot_only && '--only-pilot' || '' }};
-            else python3 -B -u .github/ci/smoke_v90_offline.py android/app/build/outputs/apk/debug/app-debug.apk; fi
-      - name: Require package verification before upload
+            else python3 -B -u .github/ci/smoke_v90_offline.py android/app/build/outputs/apk/debug/app-debug.apk
+            --upgrade-from "$RUNNER_TEMP/v90-offline-reference/android/app/build/outputs/apk/debug/app-debug.apk"; fi
+      - name: Require ARM64 package verification
         if: ${{ !inputs.verify_live_catalogue && steps.package.outcome != 'success' }}
         run: exit 1
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ !inputs.verify_live_catalogue }}
-        with:
-          name: BlackBox-Stream-v90-Offline-1.5.5-ARM64
-          path: ${{ runner.temp }}/BlackBox-Stream-v90-Offline-1.5.5-ARM64.apk
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
+      # A temporary-key APK cannot update the shipped 1.5.4 app. Do not publish it.

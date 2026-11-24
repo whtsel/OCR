@@ -370,11 +370,9 @@ def pc_length(actual, expected):
     return not actual or not expected or abs(actual - expected) <= max(45, expected * .38)
 
 
-def pc_pick(entries, title, artist, seconds, unicode_words=False):
-    """Mirror the desktop selector. Use Unicode words only when its tokenizer is empty."""
-    normalize = norm if unicode_words else pc_text
-    words_for = (lambda text: norm(text).split()) if unicode_words else pc_words
-    wanted, words, credits = normalize(title), words_for(title), words_for(artist)
+def pc_pick(entries, title, artist, seconds):
+    """Mirror bestFullTrackResult in the untouched desktop app.js (tested against it)."""
+    wanted, words, credits = pc_text(title), pc_words(title), pc_words(artist)
     best, high = '', -999
     for item in itertools.islice(entries or (), PC_SEARCH_COUNT):
         if not isinstance(item, dict):
@@ -382,17 +380,16 @@ def pc_pick(entries, title, artist, seconds, unicode_words=False):
         video = item.get('ytId') or item.get('id')
         if not isinstance(video, str) or not VIDEO_ID.fullmatch(video):
             continue
-        label = normalize(item.get('title'))
+        label = pc_text(item.get('title'))
         visible = f"{item.get('title') or ''} {item.get('channel') or ''}".lower()
-        searchable = norm(visible) if unicode_words else visible
         if any(version in label and version not in wanted for version in PC_VARIANTS):
             continue
-        titles = sum(word in searchable for word in words)
-        artists = sum(word in searchable for word in credits)
+        titles = sum(word in visible for word in words)
+        artists = sum(word in visible for word in credits)
         if (titles < max(1, math.ceil(len(words) * .72)) or credits and not artists
                 or not pc_length(pc_number(item.get('duration')), seconds)):
             continue
-        score = titles * 5 + artists * 3 - max(0, len(words_for(item.get('title'))) - len(words)) * .15
+        score = titles * 5 + artists * 3 - max(0, len(pc_words(item.get('title'))) - len(words)) * .15
         score += 5 if re.search(r'official (?:audio|video)|topic\b|provided to', visible, re.ASCII) else 0
         score += 8 if label == wanted else 0
         if score > high:
@@ -406,13 +403,16 @@ def prepare_pc(engine, title, artist, seconds, mark, remembered='', stage=lambda
     if not video:
         stage('BBX_CATALOGUE_QUERY')
         response = engine.extract_info(f'ytsearch{PC_SEARCH_COUNT}:{artist} {title}', download=False, process=False)
-        video = pc_pick((response or {}).get('entries'), title, artist, seconds, unicode_words=not pc_words(title))
+        video = pc_pick((response or {}).get('entries'), title, artist, seconds)
     if not video:
         return 'BBX_NO_PC_MATCH'
     stage('BBX_PC_OPEN')
     if download and engine.download([f'https://www.youtube.com/watch?v={video}']):
         return 'BBX_PC_DOWNLOAD_FAILED'
-    mark(video)
+    try:
+        mark(video)  # Optional hint, not a condition for saving a completed file.
+    except OSError:
+        pass
     return ''
 
 
@@ -456,11 +456,12 @@ def main():
             download = not params.get('simulate')
             if policy == 'pc-fixture':
                 engine = PcFixture(engine)
-            if policy in ('pc', 'pc-fixture'):
+            if policy in ('pc', 'pc-fixture') and pc_words(title):
                 problem = prepare_pc(engine, title, artist, seconds, mark, remembered, stage, download)
                 if problem:
                     print(problem, file=sys.stderr)
                 return 3 if problem else 0
+            # Keep 1.5.4 selection for titles the PC tokenizer cannot represent.
             found = prepare(engine, title, artist, album, seconds, mark,
                             (DownloadError, ExtractorError), remembered, stage, download)
     except (DownloadError, ExtractorError) as problem:

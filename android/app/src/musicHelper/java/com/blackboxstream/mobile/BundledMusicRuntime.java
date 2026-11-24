@@ -135,7 +135,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                 pcFixture ? "" : remembered(track.key), policy));
         execute(control, scratch, true, progress, options.toArray(new String[0]));
         if (control.cancelled) return null;
-        return new PreparedMusic.Result(audio, sourceId(scratch));
+        return new PreparedMusic.Result(audio, offline ? "" : sourceId(scratch));
     }
 
     static boolean hasPcFixture(File scratch) { return new File(scratch, "pc-fixture.json").isFile(); }

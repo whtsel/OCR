@@ -356,11 +356,13 @@ class TestDesktopSave(unittest.TestCase):
         self.assertEqual(resolver.prepare_pc(engine, *self.wanted, lambda _: self.fail('cover selected')), 'BBX_NO_PC_MATCH')
         self.assertEqual(engine.downloads, [])
 
-    def test_non_latin_titles_do_not_need_exact_edition_verification(self):
-        entries = [dict(self.source, title='夜の便り', channel='ミナ')]
-        engine = DesktopEngine(entries)
-        self.assertFalse(resolver.prepare_pc(engine, '夜の便り', 'ミナ', 0, lambda _: None))
-        self.assertEqual(engine.queries, ['ミナ 夜の便り'])
+    def test_optional_source_hint_cannot_reject_a_completed_transfer(self):
+        engine = DesktopEngine([self.source])
+
+        def cannot_remember(_):
+            raise OSError('Source hint unavailable')
+
+        self.assertFalse(resolver.prepare_pc(engine, *self.wanted, cannot_remember))
         self.assertEqual(engine.downloads, [self.url])
 
 

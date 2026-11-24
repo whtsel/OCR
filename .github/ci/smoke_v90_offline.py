@@ -1,6 +1,6 @@
 """Drive the full v90 APK and native Music player on a disposable x86 emulator.
 
-Fixtures never request provider audio. The non-debuggable ARM64 deliverable cannot use them.
+Fixtures never request provider audio. The non-debuggable ARM64 build cannot use them.
 The separate --live diagnostic requests one catalogue song without a fixture or credentials.
 """
 import argparse
@@ -20,7 +20,7 @@ from websocket import create_connection
 
 import check_blackbox_p11 as p11
 
-PKG = 'com.blackboxstream.mobile.offline.transfer'
+PKG = 'com.blackboxstream.mobile.offline.desktop'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -404,7 +404,7 @@ def check_provider_refusal():
         open_music(js)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Refusal trial started too early')
         record = dict(ref='fixture:provider-refused', title='Synthetic refusal', artist='Test artist',
-                      album='', seconds=0)
+                      album='Test album', seconds=172)
         request = json.dumps(dict(tracks=[record], label=''))
         js(f"OfflineMusic.queue('enqueue',{json.dumps(request)})")
         row, = [t for t in entries(js) if t['ref'] == record['ref']]
@@ -428,19 +428,83 @@ def check_provider_refusal():
         print('PASS explicit HTTP refusal stayed unsaved and appeared separately from interruptions')
 
 
-def smoke(apk, root):
+def check_update(apk, tone, seconds):
+    """Use two debug builds with the same signer to check the existing 1.5.4 Collection."""
+    records = [dict(ref=f'fixture:update:{i}', title=title, artist='Test artist', album='Update test',
+                    seconds=duration) for i, (title, duration) in enumerate(
+                        [('Saved before update', seconds), ('Flagged before update', seconds + 26)])]
+    with page() as js:
+        open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Update fixture requires offline setup')
+        if entries(js) or js('JSON.parse(OfflineMusic.library()).playlists.length'):
+            raise RuntimeError('The update check requires a fresh 1.5.4 debug installation')
+        request = json.dumps(dict(tracks=records, label=''))
+        js(f"OfflineMusic.queue('enqueue',{json.dumps(request)})")
+        saved, flagged = entries(js)
+        route = f'/{flagged["key"]}.m4a'
+        routes = {f'/{saved["key"]}.m4a': tone, route: tone}
+        with recording_server(routes) as requests:
+            airplane(False)
+            wait(js, "JSON.parse(OfflineMusic.library()).tracks.map(t=>t.state).join(',')==='saved,failed'",
+                 '1.5.4 did not flag the duration-mismatched fixture', 90)
+            if requests != set(routes) or entries(js)[1]['reason'] != 'incomplete':
+                raise RuntimeError('The control did not reach the extra file check')
+            verify_bytes(saved, tone)
+            airplane(True)
+            wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Update trial is not offline')
+        playlist = json.dumps(dict(name='Before update', keys=[saved['key']]))
+        before = json.loads(js(f"OfflineMusic.queue('playlist-add',{json.dumps(playlist)})"))
+        list_id = before['playlists'][0]['id']
+
+    force_stop()
+    p11.adb('install', '-r', apk, timeout=100)
+    with page() as js:
+        open_music(js)
+        after = json.loads(js('OfflineMusic.library()'))
+        if after['connected'] or (after['tracks'], after['playlists']) != (before['tracks'], before['playlists']):
+            raise RuntimeError('An in-place update changed the saved, flagged, or playlist records')
+        verify_bytes(saved, tone)
+        check_cold_seek(js, saved, seconds)
+        click(js, '#om-now')
+        click(js, '#om-stop')
+        click(js, '#om-tab-downloads')
+        retry = '#om-issues [aria-label="Retry Flagged before update"]'
+        wait(js, f'!!document.querySelector({json.dumps(retry)})', 'Old verification flag lost its Retry control')
+        with recording_server({route: tone}) as requests:
+            click(js, retry)
+            if entries(js)[1]['state'] != 'offline':
+                raise RuntimeError('Retry did not wait for the connection')
+            airplane(False)
+            wait(js, "JSON.parse(OfflineMusic.library()).tracks.every(t=>t.state==='saved')",
+                 'The same completed audio was flagged again after an update', 65)
+            if requests != {route}:
+                raise RuntimeError('Retry did not fetch exactly the flagged recording')
+            verify_bytes(flagged, tone)
+            airplane(True)
+            wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Fixture cleanup is not offline')
+        js(f"OfflineMusic.queue('playlist-remove',{json.dumps(list_id)})")
+        for row in (saved, flagged):
+            js(f"OfflineMusic.queue('delete',{json.dumps(row['key'])})")
+        if entries(js) or js('JSON.parse(OfflineMusic.library()).playlists.length'):
+            raise RuntimeError('Update fixtures were not removed before the rest of the smoke test')
+    print('::notice::PASS same-signer 1.5.4 update kept saved bytes, playlist and Retry; the same audio previously flagged now saved')
+
+
+def smoke(apk, root, upgrade_from=None):
     tones = {}
     for i, (title, (video, seconds)) in enumerate(TRACKS.items()):
         target = root / f'{video}.m4a'
         p11.run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', f'sine=frequency={440 + 220*i}:duration={seconds}',
                 '-c:a', 'aac', '-movflags', '+faststart', target, timeout=30)
         tones[title] = target.read_bytes()
-    p11.adb('install', apk, timeout=100)
+    p11.adb('install', upgrade_from or apk, timeout=100)
     p11.adb('shell', 'wm', 'size', '720x1560')
     p11.adb('shell', 'wm', 'density', '320')
     p11.adb('shell', 'run-as', PKG, 'mkdir', '-p', 'files/offline-music')
     p11.adb('shell', 'run-as', PKG, 'touch', 'files/offline-music/fixture-only')
     airplane(True)
+    if upgrade_from:
+        check_update(apk, tones[ESPRESSO], TRACKS[ESPRESSO][1])
     with page() as js:
         open_music(js)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Android did not enter offline mode')
@@ -657,14 +721,16 @@ def live_trial(apk):
 if __name__ == '__main__':
     args = argparse.ArgumentParser(description=__doc__)
     args.add_argument('apk', type=Path)
-    args.add_argument('--live', action='store_true')
+    mode = args.add_mutually_exclusive_group()
+    mode.add_argument('--live', action='store_true')
+    mode.add_argument('--upgrade-from', type=Path, help='1.5.4 debug APK signed with the same test key')
     request = args.parse_args()
     try:
         if request.live:
             live_trial(request.apk)
         else:
             with tempfile.TemporaryDirectory() as directory:
-                smoke(request.apk, Path(directory))
+                smoke(request.apk, Path(directory), request.upgrade_from)
     except Exception as error:
         print('::error::' + p11.diagnostic(str(error)).replace('\n', ' / '))
         raise

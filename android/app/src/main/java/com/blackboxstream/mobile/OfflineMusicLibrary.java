@@ -63,7 +63,7 @@ final class OfflineMusicLibrary {
         Entry(JSONObject row, String batch, String label, String failure, boolean complete) throws JSONException {
             info = clean(row);
             JSONObject spec = new JSONObject(info.toString());
-            // The desktop resolver can choose from title and artist. No source ID comes from the UI.
+            // A missing edition/duration is a visible blocked queue item, not permission to look up a substitute.
             spec.put("source", "");
             track = new PreparedMusic.Track(spec, false);
             this.batch = batch; this.label = label; this.failure = failure; this.complete = complete;
@@ -92,6 +92,7 @@ final class OfflineMusicLibrary {
                     .put("total", Math.max(0, Math.min(MAX_BATCH, row.optInt("total"))));
         }
 
+        boolean identified() { return track.seconds > 0 && !track.album.isEmpty(); }
         Entry result(String reason, boolean saved) { return new Entry(this, reason, saved); }
         JSONObject encode() throws JSONException {
             return new JSONObject(info.toString()).put("batch", batch).put("label", label)
@@ -159,7 +160,7 @@ final class OfflineMusicLibrary {
     private static boolean hasOutput(File audio) {
         if (audio == null || !audio.isFile()) return false;
         long bytes = audio.length();
-        return bytes > 0 && bytes <= PreparedMusic.MAX_AUDIO;
+        return bytes >= 32 && bytes <= PreparedMusic.MAX_AUDIO;
     }
 
     private File ready(Entry entry) {
@@ -202,6 +203,7 @@ final class OfflineMusicLibrary {
                     String batch = UUID.randomUUID().toString(), label = Entry.text(request, "label", 240);
                     for (int i = 0; i < tracks.length(); i++) {
                         Entry entry = new Entry(tracks.getJSONObject(i), batch, label, "", false);
+                        if (!entry.identified()) entry = entry.result("metadata", false);
                         if (!entries.containsKey(entry.track.key) && entries.size() >= MAX_RECORDS) {
                             entries.clear(); entries.putAll(before);
                             return error("Your Music library is full. Remove a saved song or clear a queue item first.");
