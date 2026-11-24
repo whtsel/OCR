@@ -38,8 +38,7 @@ final class OfflineMusicLibrary {
     // Loading the standalone v90 build does not load any helper dependencies.
     interface Downloader {
         File fetch(PreparedMusic.Track track, File staging, Progress progress) throws Exception;
-        default boolean needsLookup(PreparedMusic.Track track, File staging) { return true; }
-        default int expectedSeconds(PreparedMusic.Track track, File staging) throws IOException { return track.seconds; }
+        default boolean needsLookup(PreparedMusic.Track track) { return true; }
         default void published(PreparedMusic.Track track, File staging) { }
     }
     interface Progress { void report(String phase, long received, long total); }
@@ -64,7 +63,7 @@ final class OfflineMusicLibrary {
         Entry(JSONObject row, String batch, String label, String failure, boolean complete) throws JSONException {
             info = clean(row);
             JSONObject spec = new JSONObject(info.toString());
-            // A missing edition/duration is a visible blocked queue item, not permission to look up a substitute.
+            // The desktop resolver can choose from title and artist. No source ID comes from the UI.
             spec.put("source", "");
             track = new PreparedMusic.Track(spec, false);
             this.batch = batch; this.label = label; this.failure = failure; this.complete = complete;
@@ -93,7 +92,6 @@ final class OfflineMusicLibrary {
                     .put("total", Math.max(0, Math.min(MAX_BATCH, row.optInt("total"))));
         }
 
-        boolean identified() { return track.seconds > 0 && !track.album.isEmpty(); }
         Entry result(String reason, boolean saved) { return new Entry(this, reason, saved); }
         JSONObject encode() throws JSONException {
             return new JSONObject(info.toString()).put("batch", batch).put("label", label)
@@ -158,9 +156,15 @@ final class OfflineMusicLibrary {
 
     private File file(Entry entry) { return new File(saved, entry.track.key + ".m4a"); }
 
+    private static boolean hasOutput(File audio) {
+        if (audio == null || !audio.isFile()) return false;
+        long bytes = audio.length();
+        return bytes > 0 && bytes <= PreparedMusic.MAX_AUDIO;
+    }
+
     private File ready(Entry entry) {
         File audio = file(entry);
-        return audio.isFile() && audio.length() >= 32 && audio.length() <= PreparedMusic.MAX_AUDIO ? audio : null;
+        return hasOutput(audio) ? audio : null;
     }
 
     synchronized File saved(String key) {
@@ -198,7 +202,6 @@ final class OfflineMusicLibrary {
                     String batch = UUID.randomUUID().toString(), label = Entry.text(request, "label", 240);
                     for (int i = 0; i < tracks.length(); i++) {
                         Entry entry = new Entry(tracks.getJSONObject(i), batch, label, "", false);
-                        if (!entry.identified()) entry = entry.result("metadata", false);
                         if (!entries.containsKey(entry.track.key) && entries.size() >= MAX_RECORDS) {
                             entries.clear(); entries.putAll(before);
                             return error("Your Music library is full. Remove a saved song or clear a queue item first.");
@@ -318,7 +321,7 @@ final class OfflineMusicLibrary {
         job.received = Math.max(job.received, received);
         if (total > 0) job.total = total;
         if (job.received > job.total) job.total = 0; // No trustworthy denominator yet.
-        if (job.resolving && ("downloading".equals(phase) || "finishing".equals(phase) || "verifying".equals(phase))) {
+        if (job.resolving && ("downloading".equals(phase) || "finishing".equals(phase))) {
             // The same helper proceeds into transfer. Allow the next lookup without restarting it.
             job.resolving = false;
             kick();
@@ -334,7 +337,7 @@ final class OfflineMusicLibrary {
             if (active.size() >= PARALLEL_DOWNLOADS) break;
             if (entry.complete || !entry.failure.isEmpty() || active.containsKey(entry.track.key) || ready(entry) != null) continue;
             File work = new File(stage, entry.track.key);
-            boolean lookup = downloader.needsLookup(entry.track, work);
+            boolean lookup = downloader.needsLookup(entry.track);
             if (lookup && lookups >= PARALLEL_LOOKUPS) continue;
             if (lookup) lookups++;
             Job job = new Job(lookup);
@@ -359,9 +362,9 @@ final class OfflineMusicLibrary {
                 attempted = true;
                 if (!directory(work) || !directory(saved)) throw new Refusal("storage");
                 File result = downloader.fetch(entry.track, work, (phase, received, total) -> report(key, job, phase, received, total));
-                if (result == null || !work.getCanonicalFile().equals(result.getCanonicalFile().getParentFile())) throw new Refusal("incomplete");
-                report(key, job, "verifying", 0, 0);
-                verify(result, downloader.expectedSeconds(entry.track, work));
+                // Like desktop, a successful helper run commits its completed output. No media probe.
+                if (!hasOutput(result) || !work.getCanonicalFile().equals(result.getCanonicalFile().getParentFile()))
+                    throw new Refusal("incomplete");
                 if (!result.renameTo(file(entry))) throw new Refusal("storage");
                 try { downloader.published(entry.track, work); }
                 catch (RuntimeException ignored) { /* Optional source hints cannot undo a completed save. */ }
@@ -414,7 +417,7 @@ final class OfflineMusicLibrary {
         return "helper";
     }
 
-    // Also used by the isolated save check so it cannot certify files the full app would reject.
+    // Extra checks for the isolated Save Check diagnostic only. Regular Downloads do not call this.
     static void verify(File file, int seconds) throws Refusal {
         long bytes = file.length();
         if (bytes < 32 || bytes > PreparedMusic.MAX_AUDIO) throw new Refusal("incomplete");

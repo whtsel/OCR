@@ -15,28 +15,24 @@ final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
                 && new File(app.getFilesDir(), "offline-music/fixture-only").isFile();
     }
 
-    @Override public boolean needsLookup(PreparedMusic.Track track, File staging) {
-        return pinned(track).isEmpty() && !new File(staging, "audio.m4a").isFile();
-    }
-
-    @Override public int expectedSeconds(PreparedMusic.Track track, File staging) throws java.io.IOException {
-        // Pinned routes still use the catalogue length. PC selection may choose the same song
-        // with a different runtime; verify the file against independent metadata for that ID.
-        if (!pinned(track).isEmpty() || fixtureOnly && !BundledMusicRuntime.hasPcFixture(staging)) return track.seconds;
-        return BundledMusicRuntime.sourceSeconds(staging);
-    }
+    @Override public boolean needsLookup(PreparedMusic.Track track) { return pinned(track).isEmpty(); }
 
     @Override public void published(PreparedMusic.Track track, File staging) {
         if (fixtureOnly || !pinned(track).isEmpty()) return;
-        // A hint from a failed transfer or a rejected file must not survive into another attempt.
+        // Remember an ID only after a completed transfer has been published.
         try { resolver.rememberSource(track, BundledMusicRuntime.sourceId(staging)); }
-        catch (java.io.IOException ignored) { /* A hint is optional and will be verified on reuse. */ }
+        catch (java.io.IOException ignored) { /* A missing hint only means another search next time. */ }
     }
 
     @Override public File fetch(PreparedMusic.Track track, File staging, OfflineMusicLibrary.Progress progress) throws Exception {
-        File candidate = new File(staging, "audio.m4a");
-        // A force-stop can leave a fully staged candidate. The caller verifies it before publish.
-        if (candidate.isFile()) return candidate;
+        // A force-stop can leave audio.m4a or its partial files behind. A fresh attempt must
+        // not let yt-dlp reuse or publish any output left by that uncommitted transfer.
+        File[] leftovers = staging.listFiles();
+        if (leftovers == null) throw new OfflineMusicLibrary.Refusal("storage");
+        for (File file : leftovers) {
+            if (fixtureOnly && file.getName().equals("pc-fixture.json")) continue;
+            if (!file.delete()) throw new OfflineMusicLibrary.Refusal("storage");
+        }
         String video = pinned(track);
         return resolver.saveOffline(track, staging, video, fixtureOnly ? (video.isEmpty() ? track.key : video) : null, progress);
     }
@@ -46,7 +42,7 @@ final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
     }
 
     // Restore the recording map from the v90 Music build. The Offline bridge still
-    // cannot supply a provider ID, and the helper checks the pinned ID and duration.
+    // cannot supply a provider ID. The matched catalogue rows use these known IDs directly.
     static String pinned(PreparedMusic.Track track) {
         String title = wordKey(track.title), artist = wordKey(track.artist), album = wordKey(track.album);
         if (title.equals("espresso") && artist.equals("sabrina carpenter")

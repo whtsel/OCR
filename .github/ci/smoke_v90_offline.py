@@ -20,7 +20,7 @@ from websocket import create_connection
 
 import check_blackbox_p11 as p11
 
-PKG = 'com.blackboxstream.mobile.offline.desktop'
+PKG = 'com.blackboxstream.mobile.offline.transfer'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -108,7 +108,7 @@ def force_stop():
 
 
 @contextmanager
-def recording_server(payloads, holds=None, unknown=(), before_headers=None, started=None):
+def recording_server(payloads, holds=None, unknown=(), before_headers=None, started=None, short_body=()):
     """Real helper subprocesses over adb reverse; never contact a music provider."""
     holds = holds or {}
     before_headers = before_headers or {}
@@ -137,6 +137,9 @@ def recording_server(payloads, holds=None, unknown=(), before_headers=None, star
             if send_body:
                 try:
                     seen.add(self.path)
+                    if self.path in short_body:
+                        self.wfile.write(data[:len(data)//2])
+                        return  # The announced Content-Length is larger; the helper must fail.
                     hold = holds.get(self.path)
                     if hold is None:
                         self.wfile.write(data)
@@ -351,7 +354,7 @@ def check_cold_seek(js, track, seconds):
     print(f'::notice::PASS {title} synthetic fixture played and sought after a force-stop in airplane mode ({duration} ms, seek {jump} ms)')
 
 
-def check_unpinned_album(tone, wrong_length):
+def check_unpinned_album(tone, tone_seconds):
     title, ref, seconds = 'The Victory Song', 'album:d735721521:1:1', 175
     airplane(True)
     with page() as js:
@@ -371,40 +374,29 @@ def check_unpinned_album(tone, wrong_length):
     key = row['key']
     for file in (f'files/offline-music/staging/{key}', f'files/offline-music/saved/{key}.m4a'):
         p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', file)
-    # Give the real selection path only the provider-shaped search/watch responses,
-    # not a pin or pre-seeded file. The audio-only source has no album tag and a
-    # different (PC-eligible) duration. The wrong file matches the catalogue duration.
-    selected, remix, source_seconds = 'AUDIO000004', 'REMIX000004', 201
-    source = dict(id=selected, title=title, channel='Black Sherif - Topic', duration=source_seconds)
+    # An unpinned PC listing, no separate watch metadata. The completed tone has
+    # neither the catalogue duration nor the selected listing's reported duration.
+    selected, remix = 'AUDIO000004', 'REMIX000004'
+    source = dict(id=selected, title=title, channel='Black Sherif - Topic', duration=201)
     alternate = dict(source, id=remix, title=title + ' (Remix)', duration=seconds)
-    metadata = json.dumps(dict(entries=[alternate, source], watch={selected: source, remix: alternate})).encode('utf8')
+    metadata = json.dumps(dict(entries=[alternate, source])).encode('utf8')
+    write_staged(row, 'pc-fixture.json', metadata)
     route = f'/{selected}.m4a'
-    state = f"JSON.parse(OfflineMusic.library()).tracks.find(t=>t.key==='{key}')"
-    for file, correct in ((wrong_length, False), (tone, True)):
-        write_staged(row, 'pc-fixture.json', metadata)
-        with recording_server({route: file, f'/{remix}.m4a': tone}) as requests, page() as js:
-            airplane(False)
-            check = "t.state==='saved'" if correct else "t.state==='failed' && t.reason==='incomplete'"
-            wait(js, f"(()=>{{const t={state};return {check}}})()",
-                 'File verification did not follow the duration of the selected PC source', 75)
-            if requests != {route}:
-                raise RuntimeError('The PC selector did not transfer just the non-remix source')
-            if correct:
-                verify_bytes(row, tone)
-            else:
-                p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', f'files/offline-music/saved/{key}.m4a')
-                airplane(True)
-                wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Retry setup requires an offline queue')
-                js(f"OfflineMusic.queue('retry',{json.dumps(key)})")
-                wait(js, f"({state}).state==='offline'", 'The failed source did not wait for a manual retry')
-    print('PASS PC ranking selected one unpinned source without an album tag and the file gate rejected the wrong duration')
+    with recording_server({route: tone, f'/{remix}.m4a': tone}) as requests, page() as js:
+        airplane(False)
+        wait(js, f"JSON.parse(OfflineMusic.library()).tracks.some(t=>t.key==='{key}'&&t.state==='saved')",
+             'The completed helper output was not published without verification', 75)
+        if requests != {route}:
+            raise RuntimeError('The desktop selector did not transfer just the chosen source')
+        verify_bytes(row, tone)
     force_stop()
     airplane(True)
     with page() as js:
         open_music(js)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Cold album playback was not offline')
-        check_cold_seek(js, row, source_seconds)
-    print('PASS PC-style resolution, transfer and byte-verified offline playback with loopback media only')
+        check_cold_seek(js, row, tone_seconds)
+    print('PASS a PC-style unpinned source saved and played without a second metadata or duration check')
+
 
 def check_provider_refusal():
     airplane(True)
@@ -412,7 +404,7 @@ def check_provider_refusal():
         open_music(js)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Refusal trial started too early')
         record = dict(ref='fixture:provider-refused', title='Synthetic refusal', artist='Test artist',
-                      album='Test album', seconds=172)
+                      album='', seconds=0)
         request = json.dumps(dict(tracks=[record], label=''))
         js(f"OfflineMusic.queue('enqueue',{json.dumps(request)})")
         row, = [t for t in entries(js) if t['ref'] == record['ref']]
@@ -530,23 +522,24 @@ def smoke(apk, root):
             raise RuntimeError('Search suggestions leaked into Downloads')
         print('::notice::PASS v90 artist/album/instant search, direct single-song queue, genre batch, both album paths and grouped selection/pause')
     force_stop()
-    stage(pending[0], tones[KWAKU][:32*1024])
+    # A complete-looking file in staging is not a completed helper run in this attempt.
+    stage(pending[0], tones[KWAKU])
+    kwaku_route = f'/{TRACKS[KWAKU][0]}.m4a'
+    short = {kwaku_route}
     routes = {f'/{video}.m4a': tones[title] for title, (video, _) in TRACKS.items()}
-    with recording_server(routes) as received, page() as js:
+    with recording_server(routes, short_body=short) as received, page() as js:
         open_music(js)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Android reconnected before queue recovery')
         if [t['state'] for t in entries(js)] != ['offline', 'offline']:
             raise RuntimeError('Queue did not survive force-stop')
         airplane(False)
-        wait(js, "JSON.parse(OfflineMusic.library()).tracks.map(t=>t.state).join(',')==='failed,saved'", 'Incomplete first file did not let the next recording finish', 115)
+        wait(js, "JSON.parse(OfflineMusic.library()).tracks.map(t=>t.state).join(',')==='failed,saved'",
+             'A failed transfer was published or stopped the independent job', 115)
         failed, complete = entries(js)
-        if failed['reason'] != 'incomplete':
-            raise RuntimeError('First exact file failed for a different reason: ' + failed['reason'])
+        if not failed['retryable'] or received != set(routes):
+            raise RuntimeError('Stale staging bypassed the intended interrupted transfer')
+        p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', f'files/offline-music/saved/{failed["key"]}.m4a')
         verify_bytes(complete, tones[ESPRESSO])
-        kwaku_route = f'/{TRACKS[KWAKU][0]}.m4a'
-        if (received != {f'/{TRACKS[ESPRESSO][0]}.m4a'}
-                or 'pin verified' not in p11.adb('logcat', '-d', '-s', 'BlackBoxMusic')):
-            raise RuntimeError('Invalid staged file was not rejected independently of the real second transfer')
         airplane(True)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Android did not drop its active network before retry')
         click(js, '#om-tab-downloads')
@@ -554,8 +547,10 @@ def smoke(apk, root):
         wait(js, f'!!document.querySelector({json.dumps(retry)})', 'The exact failed recording did not appear in Needs attention')
         click(js, retry)
         wait(js, "JSON.parse(OfflineMusic.library()).tracks[0].state==='offline'", 'Retry did not respect offline mode')
+        short.clear()
+        received.clear()
         airplane(False)
-        wait(js, "JSON.parse(OfflineMusic.library()).tracks.every(t=>t.state==='saved')", 'Retry did not save the verified file', 65)
+        wait(js, "JSON.parse(OfflineMusic.library()).tracks.every(t=>t.state==='saved')", 'Retry did not save the completed file', 65)
         if kwaku_route not in received:
             raise RuntimeError('Retry did not request the full recording')
         verify_bytes(failed, tones[KWAKU])
@@ -565,7 +560,7 @@ def smoke(apk, root):
         click(js, '#om-playlist-save')
         if js("document.querySelector('#om-playlist-dialog').open") or not js("JSON.parse(OfflineMusic.library()).playlists.some(l=>l.name==='Offline fixture' && l.keys.length===2)"):
             raise RuntimeError('The playlist did not commit both exact saved songs')
-        print('::notice::PASS durable queue, bad-file rejection, helper transfer of the independent second file, retry and byte-identical saves')
+        print('::notice::PASS durable queue, stale staging discarded, interrupted helper transfer not published, verified retry bytes')
     force_stop()
     airplane(True)
     p11.adb('logcat', '-c')
@@ -599,9 +594,9 @@ def smoke(apk, root):
         open_music(js)
         check_parallel(js, tones[ESPRESSO])
     album_tone = root / 'album-control.m4a'
-    p11.run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=960:duration=201',
+    p11.run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=960:duration=213',
             '-c:a', 'aac', '-movflags', '+faststart', album_tone, timeout=30)
-    check_unpinned_album(album_tone.read_bytes(), tones[ESPRESSO])
+    check_unpinned_album(album_tone.read_bytes(), 213)
     check_provider_refusal()
 
 

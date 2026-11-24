@@ -4,8 +4,8 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.4 (ARM64)** is the full Android test build with **v90 PC source
-selection** for ordinary Music downloads. Its package (`com.blackboxstream.mobile.offline.desktop`)
+**BlackBox Stream v90 Offline 1.5.5 (ARM64)** is the full Android test build with **v90 PC source
+selection** for ordinary Music downloads. Its package (`com.blackboxstream.mobile.offline.transfer`)
 installs alongside previous previews, the pilot, and Music Save Check. It starts with a separate, empty
 Collection; it does not import, overwrite, or delete existing downloads. Keep the older app to
 access its own saved files. Use Android 7.0 or later with an up-to-date System WebView. The
@@ -22,14 +22,13 @@ original v90 expiry still applies (end of 31 March 2027 UTC).
   Known source IDs can transfer without a lookup. Pause lets active jobs finish but does not start
   another; a provider rate limit pauses new jobs briefly. Progress rings show actual received bytes
   against a known transfer size, or spin during lookup and unknown-length transfers.
-  On a cold lookup, the helper searches **artist + song** and ranks title, artist/channel, duration
-  and official-audio signals like the shipped v90 PC code. Absence of an album tag does not block
-  an otherwise eligible result. Obvious alternate versions are filtered by the desktop rules,
-  with Android checking again that the chosen ID describes a complete recording. Android uses the
-  selected source's reported duration to verify the finished file, not the PC's wider matching
-  tolerance. It remembers the ID only after a successful save. The previous exact resolver is kept
-  for titles the PC's word tokenizer cannot represent. Provider refusals still stop the attempt;
-  there is no account fallback. PC matching does not certify an exact album edition.
+  On a cold lookup, the helper searches **artist + song** and ranks results like v90 PC. A missing
+  album or catalogue duration does not block a request. Titles the PC tokenizer cannot represent
+  use Unicode words with the same ranking rules. The app passes the chosen ID straight to yt-dlp;
+  there is no separate watch-page verification, provider-duration check, or post-download media probe.
+  A successful helper run can publish its nonempty, bounded output by an atomic move. Unfinished
+  staging files are never reused, and refusals are still reported without a substitute. IDs are
+  remembered only after publication. This is PC-style selection, not exact edition certification.
 - **Collection** plays its saved, app-private files without the helper or a connection. To check it on
   a phone, save one song, force-stop the app, turn on airplane mode with Wi‑Fi off, reopen, and play
   and seek from Collection. The source must still allow a fresh download before this test.
@@ -41,10 +40,11 @@ Build the offline package with `cd android && gradle :app:assembleRelease -PbbxO
 The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) signs the ARM64 test APK,
 checks the bundled v90 assets and pinned Android helper, and tests an x86 sibling with synthetic
 media. The suite checks lookup limits, five overlapping transfers, pause/retry, and refusal handling.
-An unpinned album test uses the PC resolver with synthetic metadata (no album field and a runtime
-that differs from the catalogue), rejects a file that is the wrong length for that source, then
-checks the selected source's byte-verified save and a cold offline seek. These checks do not
-establish live-provider availability.
+An unpinned test supplies search results only, downloads the selected non-remix source, and
+plays and seeks after an offline restart, even though the tone's duration differs from both
+recorded runtimes. A separate interrupted transfer leaves an otherwise complete-looking stale
+staging file unsaved; a successful retry publishes only fresh bytes. These are controlled checks,
+not live-provider availability.
 Dispatch the workflow
 with `verify_live_catalogue=true` to compare a fresh **Espresso** save from the original Find
 with a fresh save in the archived-helper pilot. Both select `51zjlMhdSTE` and run on the same x86
@@ -73,8 +73,9 @@ fixture gate is not a live provider test.
 - `node --test android/tests/test_pc_offline_selection.cjs` runs the shipped PC selector and the
   Android mirror on the same listings and compares their selected IDs. This tests the ranking,
   not whether a provider returns the same listing on each platform.
-- `python3 -B android/tests/test_catalogue_music.py` covers selection and refusal handling with
-  controlled metadata, and checks the existing exact resolver used in the streaming preview.
+- `python3 -B android/tests/test_catalogue_music.py` checks that PC selection uses only one download
+  URL without a second metadata inspection, never substitutes after a refusal, and leaves the
+  separate streaming preview's exact resolver intact.
 
 ### Confirmed phone save: Espresso
 
@@ -119,7 +120,7 @@ As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 ## Streaming preview Music engine and offline listening
 
 The **Fast Start preview** uses the full v90 catalogue (**2,620 albums and 35,995 track rows**).
-Its exact resolver is distinct from PC selection in Offline 1.5.4. It checks an exact
+Its exact resolver is distinct from PC selection in Offline 1.5.5. It checks an exact
 recording's title, credited artists, release, full duration and publisher metadata. A few confirmed
 source IDs skip the lookup. For other cards, the resolver searches with the release first (a
 broader query is optional), with at most two searches and four source inspections. If only the

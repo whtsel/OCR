@@ -119,15 +119,16 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             return new PreparedMusic.Result(audio, "");
         }
         if (!directId.isEmpty()) {
-            int min = Math.max(1, track.seconds - 6);
-            int max = track.seconds == 0 ? PreparedMusic.MAX_SECONDS : track.seconds + 6;
-            options.addAll(Arrays.asList("--match-filters", "id = " + directId + " & !is_live & !was_live & duration >= " + min + " & duration <= " + max,
-                    "https://www.youtube.com/watch?v=" + directId));
+            if (!offline) {
+                int min = Math.max(1, track.seconds - 6);
+                int max = track.seconds == 0 ? PreparedMusic.MAX_SECONDS : track.seconds + 6;
+                options.addAll(Arrays.asList("--match-filters", "id = " + directId + " & !is_live & !was_live & duration >= " + min + " & duration <= " + max));
+            }
+            options.add("https://www.youtube.com/watch?v=" + directId);
             execute(control, scratch, false, progress, options.toArray(new String[0]));
             return new PreparedMusic.Result(audio, directId);
         }
         new File(scratch, "source-id").delete();
-        new File(scratch, "source-seconds").delete();
         String artist = offline ? WholeFileMusicRuntime.lookupArtist(track) : track.artist;
         String policy = pcFixture ? "pc-fixture" : offline ? "pc" : "exact";
         options.addAll(0, Arrays.asList(track.title, artist, track.album, Integer.toString(track.seconds),
@@ -138,17 +139,6 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
     }
 
     static boolean hasPcFixture(File scratch) { return new File(scratch, "pc-fixture.json").isFile(); }
-
-    static int sourceSeconds(File scratch) throws IOException {
-        try (FileInputStream in = new FileInputStream(new File(scratch, "source-seconds"))) {
-            String length = new String(TorrentMeta.slurp(in, 4), StandardCharsets.US_ASCII);
-            if (length.matches("[1-9][0-9]{0,3}") && PreparedMusic.videoId(sourceId(scratch))) {
-                int seconds = Integer.parseInt(length);
-                if (seconds <= PreparedMusic.MAX_SECONDS) return seconds;
-            }
-        } catch (IOException missing) { /* No independent duration means no safe publication. */ }
-        throw new OfflineMusicLibrary.Refusal("incomplete");
-    }
 
     static String sourceId(File scratch) throws IOException {
         try (FileInputStream in = new FileInputStream(new File(scratch, "source-id"))) {
@@ -208,8 +198,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         if (progress == null) return;
         if ("BBX_CATALOGUE_QUERY".equals(line) || "BBX_CATALOGUE_ALTERNATE".equals(line)) {
             progress.report("searching", 0, 0);
-        } else if ("BBX_CATALOGUE_VERIFY".equals(line)) {
-            progress.report("matching", 0, 0);
+        } else if ("BBX_PC_OPEN".equals(line)) {
+            progress.report("opening", 0, 0);
         } else if (line.startsWith("BBX_DOWNLOAD_START ")) {
             progress.report("downloading", 0, 0);
         } else if (line.startsWith("BBX_BYTES:") && line.length() <= 80) {
@@ -279,6 +269,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                     else if (phase == MusicPreparationBudget.Phase.FINALIZE) control.stage("downloaded, finalize audio");
                     else if ("BBX_CATALOGUE_QUERY".equals(line)) control.stage("search catalogue");
                     else if ("BBX_CATALOGUE_ALTERNATE".equals(line)) control.stage("search alternate wording");
+                    else if ("BBX_PC_OPEN".equals(line)) control.stage("open selected source");
                     else if ("BBX_CATALOGUE_VERIFY".equals(line)) control.stage("verify source metadata");
                     if (line.startsWith("BBX_PUBLIC_PROBE:")) {
                         if (probe && line.length() <= 1000) Log.i("BlackBoxMusic", line);
@@ -328,7 +319,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         StringBuilder problems = new StringBuilder();
         for (String line : output.split("\n")) {
             if (line.startsWith("ERROR:") || line.startsWith("BBX_PROVIDER_") || line.equals("BBX_NO_EXACT_RECORDING")
-                    || line.equals("BBX_NO_PC_MATCH") || line.equals("BBX_PC_INCOMPLETE_SOURCE"))
+                    || line.equals("BBX_NO_PC_MATCH"))
                 problems.append(line).append('\n');
         }
         String message = problems.toString().toLowerCase(Locale.ROOT);
@@ -346,8 +337,6 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             return new OfflineMusicLibrary.Refusal("refused", "The provider did not allow this recording.");
         if (message.contains("bbx_no_pc_match"))
             return new OfflineMusicLibrary.Refusal("no-source", "No matching source was returned by the provider.");
-        if (message.contains("bbx_pc_incomplete_source"))
-            return new OfflineMusicLibrary.Refusal("incomplete-source", "The selected source did not describe complete audio.");
         if (message.contains("bbx_no_exact_recording"))
             return new OfflineMusicLibrary.Refusal("exact", "No exact full recording could be verified. Nothing else was played.");
         if (message.contains("no space left"))
@@ -355,7 +344,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         if (phase == MusicPreparationBudget.Phase.FINALIZE)
             return new OfflineMusicLibrary.Refusal("finalize", "The helper could not finish the audio file.");
         if (message.contains("timed out") || message.contains("failed to resolve") || message.contains("no address")
-                || message.contains("connection reset") || message.contains("remote end closed") || message.contains("incomplete read")) {
+                || message.contains("connection reset") || message.contains("remote end closed") || message.contains("incomplete read")
+                || message.contains("content too short")) {
             if (phase == MusicPreparationBudget.Phase.TRANSFER)
                 return new OfflineMusicLibrary.Refusal("transfer-io", "The audio transfer was interrupted. Nothing played.");
             return new OfflineMusicLibrary.Refusal("lookup-io", "The provider lookup was interrupted. Nothing played.");

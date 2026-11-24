@@ -370,9 +370,11 @@ def pc_length(actual, expected):
     return not actual or not expected or abs(actual - expected) <= max(45, expected * .38)
 
 
-def pc_pick(entries, title, artist, seconds):
-    """Mirror bestFullTrackResult in the untouched desktop app.js (tested against it)."""
-    wanted, words, credits = pc_text(title), pc_words(title), pc_words(artist)
+def pc_pick(entries, title, artist, seconds, unicode_words=False):
+    """Mirror the desktop selector. Use Unicode words only when its tokenizer is empty."""
+    normalize = norm if unicode_words else pc_text
+    words_for = (lambda text: norm(text).split()) if unicode_words else pc_words
+    wanted, words, credits = normalize(title), words_for(title), words_for(artist)
     best, high = '', -999
     for item in itertools.islice(entries or (), PC_SEARCH_COUNT):
         if not isinstance(item, dict):
@@ -380,16 +382,17 @@ def pc_pick(entries, title, artist, seconds):
         video = item.get('ytId') or item.get('id')
         if not isinstance(video, str) or not VIDEO_ID.fullmatch(video):
             continue
-        label = pc_text(item.get('title'))
+        label = normalize(item.get('title'))
         visible = f"{item.get('title') or ''} {item.get('channel') or ''}".lower()
+        searchable = norm(visible) if unicode_words else visible
         if any(version in label and version not in wanted for version in PC_VARIANTS):
             continue
-        titles = sum(word in visible for word in words)
-        artists = sum(word in visible for word in credits)
+        titles = sum(word in searchable for word in words)
+        artists = sum(word in searchable for word in credits)
         if (titles < max(1, math.ceil(len(words) * .72)) or credits and not artists
                 or not pc_length(pc_number(item.get('duration')), seconds)):
             continue
-        score = titles * 5 + artists * 3 - max(0, len(pc_words(item.get('title'))) - len(words)) * .15
+        score = titles * 5 + artists * 3 - max(0, len(words_for(item.get('title'))) - len(words)) * .15
         score += 5 if re.search(r'official (?:audio|video)|topic\b|provided to', visible, re.ASCII) else 0
         score += 8 if label == wanted else 0
         if score > high:
@@ -398,36 +401,25 @@ def pc_pick(entries, title, artist, seconds):
 
 
 def prepare_pc(engine, title, artist, seconds, mark, remembered='', stage=lambda _: None, download=True):
-    """Select once like desktop, then resolve and transfer only that ID."""
+    """Pick an ID from the listing, then give that URL directly to the downloader."""
     video = remembered if VIDEO_ID.fullmatch(remembered) else ''
     if not video:
         stage('BBX_CATALOGUE_QUERY')
         response = engine.extract_info(f'ytsearch{PC_SEARCH_COUNT}:{artist} {title}', download=False, process=False)
-        video = pc_pick((response or {}).get('entries'), title, artist, seconds)
+        video = pc_pick((response or {}).get('entries'), title, artist, seconds, unicode_words=not pc_words(title))
     if not video:
         return 'BBX_NO_PC_MATCH'
-    stage('BBX_CATALOGUE_VERIFY')
-    info = engine.extract_info(f'https://www.youtube.com/watch?v={video}', download=False, process=False)
-    if not isinstance(info, dict) or info.get('id') != video or info.get('_type', 'video') != 'video':
-        return 'BBX_PC_INCOMPLETE_SOURCE'
-    if info.get('availability') not in (None, 'public', 'unlisted'):
-        return 'BBX_PROVIDER_SIGNIN' if info['availability'] == 'needs_auth' else 'BBX_PROVIDER_REFUSED'
-    duration = pc_number(info.get('duration'))
-    label, wanted = pc_text(info.get('title')), pc_text(title)
-    if (any(version in label and version not in wanted for version in PC_VARIANTS)
-            or not prerecorded(info, bool(LIVE.search(song_title(title)[0])))
-            or not 1 <= duration <= 1800 or not pc_length(duration, seconds)):
-        return 'BBX_PC_INCOMPLETE_SOURCE'
-    mark(video, math.floor(duration + .5))
-    if download:
-        engine.process_ie_result(info, download=True)
+    stage('BBX_PC_OPEN')
+    if download and engine.download([f'https://www.youtube.com/watch?v={video}']):
+        return 'BBX_PC_DOWNLOAD_FAILED'
+    mark(video)
     return ''
 
 
 class PcFixture:
-    """Debug emulator metadata only; the actual audio transfer goes through the pinned helper."""
-    def __init__(self, engine, download_error):
-        self.engine, self.download_error = engine, download_error
+    """Debug emulator listings only; the actual transfer goes through the pinned helper."""
+    def __init__(self, engine):
+        self.engine = engine
         with open('pc-fixture.json', 'rb') as source:
             data = source.read(8193)
         if len(data) > 8192:
@@ -435,12 +427,13 @@ class PcFixture:
         self.data = json.loads(data)
 
     def extract_info(self, url, **_):
-        return {'entries': self.data['entries']} if url.startswith('ytsearch') else self.data['watch'].get(url.rsplit('=', 1)[1])
+        if not url.startswith('ytsearch'):
+            raise ValueError('PC resolution must not make a separate metadata inspection')
+        return {'entries': self.data['entries']}
 
-    def process_ie_result(self, info, *, download):
-        video = info['id']  # Already validated by prepare_pc.
-        if self.engine.download([f'http://127.0.0.1:19090/{video}.m4a']):
-            raise self.download_error('Resolver fixture did not transfer')
+    def download(self, urls):
+        video = urls[0].rsplit('=', 1)[1]  # Selected from the test listing by prepare_pc.
+        return self.engine.download([f'http://127.0.0.1:19090/{video}.m4a'])
 
 
 def main():
@@ -455,24 +448,20 @@ def main():
     def stage(marker):
         print(marker, flush=True)
 
-    def mark(video, duration=None):
-        if duration is not None:
-            Path('source-seconds').write_text(str(duration), encoding='ascii')
+    def mark(video):
         Path('source-id').write_text(video, encoding='ascii')
 
     try:
         with YoutubeDL(params) as engine:
             download = not params.get('simulate')
             if policy == 'pc-fixture':
-                engine = PcFixture(engine, DownloadError)
-            if policy in ('pc', 'pc-fixture') and pc_words(title):
+                engine = PcFixture(engine)
+            if policy in ('pc', 'pc-fixture'):
                 problem = prepare_pc(engine, title, artist, seconds, mark, remembered, stage, download)
                 if problem:
                     print(problem, file=sys.stderr)
                 return 3 if problem else 0
-            # Preserve the exact resolver when the PC's ASCII tokens cannot represent the title.
-            found = prepare(engine, title, artist, album, seconds,
-                            lambda video: mark(video, seconds if policy != 'exact' else None),
+            found = prepare(engine, title, artist, album, seconds, mark,
                             (DownloadError, ExtractorError), remembered, stage, download)
     except (DownloadError, ExtractorError) as problem:
         # Give Android a fixed status for a refusal; never use it to try another source.

@@ -73,7 +73,7 @@ jobs:
           phase=alignment
           trap 'code=$?; echo "::error::ARM64 verification failed during $phase (exit $code)"; exit "$code"' ERR
           tools="$ANDROID_HOME/build-tools/35.0.0"
-          apk="$RUNNER_TEMP/BlackBox-Stream-v90-Offline-1.5.4-ARM64.apk"
+          apk="$RUNNER_TEMP/BlackBox-Stream-v90-Offline-1.5.5-ARM64.apk"
           "$tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/v90-unsigned.apk" "$RUNNER_TEMP/aligned.apk"
           phase=key-generation
           keytool -genkeypair -keystore "$RUNNER_TEMP/offline-preview.p12" -storepass test-only -keypass test-only \
@@ -87,8 +87,8 @@ jobs:
           "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
           metadata=$(grep -E '^(package:|application-label:|launchable-activity:|native-code:|application-debuggable)' "$RUNNER_TEMP/badging.txt")
           echo "::notice::${metadata//$'\n'/' / '}"
-          grep -q "^package: name='com.blackboxstream.mobile.offline.desktop' versionCode='18' versionName='1.5.4-offline'" "$RUNNER_TEMP/badging.txt"
-          grep -q "^application-label:'BlackBox Stream v90 Offline 1.5.4'$" "$RUNNER_TEMP/badging.txt"
+          grep -q "^package: name='com.blackboxstream.mobile.offline.transfer' versionCode='19' versionName='1.5.5-offline'" "$RUNNER_TEMP/badging.txt"
+          grep -q "^application-label:'BlackBox Stream v90 Offline 1.5.5'$" "$RUNNER_TEMP/badging.txt"
           grep -q "^launchable-activity: name='com.blackboxstream.mobile.V90Activity'" "$RUNNER_TEMP/badging.txt"
           grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
           if grep -q '^application-debuggable' "$RUNNER_TEMP/badging.txt"; then echo '::error::Debuggable phone package'; exit 1; fi
@@ -139,8 +139,8 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ !inputs.verify_live_catalogue }}
         with:
-          name: BlackBox-Stream-v90-Offline-1.5.4-ARM64
-          path: ${{ runner.temp }}/BlackBox-Stream-v90-Offline-1.5.4-ARM64.apk
+          name: BlackBox-Stream-v90-Offline-1.5.5-ARM64
+          path: ${{ runner.temp }}/BlackBox-Stream-v90-Offline-1.5.5-ARM64.apk
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

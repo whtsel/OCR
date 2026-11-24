@@ -303,46 +303,65 @@ class TestSelection(unittest.TestCase):
         self.assertTrue(resolver.matches(info, info['id'], '夜に駆ける', 'YOASOBI', 'The Book', 261))
 
 
+class DesktopEngine(Engine):
+    def __init__(self, rows, outcome=0):
+        super().__init__(rows, {})
+        self.outcome = outcome
+
+    def extract_info(self, url, **options):
+        if not url.startswith('ytsearch'):
+            raise AssertionError('The desktop route must not inspect selected metadata separately')
+        return super().extract_info(url, **options)
+
+    def download(self, urls):
+        self.downloads.extend(urls)
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
 class TestDesktopSave(unittest.TestCase):
     wanted = ('Low Orbit', 'North Signal', 183)
-    source = dict(id='SOURCE00001', title='Low Orbit', channel='North Signal - Topic', duration=218)
-    alternative = dict(source, id='OTHER000001', title='Low Orbit (Official Audio)', duration=187)
+    source = dict(id='SOURCE00001', title='Low Orbit', channel='North Signal - Topic')
+    alternative = dict(source, id='OTHER000001', title='Low Orbit (Official Audio)')
+    url = 'https://www.youtube.com/watch?v=SOURCE00001'
 
-    def test_cold_desktop_selection_passes_selected_duration_to_verifier(self):
-        book = {item['id']: item for item in (self.source, self.alternative)}
-        engine = Engine({'North Signal Low Orbit': [self.alternative, self.source]}, book)
+    def test_cold_selection_downloads_the_id_without_a_second_check(self):
+        engine = DesktopEngine({'North Signal Low Orbit': [self.alternative, self.source]})
         chosen, stages = [], []
-        problem = resolver.prepare_pc(engine, *self.wanted, lambda *value: chosen.append(value), stage=stages.append)
-        self.assertEqual(problem, '')
+        self.assertFalse(resolver.prepare_pc(engine, *self.wanted, chosen.append, stage=stages.append))
         self.assertEqual(engine.queries, ['North Signal Low Orbit'])
-        self.assertEqual(engine.inspections, [self.source['id']])
-        self.assertEqual(engine.downloads, [self.source['id']])
-        self.assertEqual(chosen, [(self.source['id'], self.source['duration'])])
-        self.assertEqual(stages, ['BBX_CATALOGUE_QUERY', 'BBX_CATALOGUE_VERIFY'])
+        self.assertEqual(engine.inspections, [])
+        self.assertEqual(engine.downloads, [self.url])
+        self.assertEqual(chosen, [self.source['id']])
+        self.assertEqual(stages, ['BBX_CATALOGUE_QUERY', 'BBX_PC_OPEN'])
 
-        cached = Engine([], book)
-        problem = resolver.prepare_pc(cached, *self.wanted, lambda *value: None, remembered=self.source['id'])
-        self.assertFalse(problem)
-        self.assertEqual(cached.queries, [], 'Reuse the already-saved row ID like desktop')
-        self.assertEqual(cached.downloads, [self.source['id']])
+        cached = DesktopEngine([])
+        self.assertFalse(resolver.prepare_pc(cached, *self.wanted, chosen.append, remembered=self.source['id']))
+        self.assertEqual(cached.queries, [])
+        self.assertEqual(cached.downloads, [self.url])
 
-    def test_no_substitution_when_primary_video_has_no_usable_audio_or_is_refused(self):
-        for bad, code in ((dict(self.source, availability='premium_only'), 'BBX_PROVIDER_REFUSED'),
-                          (dict(self.source, availability='needs_auth'), 'BBX_PROVIDER_SIGNIN'),
-                          (dict(self.source, _type='playlist'), 'BBX_PC_INCOMPLETE_SOURCE'),
-                          (dict(self.source, is_live=True), 'BBX_PC_INCOMPLETE_SOURCE'),
-                          (dict(self.source, title='Low Orbit (Radio Edit)'), 'BBX_PC_INCOMPLETE_SOURCE'),
-                          (dict(self.source, duration=None), 'BBX_PC_INCOMPLETE_SOURCE'),
-                          (dict(self.source, duration=30), 'BBX_PC_INCOMPLETE_SOURCE'),
-                          (dict(self.source, id='SOMETHING12'), 'BBX_PC_INCOMPLETE_SOURCE')):
-            with self.subTest(bad=bad):
-                engine = Engine([self.source, self.alternative], {self.source['id']: bad, self.alternative['id']: self.alternative})
-                self.assertEqual(resolver.prepare_pc(engine, *self.wanted, lambda *_: self.fail('invalid source selected')), code)
-                self.assertEqual(engine.inspections, [self.source['id']])
-                self.assertEqual(engine.downloads, [])
-        engine = Engine([dict(self.source, title='Low Orbit (Cover)')], {})
-        self.assertEqual(resolver.prepare_pc(engine, *self.wanted, lambda *_: self.fail('cover selected')), 'BBX_NO_PC_MATCH')
-        self.assertFalse(engine.inspections)
+    def test_desktop_download_does_not_substitute_after_a_refusal_or_failed_transfer(self):
+        for message in ('HTTP Error 403', 'Sign in to confirm you are not a bot', 'HTTP Error 429'):
+            with self.subTest(message=message):
+                engine = DesktopEngine([self.source, self.alternative], outcome=LookupError(message))
+                with self.assertRaises(LookupError):
+                    resolver.prepare_pc(engine, *self.wanted, lambda _: self.fail('failed source was marked saved'))
+                self.assertEqual(engine.downloads, [self.url])
+        engine = DesktopEngine([self.source, self.alternative], outcome=1)
+        self.assertEqual(resolver.prepare_pc(engine, *self.wanted, lambda _: self.fail('failed source was marked saved')),
+                         'BBX_PC_DOWNLOAD_FAILED')
+        self.assertEqual(engine.downloads, [self.url])
+        engine = DesktopEngine([dict(self.source, title='Low Orbit (Cover)')])
+        self.assertEqual(resolver.prepare_pc(engine, *self.wanted, lambda _: self.fail('cover selected')), 'BBX_NO_PC_MATCH')
+        self.assertEqual(engine.downloads, [])
+
+    def test_non_latin_titles_do_not_need_exact_edition_verification(self):
+        entries = [dict(self.source, title='夜の便り', channel='ミナ')]
+        engine = DesktopEngine(entries)
+        self.assertFalse(resolver.prepare_pc(engine, '夜の便り', 'ミナ', 0, lambda _: None))
+        self.assertEqual(engine.queries, ['ミナ 夜の便り'])
+        self.assertEqual(engine.downloads, [self.url])
 
 
 if __name__ == '__main__':

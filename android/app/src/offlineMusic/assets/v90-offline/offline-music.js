@@ -354,20 +354,20 @@
   const jobStatus = {working:'Preparing recording…', offline:'Waiting for internet',
     paused:'Paused', queued:'Queued', cooldown:'Waiting for the provider cooldown'};
   const failures = { metadata:'Recording details missing in the catalogue', exact:'Exact recording not verified',
-    'no-source':'No matching source found', 'incomplete-source':'Selected source did not report complete audio',
+    'no-source':'No matching source found',
     signin:'Provider requires sign-in', refused:'Provider refused this recording',
     'lookup-timeout':'Recording lookup timed out', 'lookup-io':'Provider lookup interrupted',
     'transfer-timeout':'Audio transfer timed out', 'transfer-idle':'Audio transfer stopped receiving data', 'transfer-io':'Audio transfer interrupted',
     'finalize-timeout':'Finishing audio timed out', finalize:'Could not finish the audio file',
     'setup-timeout':'Audio helper took too long to start', setup:'Could not start the audio helper', size:'Recording is above the download size limit',
     network:'Request interrupted', limited:'Provider rate limited this request', storage:'Could not save · check storage',
-    incomplete:'A complete, playable file was not verified', missing:'Saved file missing', helper:'Download didn’t finish' };
+    incomplete:'Download did not produce an audio file', missing:'Saved file missing', helper:'Download didn’t finish' };
   const progressRows = new Map();
   let lastProgress = '';
   const size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB`
     : bytes >= 1024 ? `${Math.floor(bytes / 1024)} KB` : `${bytes} B`;
-  const phaseLabel = {preparing:'Preparing recording…', searching:'Finding recording…', matching:'Checking recording…',
-    downloading:'Downloading', finishing:'Finishing audio…', verifying:'Checking audio…'};
+  const phaseLabel = {preparing:'Preparing recording…', searching:'Finding recording…', opening:'Opening source…',
+    downloading:'Downloading', finishing:'Finishing audio…'};
   function progressRing(track, row) {
     const wrap = node('div', 'om-progress is-indeterminate');
     wrap.setAttribute('role', 'progressbar');
@@ -444,7 +444,7 @@
     ])));
     const songs = saved();
     id('om-finished').replaceChildren(...(songs.length ? songs.slice(0, visibleLimit).map(track => card(track, 'Saved on this device', [node('span', 'om-round', '✓')]))
-      : [empty('No finished downloads', 'Verified files appear here and in Collection.')]));
+      : [empty('No finished downloads', 'Finished downloads appear here and in Collection.')]));
     if (songs.length > visibleLimit) id('om-finished').append(button('Show more', () => { visibleLimit += libraryPageSize; renderDownloads(); }, 'om-link om-more'));
   }
 
