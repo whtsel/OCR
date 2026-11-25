@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import threading
@@ -21,15 +22,16 @@ from websocket import create_connection
 import check_blackbox_p11 as p11
 
 PKG = 'com.blackboxstream.mobile.offline.desktop'
+SIDE_PKG = 'com.blackboxstream.mobile.offline.background'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
 
 
 @contextmanager
-def page():
-    p11.adb('shell', 'am', 'start', '-W', '-n', ACTIVITY, timeout=35)
-    pid = p11.adb('shell', 'pidof', '-s', PKG)
+def page(package=PKG):
+    p11.adb('shell', 'am', 'start', '-W', '-n', package + '/com.blackboxstream.mobile.V90Activity', timeout=35)
+    pid = p11.adb('shell', 'pidof', '-s', package)
     port = int(p11.adb('forward', 'tcp:0', f'localabstract:webview_devtools_remote_{pid}'))
     try:
         until = time.monotonic() + 30
@@ -354,6 +356,73 @@ def check_cold_seek(js, track, seconds):
     print(f'::notice::PASS {title} synthetic fixture played and sought after a force-stop in airplane mode ({duration} ms, seek {jump} ms)')
 
 
+def wait_android(probe, accept, failure, seconds=20):
+    deadline = time.monotonic() + seconds
+    last = ''
+    while time.monotonic() < deadline:
+        last = probe()
+        if accept(last):
+            return last
+        time.sleep(.3)
+    raise RuntimeError(f'{failure}: {last[-650:]}')
+
+
+def music_session():
+    dump = p11.adb('shell', 'dumpsys', 'media_session')
+    for match in re.finditer(r'^( *)BlackBoxOfflineMusic ' + re.escape(PKG) + r'/[^\n]*\n', dump, re.M):
+        details = re.match(r'(?:' + match[1] + r'  [^\n]*(?:\n|$))+', dump[match.end():])
+        if details:
+            return details[0]
+    return ''
+
+
+def check_background():
+    with page() as js:
+        open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Background playback check requires an offline device')
+        data = json.loads(js('OfflineMusic.library()'))
+        keys, = [p['keys'] for p in data['playlists'] if p['name'] == 'Offline fixture']
+        by_key = {t['key']: t for t in data['tracks']}
+        first, second = (by_key[key] for key in keys)
+        click(js, '[aria-label="Play Offline fixture"]')
+        duration = wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.player());return p.key==='{first['key']}'&&p.playing&&p.duration}})()",
+                        'Saved playlist did not start')
+        tail = duration - 9000
+        js(f"OfflineMusic.playback('seek','{tail}')")
+        wait(js, f"JSON.parse(OfflineMusic.player()).position>={tail - 300}", 'Background playlist seek did not land')
+
+    # Leave BlackBox for a different app. From here, use system media state rather than
+    # WebView timers, which intentionally stop while the activity is hidden.
+    p11.adb('shell', 'am', 'start', '-W', '-a', 'android.settings.SETTINGS', timeout=35)
+    settings_on_top = lambda dump: bool(re.search(r'(?:topResumedActivity|mResumedActivity).*com.android.settings/', dump))
+    activity_dump = lambda: p11.adb('shell', 'dumpsys', 'activity', 'activities')
+    wait_android(activity_dump, settings_on_top, 'Android Settings did not take the foreground')
+    service_dump = lambda: p11.adb('shell', 'dumpsys', 'activity', 'services', PKG)
+    wait_android(service_dump, lambda d: 'OfflineMusicService' in d and 'isForeground=true' in d,
+                 'Saved audio lost its media playback foreground service')
+
+    def in_state(state):
+        return lambda dump: ('active=true' in dump and f'PlaybackState {{state={state},' in dump
+                             and any(second['title'] in line for line in dump.splitlines() if line.strip().startswith('metadata:')))
+
+    wait_android(music_session, in_state(3), 'Saved playlist did not reach its next track behind Settings')
+    p11.adb('shell', 'cmd', 'media_session', 'dispatch', 'pause')
+    wait_android(music_session, in_state(2), 'Android media Pause did not pause the background track')
+    p11.adb('shell', 'cmd', 'media_session', 'dispatch', 'play')
+    wait_android(music_session, in_state(3), 'Android media Play did not resume behind Settings')
+    if not settings_on_top(activity_dump()):
+        raise RuntimeError('Background transport controls unexpectedly opened the app')
+    with page() as js:
+        open_music(js)
+        wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.player());return p.key==='{second['key']}' && p.playing && p.position>750}})()",
+             'Returning from Settings did not attach to the playing track')
+        click(js, '#om-now')
+        click(js, '#om-stop')
+        wait(js, '!JSON.parse(OfflineMusic.player()).key', 'In-app Stop did not clear background playback')
+    wait_android(service_dump, lambda d: 'OfflineMusicService' not in d, 'Stop did not release the media service')
+    print('::notice::PASS saved playlist advanced while Settings was open offline, media Pause/Play worked, and Stop released the service')
+
+
 def check_unpinned_album(tone, tone_seconds):
     title, ref, seconds = 'The Victory Song', 'album:d735721521:1:1', 175
     airplane(True)
@@ -490,7 +559,7 @@ def check_update(apk, tone, seconds):
     print('::notice::PASS same-signer 1.5.4 update kept saved bytes, playlist and Retry; the same audio previously flagged now saved')
 
 
-def smoke(apk, root, upgrade_from=None):
+def smoke(apk, root, upgrade_from=None, side_by_side=None):
     tones = {}
     for i, (title, (video, seconds)) in enumerate(TRACKS.items()):
         target = root / f'{video}.m4a'
@@ -654,6 +723,7 @@ def smoke(apk, root, upgrade_from=None):
     if 'Initializing packaged v90 helper' in p11.adb('logcat', '-d', '-s', 'BlackBoxMusic'):
         raise RuntimeError('Cold offline listening unexpectedly started the downloader')
     print('::notice::PASS cold offline listening did not initialize the download helper')
+    check_background()
     with page() as js:
         open_music(js)
         check_parallel(js, tones[ESPRESSO])
@@ -662,6 +732,19 @@ def smoke(apk, root, upgrade_from=None):
             '-c:a', 'aac', '-movflags', '+faststart', album_tone, timeout=30)
     check_unpinned_album(album_tone.read_bytes(), 213)
     check_provider_refusal()
+    if side_by_side:
+        force_stop()
+        airplane(True)
+        p11.adb('install', side_by_side, timeout=100)
+        with page(SIDE_PKG) as js:
+            open_music(js)
+            if entries(js):
+                raise RuntimeError('A separate install shared existing private Collection data')
+        with page() as js:
+            open_music(js)
+            for track in pending:
+                verify_bytes(track, tones[track['title']])
+        print('::notice::PASS separate install opened the Offline app and left the original Collection intact')
 
 
 def live_trial(apk):
@@ -724,13 +807,14 @@ if __name__ == '__main__':
     mode = args.add_mutually_exclusive_group()
     mode.add_argument('--live', action='store_true')
     mode.add_argument('--upgrade-from', type=Path, help='1.5.4 debug APK signed with the same test key')
+    args.add_argument('--side-by-side', type=Path, help='x86 sibling of the separately installable release')
     request = args.parse_args()
     try:
         if request.live:
             live_trial(request.apk)
         else:
             with tempfile.TemporaryDirectory() as directory:
-                smoke(request.apk, Path(directory), request.upgrade_from)
+                smoke(request.apk, Path(directory), request.upgrade_from, request.side_by_side)
     except Exception as error:
         print('::error::' + p11.diagnostic(str(error)).replace('\n', ' / '))
         raise

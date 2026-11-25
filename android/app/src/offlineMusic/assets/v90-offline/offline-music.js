@@ -484,16 +484,19 @@
   function poll() {
     if (document.hidden) return;
     try {
+      // Playback can outlive the WebView; recover the existing session on any re-opened screen.
+      const next = bridge.player();
+      const refresh = next !== lastPlayer || seekUntil && Date.now() > seekUntil;
+      if (refresh) {
+        player = JSON.parse(next); lastPlayer = next;
+        if (Date.now() > seekUntil) seekUntil = 0;
+      }
       if (views.has(state.view) || player.key) {
         const snapshot = bridge.library();
         if (snapshot !== last) updateLibrary(snapshot);
         if (page === 'downloads' && !id('offline-downloads').hidden) syncProgress();
-        const next = bridge.player();
-        if (next !== lastPlayer || seekUntil && Date.now() > seekUntil) {
-          lastPlayer = next; if (Date.now() > seekUntil) seekUntil = 0;
-          player = JSON.parse(next); renderPlayer();
-        }
       }
+      if (refresh) renderPlayer();
     } catch { /* The shell may have been closed or expired. */ }
   }
 

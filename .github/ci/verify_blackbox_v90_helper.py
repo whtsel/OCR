@@ -47,7 +47,7 @@ with zipfile.ZipFile(Path(sys.argv[1])) as apk:
         assert 0 < len(companion) <= 24 * 1024, 'Resolver exceeds the Android loader bound'
         assert any(apk.read(member) == companion for member in apk.infolist()
                    if member.filename.startswith('res/') and member.file_size == len(companion)), 'Shipped resolver differs from the tested source'
-        for name in (b'OfflineMusicLibrary', b'OfflineMusicPlayer', b'WholeFileMusicRuntime'):
+        for name in (b'OfflineMusicLibrary', b'OfflineMusicPlayer', b'OfflineMusicService', b'WholeFileMusicRuntime'):
             assert any(b'Lcom/blackboxstream/mobile/' + name + b';' in dex for dex in dexes), name
         for name in ('offline-find.js', 'offline-music.js', 'offline-music.css', 'music-panels.html', 'icon.svg', 'mix.svg', 'kwaku.svg', 'espresso.svg'):
             assert 'assets/v90-offline/' + name in apk.namelist(), name

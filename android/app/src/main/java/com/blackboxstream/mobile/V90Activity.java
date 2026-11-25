@@ -60,13 +60,12 @@ public final class V90Activity extends Activity {
     private LinearLayout root;
     private boolean offlineMusic;
     private OfflineMusicLibrary musicLibrary;
-    private OfflineMusicPlayer musicPlayer;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         root = Ui.column(this); root.setBackgroundColor(0xff101017);
         Ui.fitWindow(this, root); setContentView(root);
-        offlineMusic = "com.blackboxstream.mobile.offline.desktop".equals(getPackageName());
+        offlineMusic = OfflineMusicService.isOfflineBuild(this);
         api = offlineMusic ? new V90Api(this, null) : new V90Api(this);
         try {
             if (offlineMusic && (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0)
@@ -85,7 +84,6 @@ public final class V90Activity extends Activity {
             view.addJavascriptInterface(new Bridge(), "BlackBoxAndroid");
             if (offlineMusic) {
                 musicLibrary = OfflineMusicLibrary.open(this);
-                musicPlayer = new OfflineMusicPlayer(this, musicLibrary);
                 view.addJavascriptInterface(new MusicBridge(), "OfflineMusic");
                 setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC);
             }
@@ -94,14 +92,6 @@ public final class V90Activity extends Activity {
         } catch (RuntimeException missing) { showWebViewError(); }
     }
 
-    @Override protected void onStart() {
-        super.onStart();
-        if (musicPlayer != null) musicPlayer.foreground(!V90Api.expired());
-    }
-    @Override protected void onStop() {
-        if (musicPlayer != null) musicPlayer.foreground(false);
-        super.onStop();
-    }
     @Override protected void onResume() {
         super.onResume(); resumed = true;
         if (view != null) { view.onResume(); view.evaluateJavascript("window.bbxAndroidResume?.()", null); }
@@ -118,7 +108,6 @@ public final class V90Activity extends Activity {
     @Override protected void onDestroy() {
         closed = true;
         if (api != null) api.close();
-        if (musicPlayer != null) musicPlayer.close();
         work.shutdownNow();
         musicControl.shutdownNow();
         musicWait.shutdownNow();
@@ -184,10 +173,13 @@ public final class V90Activity extends Activity {
             return closed || V90Api.expired() ? "{\"error\":\"Music is not available.\"}" : musicLibrary.command(action, body);
         }
         @JavascriptInterface public String progress() { return closed || V90Api.expired() ? "{}" : musicLibrary.progress(); }
-        @JavascriptInterface public String player() { return closed || V90Api.expired() ? "{}" : musicPlayer.snapshot(); }
+        @JavascriptInterface public String player() { return closed || V90Api.expired() ? "{}" : OfflineMusicService.snapshot(); }
         @JavascriptInterface public void playback(String action, String value) {
             if (action == null || action.length() > 12 || value == null || value.length() > 70000) return;
-            main.post(() -> { if (active()) musicPlayer.command(action, value); });
+            main.post(() -> {
+                if (active() && !OfflineMusicService.fromScreen(V90Activity.this, action, value))
+                    toast("Android couldn't start Music playback. Try Play again.");
+            });
         }
     }
 

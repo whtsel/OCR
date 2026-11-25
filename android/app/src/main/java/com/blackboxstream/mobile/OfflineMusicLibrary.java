@@ -173,6 +173,11 @@ final class OfflineMusicLibrary {
         return entry == null ? null : ready(entry);
     }
 
+    synchronized PreparedMusic.Track recording(String key) {
+        Entry entry = entries.get(key);
+        return entry == null ? null : entry.track;
+    }
+
     private int link() {
         Network current = network == null ? null : network.getActiveNetwork();
         NetworkCapabilities caps = current == null ? null : network.getNetworkCapabilities(current);

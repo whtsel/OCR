@@ -8,6 +8,7 @@ import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -19,10 +20,12 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-/** Main-thread player. Its only input is a descriptor for a file already in the collection. */
+/** Service-owned main-thread player. Its only input is a file already in the collection. */
 final class OfflineMusicPlayer {
+    private final Context app;
     private final OfflineMusicLibrary library;
     private final AudioManager audio;
+    private final Runnable stateChanged;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final AudioAttributes attributes = new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build();
@@ -30,27 +33,51 @@ final class OfflineMusicPlayer {
         if (change < 0) main.post(this::pause);
     };
     private final AudioFocusRequest focus;
-    private boolean hasFocus, ready, foreground, closed;
+    private boolean hasFocus, ready, closed, playWhenReady;
     private final List<String> playlist = new ArrayList<>();
     private int index;
     private MediaPlayer media;
     private String key = "", problem = "";
     private volatile String snapshot = "{}";
-    private final Runnable tick = this::publish;
+    private final Runnable tick = () -> {
+        if (V90Api.expired()) stop(); else updateSnapshot();
+    };
+    private final Runnable prepareDeadline = () -> {
+        if (media != null && !ready) error("This saved file took too long to open.");
+    };
 
-    OfflineMusicPlayer(Context context, OfflineMusicLibrary library) {
+    OfflineMusicPlayer(Context context, OfflineMusicLibrary library, Runnable stateChanged) {
+        app = context.getApplicationContext();
         this.library = library;
-        audio = context.getSystemService(AudioManager.class);
+        this.stateChanged = stateChanged;
+        audio = app.getSystemService(AudioManager.class);
         focus = Build.VERSION.SDK_INT >= 26 ? new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(attributes).setOnAudioFocusChangeListener(listener, main)
                 .setWillPauseWhenDucked(true).build() : null;
-        publish();
+        updateSnapshot();
     }
 
     String snapshot() { return snapshot; }
+    String key() { return key; }
+    boolean opening() { return media != null && !ready; }
+    boolean preparing() { return opening() && playWhenReady; }
+    boolean next() { return index + 1 < playlist.size(); }
+    boolean previous() { return index > 0; }
+    boolean playing() {
+        try { return ready && media.isPlaying(); }
+        catch (IllegalStateException interrupted) { return false; }
+    }
+    int position() {
+        try { return ready ? media.getCurrentPosition() : 0; }
+        catch (IllegalStateException interrupted) { return 0; }
+    }
+    int duration() {
+        try { return ready ? media.getDuration() : 0; }
+        catch (IllegalStateException interrupted) { return 0; }
+    }
 
     void command(String action, String value) {
-        if (closed || !foreground) return;
+        if (closed) return;
         switch (action) {
             case "play":
                 playlist.clear();
@@ -61,36 +88,35 @@ final class OfflineMusicPlayer {
                 try {
                     JSONArray keys = new JSONArray(value);
                     if (keys.length() < 1 || keys.length() > OfflineMusicLibrary.MAX_RECORDS) return;
-                    playlist.clear();
+                    List<String> selection = new ArrayList<>();
                     for (int i = 0; i < keys.length(); i++) {
                         String item = keys.getString(i);
-                        if (library.saved(item) != null && !playlist.contains(item)) playlist.add(item);
+                        if (library.saved(item) != null && !selection.contains(item)) selection.add(item);
                     }
-                    if (!playlist.isEmpty()) load(0);
-                } catch (JSONException ignored) {}
+                    if (!selection.isEmpty()) {
+                        playlist.clear(); playlist.addAll(selection); load(0);
+                    }
+                } catch (JSONException ignored) { }
                 break;
-            case "stop":
-                releaseMedia(); playlist.clear(); index = 0; key = ""; problem = ""; publish();
-                break;
-            case "toggle":
-                if (ready && media != null && media.isPlaying()) pause();
-                else if (ready) start();
-                else if (!key.isEmpty() && media == null) load(index);
-                break;
-            case "previous": if (index > 0) load(index - 1); break;
-            case "next": if (index + 1 < playlist.size()) load(index + 1); break;
+            case "stop": stop(); break;
+            case "pause": pause(); break;
+            case "resume": resume(); break;
+            case "toggle": if (playing() || preparing()) pause(); else resume(); break;
+            case "previous": if (previous()) load(index - 1); break;
+            case "next": if (next()) load(index + 1); break;
             case "seek":
                 if (!ready) return;
                 try {
-                    int where = Math.max(0, Math.min(Integer.parseInt(value), media.getDuration() - 1));
+                    int where = (int) Math.max(0, Math.min(Long.parseLong(value), duration() - 1));
                     if (Build.VERSION.SDK_INT >= 26) media.seekTo(where, MediaPlayer.SEEK_CLOSEST);
                     else media.seekTo(where);
-                } catch (NumberFormatException ignored) {}
+                } catch (IllegalArgumentException | IllegalStateException ignored) { }
                 break;
         }
     }
 
     private void load(int at) {
+        if (V90Api.expired()) { stop(); return; }
         releaseMedia();
         index = at;
         key = playlist.get(at);
@@ -99,47 +125,64 @@ final class OfflineMusicPlayer {
         if (file == null) { error("This file is no longer saved on this device."); return; }
         MediaPlayer next = new MediaPlayer();
         media = next;
+        playWhenReady = true;
         try (FileInputStream source = new FileInputStream(file)) {
             next.setAudioAttributes(attributes);
+            // Android holds this only while the decoder is active, not while paused or stopped.
+            next.setWakeMode(app, PowerManager.PARTIAL_WAKE_LOCK);
             next.setDataSource(source.getFD());
             next.setOnPreparedListener(prepared -> {
                 if (media != prepared) return;
+                main.removeCallbacks(prepareDeadline);
                 ready = true;
-                if (foreground) start(); else publish();
+                if (playWhenReady) start(); else publish();
             });
             next.setOnSeekCompleteListener(seeked -> { if (media == seeked) publish(); });
             next.setOnCompletionListener(finished -> {
                 if (media != finished) return;
-                if (foreground && index + 1 < playlist.size()) load(index + 1);
-                else { abandonFocus(); publish(); }
+                if (playWhenReady && next()) load(index + 1);
+                else { playWhenReady = false; abandonFocus(); publish(); }
             });
             next.setOnErrorListener((failed, what, extra) -> {
                 if (media == failed) error("This saved file could not be played.");
                 return true;
             });
             next.prepareAsync();
+            main.postDelayed(prepareDeadline, 20_000);
         } catch (IOException | RuntimeException unreadable) {
             error("This saved file could not be opened.");
         }
         publish();
     }
 
+    private void resume() {
+        if (playing()) return;
+        if (ready) start();
+        else if (opening()) { playWhenReady = true; publish(); }
+        else if (!key.isEmpty()) load(index);
+    }
+
     @SuppressWarnings("deprecation")
     private void start() {
-        if (!ready || !foreground) return;
+        if (!ready || closed) return;
+        if (V90Api.expired()) { stop(); return; }
         if (audio != null && !hasFocus) {
             hasFocus = (Build.VERSION.SDK_INT >= 26 ? audio.requestAudioFocus(focus)
                     : audio.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN))
                     == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
-            if (!hasFocus) { problem = "Audio is in use. Try Play again."; publish(); return; }
+            if (!hasFocus) { playWhenReady = false; problem = "Audio is in use. Try Play again."; publish(); return; }
         }
         problem = "";
+        playWhenReady = true;
         try { media.start(); publish(); }
         catch (IllegalStateException unavailable) { error("This saved file could not be played."); }
     }
 
     private void pause() {
-        if (ready && media.isPlaying()) media.pause();
+        if (closed) return;
+        playWhenReady = false;
+        try { if (playing()) media.pause(); }
+        catch (IllegalStateException interrupted) { }
         abandonFocus();
         publish();
     }
@@ -153,10 +196,15 @@ final class OfflineMusicPlayer {
     }
 
     private void releaseMedia() {
+        main.removeCallbacks(prepareDeadline);
         if (media != null) media.release();
         media = null;
-        ready = false;
+        ready = playWhenReady = false;
         abandonFocus();
+    }
+
+    private void stop() {
+        releaseMedia(); playlist.clear(); index = 0; key = ""; problem = ""; publish();
     }
 
     private void error(String message) {
@@ -166,21 +214,20 @@ final class OfflineMusicPlayer {
     }
 
     private void publish() {
-        main.removeCallbacks(tick);
-        if (closed) return;
-        boolean playing = ready && media.isPlaying();
-        try {
-            snapshot = new JSONObject().put("key", key).put("playing", playing).put("ready", ready)
-                    .put("previous", index > 0).put("next", index + 1 < playlist.size())
-                    .put("position", ready ? media.getCurrentPosition() : 0)
-                    .put("duration", ready ? media.getDuration() : 0).put("problem", problem).toString();
-        } catch (JSONException impossible) { snapshot = "{}"; }
-        if (playing) main.postDelayed(tick, 300);
+        updateSnapshot();
+        if (!closed) stateChanged.run(); // System controls update on transitions, not every UI tick.
     }
 
-    void foreground(boolean present) {
-        foreground = present;
-        if (!present) pause();
+    private void updateSnapshot() {
+        main.removeCallbacks(tick);
+        if (closed) return;
+        boolean playing = playing();
+        try {
+            snapshot = new JSONObject().put("key", key).put("playing", playing).put("ready", ready)
+                    .put("previous", previous()).put("next", next()).put("position", position())
+                    .put("duration", duration()).put("problem", problem).toString();
+        } catch (JSONException impossible) { snapshot = "{}"; }
+        if (playing) main.postDelayed(tick, 300);
     }
 
     void close() { closed = true; main.removeCallbacks(tick); releaseMedia(); }

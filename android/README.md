@@ -4,13 +4,15 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.4.1** is a narrow patch to the working 1.5.4 build. It keeps
-its package (`com.blackboxstream.mobile.offline.desktop`), catalogue identities, saved files,
-queue and playlists. Android can retain that data on an in-place update only with the original
-signer. The published 1.5.4 APK used a per-run CI key that the workflow did not retain. Keep the
-installed 1.5.4 and its data; the temporary-key CI build of this patch is not published as an
-update. Android 7.0 or later and an up-to-date System WebView are required. The original v90
-expiry still applies (end of 31 March 2027 UTC).
+**BlackBox Stream v90 Offline 1.5.6 (ARM64)** adds background playback of saved music and
+keeps the verification patch based on 1.5.4. The installable APK uses
+`com.blackboxstream.mobile.offline.background` so it can coexist with the previously signed
+1.5.4 app. It does not update or access the old app's Collection; keep that app installed to
+access its songs. The new installation starts with its own empty Collection. The default
+source build still uses `com.blackboxstream.mobile.offline.desktop` and can update the old app
+only if signed with its original key, which the 1.5.4 workflow did not retain. The CI test
+signer isn't a production update key. Android 7.0 or later and an up-to-date System WebView are
+required. The original v90 expiry still applies (end of 31 March 2027 UTC).
 
 - **Music → Find** keeps the original v90 Music discovery UI: fourteen genre shelves, instant and
   structured results, and ordered album tracklists. Suggestions and submitted results use the same
@@ -30,22 +32,24 @@ expiry still applies (end of 31 March 2027 UTC).
   needs a successful helper run and a new, bounded output in the job directory, moved atomically
   to Collection. Previously interrupted staging is discarded, not accepted as a save. Sign-in
   requests and refusals remain failures, not a reason to substitute another source.
-- **Collection** plays its saved, app-private files without the helper or a connection. To check it on
-  a phone, save one song, force-stop the app, turn on airplane mode with Wi‑Fi off, reopen, and play
-  and seek from Collection. The source must still allow a fresh download before this test.
+- **Collection** plays its saved, app-private files without the helper or a connection. Starting
+  a saved song or playlist creates an Android media playback session. It continues when you open
+  another app, including the next saved track in a playlist. Use Android's media controls to
+  pause or resume, or Stop in Now Playing to end the session. Playback pauses if another app
+  takes audio focus or headphones disconnect. Force-stopping the app ends playback; it does not
+  restart on its own. No additional download checks run when playback goes into the background.
 - Movies, TV Series, Anime, My List, device Library/imports, and Local Share retain their Android
   workflows. The movie/TV/anime catalogue still needs your own TMDB key for online results.
 
-Build the offline package with `cd android && gradle :app:assembleRelease -PbbxOfflineMusic=true`
+Build the separate package with `cd android && gradle :app:assembleRelease -PbbxOfflineMusic=true -PbbxOfflineSideBySide=true`
 (Gradle 8.9, JDK 17 and Android SDK 35; allow up to 3 GiB of Java heap for release dependencies).
-The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) verifies the ARM64
-package with a temporary signer and runs controlled x86 tests. It installs the original 1.5.4
-code, saves a synthetic song and playlist, and checks that a second completed audio file is
-flagged for its duration. Updating with the same **test** signer preserves the first song,
-playlist and Retry item. Retrying with the same audio now saves it. Other fixtures test direct
-transfer without separate watch metadata, offline restart and seek, concurrency, provider
-refusals and interrupted transfer recovery. These checks do not test live provider availability
-or the signing key on an installed phone APK.
+The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) verifies the signed
+ARM64 package and exercises x86 siblings with controlled media. It also builds the exact 1.5.4
+sources under the same test signer to check that an update retains saved bytes, the playlist
+and the Retry item, and that the previously flagged fixture now saves. The emulator switches to
+Android Settings in airplane mode and checks playlist continuation, system media Pause/Play,
+and cleanup on Stop. A separate-package install must leave the original Collection intact.
+These tests do not verify live provider availability or a specific phone's background policy.
 Dispatch the workflow
 with `verify_live_catalogue=true` to compare a fresh **Espresso** save from the original Find
 with a fresh save in the archived-helper pilot. Both select `51zjlMhdSTE` and run on the same x86
@@ -121,7 +125,7 @@ As in the PC v90 release, the interface expires after **31 March 2027 (UTC)**.
 ## Streaming preview Music engine and offline listening
 
 The **Fast Start preview** uses the full v90 catalogue (**2,620 albums and 35,995 track rows**).
-Its exact resolver is distinct from PC selection in Offline 1.5.4.1. It checks an exact
+Its exact resolver is distinct from PC selection in Offline 1.5.6. It checks an exact
 recording's title, credited artists, release, full duration and publisher metadata. A few confirmed
 source IDs skip the lookup. For other cards, the resolver searches with the release first (a
 broader query is optional), with at most two searches and four source inspections. If only the
