@@ -354,7 +354,8 @@
   const jobStatus = {working:'Preparing recording…', offline:'Waiting for internet',
     paused:'Paused', queued:'Queued', retrying:'Waiting to retry…', cooldown:'Waiting for the provider cooldown'};
   const failures = { metadata:'Recording details missing in the catalogue', exact:'Exact recording not verified',
-    'no-source':'No matching source found', 'source-gone':'Selected source was removed', 'incomplete-source':'Selected source did not report complete audio',
+    'no-source':'No matching source found', 'source-gone':'Selected source was removed',
+    'source-unavailable':'Source unavailable', 'incomplete-source':'Selected source did not report complete audio',
     signin:'Provider requires sign-in', refused:'Provider refused this recording',
     'lookup-timeout':'Recording lookup timed out', 'lookup-io':'Provider lookup interrupted',
     'transfer-timeout':'Audio transfer timed out', 'transfer-idle':'Audio transfer stopped receiving data', 'transfer-io':'Audio transfer interrupted',
@@ -439,7 +440,8 @@
     }) : [empty('Queue is clear', 'Add songs from Find when you’re ready.') ]));
     const issues = data.tracks.filter(track => track.state === 'failed');
     id('om-failed').hidden = !issues.length;
-    id('om-issues').replaceChildren(...issues.map(track => card(track, failures[track.reason] || failures.helper, [
+    id('om-issues').replaceChildren(...issues.map(track => card(track,
+      (failures[track.reason] || failures.helper) + (track.freshSearch ? ' · after fresh search' : ''), [
       ...(track.retryable ? [button('Retry', () => command('retry', track.key), 'om-link', `Retry ${track.title}`)] : []),
       button('✕', () => command('remove', track.key), 'om-round', `Dismiss ${track.title} download`),
     ])));

@@ -683,17 +683,24 @@ public final class BlackBoxSmoke extends Instrumentation {
         MusicPreparationBudget.Phase lookup = MusicPreparationBudget.Phase.LOOKUP;
         Throwable direct = (Throwable) classify.invoke(null, removed, lookup, id);
         assertPass("The direct Offline pin is eligible for one fresh search when confirmed removed",
-                direct instanceof OfflineMusicLibrary.SourceGone && id.equals(((OfflineMusicLibrary.SourceGone) direct).id));
+                direct instanceof OfflineMusicLibrary.SourceUnavailable && id.equals(((OfflineMusicLibrary.SourceUnavailable) direct).id));
+        String opened = "BBX_PC_OPEN:" + id + "\n";
         for (Object[] test : new Object[][] {
-                {"BBX_PC_OPEN:" + id + "\n" + removed, lookup, "", "source-gone"},
+                {opened + removed, lookup, "", "source-gone"},
                 {removed, lookup, "", "refused"}, // No selected source marker.
                 {removed, lookup, "OTHER000001", "refused"},
                 {removed, lookup, null, "refused"}, // Streaming preview keeps its policy.
                 {removed, MusicPreparationBudget.Phase.TRANSFER, id, "refused"},
-                {watch, lookup, id, "refused"},
-                {removed + "\nERROR: HTTP Error 403: Forbidden", lookup, id, "refused"},
-                {removed + "\nBBX_PROVIDER_SIGNIN", lookup, id, "signin"},
-                {removed + "\nBBX_PROVIDER_LIMITED", lookup, id, "limited"}}) {
+                {watch, lookup, id, "source-unavailable"},
+                {opened + watch + "\n" + watch, lookup, "", "source-unavailable"}, // Duplicated companion error.
+                {watch + "\n" + opened, lookup, "", "refused"}, // Not a failure opening the selected ID.
+                {watch, lookup, "OTHER000001", "refused"},
+                {watch, MusicPreparationBudget.Phase.TRANSFER, id, "refused"},
+                {watch + "\nThis video is only available in certain countries", lookup, id, "refused"},
+                {watch + ". This video is private.", lookup, id, "refused"},
+                {watch + "\nERROR: HTTP Error 403: Forbidden", lookup, id, "refused"},
+                {watch + "\nBBX_PROVIDER_SIGNIN", lookup, id, "signin"},
+                {watch + "\nBBX_PROVIDER_LIMITED", lookup, id, "limited"}}) {
             Throwable failure = (Throwable) classify.invoke(null, test[0], test[1], test[2]);
             assertPass("Fresh search is limited to a confirmed removed Offline watch source: " + test[3],
                     test[3].equals(OfflineMusicLibrary.classify(failure)));

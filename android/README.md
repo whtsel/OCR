@@ -4,9 +4,10 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.8** adds a fresh search when a selected source is explicitly
-reported removed. The installable ARM64 APK uses `com.blackboxstream.mobile.offline.refresh`,
-so it installs alongside 1.5.7 without removing the older app. It starts with its own Collection.
+**BlackBox Stream v90 Offline 1.5.9** extends fresh search to a plain “Video unavailable”
+response when opening a selected source. The installable ARM64 APK uses
+`com.blackboxstream.mobile.offline.search`, so it installs alongside 1.5.8 without removing
+the older app. It starts with its own Collection.
 The default source build still uses `com.blackboxstream.mobile.offline.desktop`. Updating
 1.5.4 requires the original signing key, which that workflow did not retain. The temporary
 preview signing key is not an update key for an older installation. Android 7.0 or later
@@ -25,11 +26,12 @@ and an up-to-date System WebView are required. The original v90 expiry still app
   another; a provider rate limit pauses new jobs briefly. Progress rings show actual received bytes
   against a known transfer size, or spin during lookup and unknown-length transfers.
   The 1.5.4 **artist + song** ranking, known IDs, and existing fallback for titles that the PC
-  tokenizer cannot represent are unchanged. If the PC-style save path gets a definite removal
-  for the selected watch source, it requeues the same song for one fresh artist-and-title search,
-  ignoring the pin or cached ID and excluding the removed result. If the replacement is also
-  removed, it stops rather than searching again. An ambiguous “Video unavailable” message or an
-  access refusal does not trigger this recovery. The helper opens the selected source once and
+  tokenizer cannot represent are unchanged. If the selected source was removed or its open
+  request returns only “Video unavailable,” Downloads requeues the same song for one fresh
+  artist-and-title search, skipping the old ID. A second unavailable source stops rather than
+  searching again. Downloads marks failed rows when a fresh search was attempted. Explicit
+  access refusals, sign-in, rate limits, and errors during the transfer do not trigger a fresh
+  search. The helper opens the selected source once and
   transfers its resolved audio without a second title or duration gate. Regular Downloads do not
   probe the finished file. A save still needs a successful transfer and fresh, bounded output in
   the job directory, moved atomically to Collection. Temporary lookup or transfer failures and

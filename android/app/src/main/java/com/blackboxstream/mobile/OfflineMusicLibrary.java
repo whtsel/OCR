@@ -56,10 +56,14 @@ final class OfflineMusicLibrary {
         Refusal(String code, String message) { super(message); this.code = code; }
     }
 
-    // Only emitted when the selected watch source is confirmed gone, not for access or transfer failures.
-    static final class SourceGone extends IOException {
-        final String id;
-        SourceGone(String id) { super("The selected source was removed."); this.id = id; }
+    // A selected watch source failed to open, not an explicit access or transfer failure.
+    static final class SourceUnavailable extends IOException {
+        final String id, code;
+        SourceUnavailable(String id, boolean removed) {
+            super(removed ? "The selected source was removed." : "The selected source is unavailable.");
+            this.id = id;
+            code = removed ? "source-gone" : "source-unavailable";
+        }
     }
 
     private static final class Entry {
@@ -108,7 +112,10 @@ final class OfflineMusicLibrary {
         }
 
         boolean identified() { return track.seconds > 0 && !track.album.isEmpty(); }
-        Entry result(String reason, boolean saved) { return new Entry(this, reason, saved, 0, 0, ""); }
+        Entry result(String reason, boolean saved) {
+            // Failed rows can say whether a fresh search already ran; a manual Retry starts over.
+            return new Entry(this, reason, saved, 0, 0, reason.isEmpty() || saved ? "" : excludedSource);
+        }
         Entry refresh(String source) { return new Entry(this, "", false, autoRetries, 0, source); }
         Entry retryAt(long when) { return new Entry(this, "", false, autoRetries + 1, when, excludedSource); }
         JSONObject encode() throws JSONException {
@@ -319,6 +326,7 @@ final class OfflineMusicLibrary {
                         .put("batch", entry.batch).put("label", entry.label).put("reason", reason)
                         .put("retryable", retryable(reason));
                 if (entry.autoRetries > 0) row.put("retry", entry.autoRetries).put("retryLimit", MAX_AUTO_RETRIES);
+                if ("failed".equals(status) && !entry.excludedSource.isEmpty()) row.put("freshSearch", true);
                 rows.put(row);
             }
             lastLink = link;
@@ -385,7 +393,7 @@ final class OfflineMusicLibrary {
     }
 
     private void download(Entry entry, Job job, File work) {
-        String failure = "", gone = "", key = entry.track.key;
+        String failure = "", unavailable = "", key = entry.track.key;
         boolean deferred = false, attempted = false;
         try {
             synchronized (this) {
@@ -405,7 +413,8 @@ final class OfflineMusicLibrary {
             }
         } catch (Exception | LinkageError stopped) {
             failure = classify(stopped);
-            if (stopped instanceof SourceGone && entry.excludedSource.isEmpty()) gone = ((SourceGone) stopped).id;
+            if (stopped instanceof SourceUnavailable && entry.excludedSource.isEmpty())
+                unavailable = ((SourceUnavailable) stopped).id;
             // A lost transport can defer the attempt; a refusal or file failure cannot.
             deferred = link() == 0 && waitForConnection(failure);
         } finally {
@@ -417,10 +426,10 @@ final class OfflineMusicLibrary {
         }
         synchronized (this) {
             if (!deferred) {
-                if (!gone.isEmpty()) {
+                if (!unavailable.isEmpty()) {
                     // Give the fresh search a normal lookup slot. Do not spend a transfer retry,
                     // and keep the failed source excluded if a subsequent transfer is interrupted.
-                    entries.put(key, entry.refresh(gone));
+                    entries.put(key, entry.refresh(unavailable));
                 } else if (entry.autoRetries < MAX_AUTO_RETRIES && retryAutomatically(failure)) {
                     // Release both queue slots during backoff. The normal scheduler checks pause,
                     // network and cooldown again before starting any new helper process.
@@ -457,7 +466,7 @@ final class OfflineMusicLibrary {
     }
 
     static String classify(Throwable error) {
-        if (error instanceof SourceGone) return "source-gone";
+        if (error instanceof SourceUnavailable) return ((SourceUnavailable) error).code;
         if (error instanceof Refusal) return ((Refusal) error).code;
         if (error instanceof PreparedMusic.ProviderRateLimited) return "limited";
         String problem = String.valueOf(error.getMessage()).toLowerCase(Locale.ROOT);

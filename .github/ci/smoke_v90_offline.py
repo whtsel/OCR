@@ -23,7 +23,7 @@ from websocket import create_connection
 import check_blackbox_p11 as p11
 
 PKG = 'com.blackboxstream.mobile.offline.desktop'
-SIDE_PKG = 'com.blackboxstream.mobile.offline.refresh'
+SIDE_PKG = 'com.blackboxstream.mobile.offline.search'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -479,11 +479,14 @@ def check_unpinned_album(tone, tone_seconds):
 
 def check_fresh_search(tone):
     removed = 'Video unavailable. This video has been removed by the uploader.'
+    unavailable = 'Video unavailable'
     cases = [
         # Exercise the existing pinned row without requesting its real audio.
-        ('On the Low', 'Burna Boy', 'African Giant', 'UFsskuvj8GQ', 'FRESH000001', removed, None, 'saved'),
+        ('On the Low', 'Burna Boy', 'African Giant', 'UFsskuvj8GQ', 'FRESH000001', unavailable, None, 'saved'),
         ('Low Orbit', 'North Signal', 'Night Transit', 'STALE000002', 'FRESH000002', removed, removed, 'source-gone'),
-        ('Daylight', 'Fixture Artist', 'Test Album', 'STALE000003', 'FRESH000003', 'Video unavailable', None, 'refused'),
+        ('Daylight', 'Fixture Artist', 'Test Album', 'STALE000003', 'FRESH000003', unavailable, unavailable, 'source-unavailable'),
+        ('Moonrise', 'Fixture Artist', 'Test Album', 'STALE000004', 'FRESH000004',
+         unavailable + '. This video is private.', None, 'refused'),
     ]
     tracks = [dict(ref=f'fixture:refresh:{i}', title=title, artist=artist, album=album, seconds=185)
               for i, (title, artist, album, *_) in enumerate(cases)]
@@ -519,9 +522,15 @@ def check_fresh_search(tone):
                     verify_bytes(row, tone)
                 else:
                     p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', f'files/offline-music/saved/{key}.m4a')
+                    result = next(t for t in entries(js) if t['key'] == key)
+                    if result.get('freshSearch', False) != (outcome != 'refused'):
+                        raise RuntimeError(f'Fresh search status did not distinguish {outcome} from an access refusal')
             if counts != {'/FRESH000001.m4a': 2}:
                 raise RuntimeError(f'Unexpected opens/transfers during the fresh search: {counts}')
-    print('::notice::PASS a removed source triggered one fresh search, saved the selected recording, and did not recover repeatedly or after a refusal')
+        click(js, '#om-tab-downloads')
+        wait(js, "document.querySelector('#om-issues').textContent.includes('Source unavailable · after fresh search')",
+             'Downloads did not show that the replacement source was also unavailable')
+    print('::notice::PASS plain source-unavailable recovery, one fresh search only, and no substitution after an access refusal')
 
 
 def check_provider_refusal():

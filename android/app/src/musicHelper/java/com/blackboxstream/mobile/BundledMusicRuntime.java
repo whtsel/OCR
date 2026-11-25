@@ -27,6 +27,7 @@ import org.json.JSONException;
 final class BundledMusicRuntime implements PreparedMusic.Runtime {
     static final String PIN = "e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3";
     private static final int SOURCE_HINT_LIMIT = 128;
+    private static final int OUTPUT_LIMIT = 64 * 1024;
     private static final Object SOURCE_HINT_LOCK = new Object();
     private final Context app;
     private final File root, nativeDir, script;
@@ -286,7 +287,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                     if (progress == null) maybeOfferStream(line, discover, scratch, control);
                     else reportProgress(line, progress);
                     // Capture bounded output for diagnostics; never impose a line reading limit on the child.
-                    int keep = Math.min(line.length(), 65536 - captured.length());
+                    int keep = Math.min(line.length(), OUTPUT_LIMIT - captured.length());
                     if (keep > 0) captured.append(line, 0, keep).append('\n');
                 }
             } catch (IOException stopped) { /* Normal on cancellation. */ }
@@ -326,14 +327,14 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         // Use only failure lines and fixed companion markers, not progress or upload titles.
         StringBuilder problems = new StringBuilder();
         String opened = offlineSource;
-        boolean gone = false;
-        for (String line : output.split("\n")) {
+        int afterOpen = 0;
+        String[] lines = output.split("\n");
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
             if ("".equals(offlineSource) && line.startsWith(PC_OPEN)) {
                 opened = line.substring(PC_OPEN.length());
-                gone = false;
+                afterOpen = i + 1;
             }
-            if (!gone && phase == MusicPreparationBudget.Phase.LOOKUP && PreparedMusic.videoId(opened))
-                gone = removedWatchSource(line, opened);
             if (line.startsWith("ERROR:") || line.startsWith("BBX_PROVIDER_") || line.equals("BBX_NO_EXACT_RECORDING")
                     || line.equals("BBX_NO_PC_MATCH") || line.equals("BBX_PC_INCOMPLETE_SOURCE"))
                 problems.append(line).append('\n');
@@ -351,8 +352,17 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                 || message.contains("subscriber-only") || message.contains("not available in your country")
                 || message.contains("not available in your region"))
             return new OfflineMusicLibrary.Refusal("refused", "The provider did not allow this recording.");
-        if (gone) return new OfflineMusicLibrary.SourceGone(opened);
-        // “Video unavailable” by itself is ambiguous. It does not grant a fresh search.
+        if (phase == MusicPreparationBudget.Phase.LOOKUP && PreparedMusic.videoId(opened)) {
+            String prefix = "ERROR: [youtube] " + opened + ": ";
+            for (int i = afterOpen; i < lines.length; i++) {
+                if (removedWatchSource(watchReason(lines[i], prefix)))
+                    return new OfflineMusicLibrary.SourceUnavailable(opened, true);
+            }
+            // A bare watch error is not an explicit access refusal. Search for a different
+            // public source once, without reopening this ID or interpreting additional reasons.
+            if (output.length() < OUTPUT_LIMIT && plainWatchUnavailable(lines, afterOpen, prefix))
+                return new OfflineMusicLibrary.SourceUnavailable(opened, false);
+        }
         if (message.contains("video unavailable"))
             return new OfflineMusicLibrary.Refusal("refused", "The provider did not allow this recording.");
         if (message.contains("bbx_no_pc_match"))
@@ -375,10 +385,24 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         return new OfflineMusicLibrary.Refusal("helper", "The helper could not prepare this exact recording.");
     }
 
-    private static boolean removedWatchSource(String line, String selected) {
-        String prefix = "ERROR: [youtube] " + selected + ": ";
-        if (!line.startsWith(prefix)) return false;
-        String reason = line.substring(prefix.length()).trim().toLowerCase(Locale.ROOT);
+    private static String watchReason(String line, String prefix) {
+        return line.startsWith(prefix) ? line.substring(prefix.length()).trim().toLowerCase(Locale.ROOT) : "";
+    }
+
+    private static boolean plainWatchUnavailable(String[] lines, int afterOpen, String prefix) {
+        boolean found = false;
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            String reason = i >= afterOpen ? watchReason(line, prefix) : "";
+            if (reason.equals("video unavailable") || reason.equals("video unavailable.")) found = true;
+            // The helper may print the same error twice. Other errors or a trailing
+            // explanation (including multiline access messages) are not a bare error.
+            else if (line.startsWith("ERROR:") || found && !line.trim().isEmpty()) return false;
+        }
+        return found;
+    }
+
+    private static boolean removedWatchSource(String reason) {
         return reason.matches("(?:video unavailable\\. )?(?:this )?video (?:has been (?:removed|deleted)"
                 + "(?: by (?:the|its) uploader)?|does not exist)\\.?");
     }
