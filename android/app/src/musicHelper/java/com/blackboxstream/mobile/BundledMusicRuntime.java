@@ -102,6 +102,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
     private PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control,
             String directId, String excludedSource, String fixture, boolean offline, OfflineMusicLibrary.Progress progress) throws Exception {
         if (control.cancelled) return null;
+        OfflineDownloadReport.Attempt test = progress == null ? null : progress.downloadTest();
         // Download the accepted recording from the same v90 extractor session. Prefer AAC
         // when offered, no speculative second transfer, and no retry of a provider refusal.
         ArrayList<String> options = new ArrayList<>(Arrays.asList("--no-playlist", "--socket-timeout", "20",
@@ -116,12 +117,14 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         File audio = new File(scratch, "audio.m4a");
         boolean pcFixture = fixture != null && hasPcFixture(scratch);
         if (fixture != null && !pcFixture) {
+            if (test != null) test.choose("local fixture", directId);
             // Only the test APK may supply a native-generated local tone path; never a bridge URL.
             options.add("http://127.0.0.1:19090/" + fixture + ".m4a");
             execute(control, scratch, false, progress, null, options.toArray(new String[0]));
             return new PreparedMusic.Result(audio, "");
         }
         if (!directId.isEmpty() && !pcFixture) {
+            if (test != null) test.choose("built-in ID", directId);
             if (!offline) {
                 int min = Math.max(1, track.seconds - 6);
                 int max = track.seconds == 0 ? PreparedMusic.MAX_SECONDS : track.seconds + 6;
@@ -138,6 +141,12 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         if (!excludedSource.isEmpty()) {
             policy += "-refresh";
             source = excludedSource; // Ignore remembered and pinned IDs on this search.
+        }
+        if (test != null) {
+            if (!excludedSource.isEmpty()) test.choose("fresh search", "");
+            else if (!directId.isEmpty()) test.choose("built-in ID", directId);
+            else if (!source.isEmpty()) test.choose("remembered ID", source);
+            else test.choose("artist/title search", "");
         }
         options.addAll(0, Arrays.asList(track.title, artist, track.album, Integer.toString(track.seconds), source, policy));
         execute(control, scratch, true, progress, offline ? "" : null, options.toArray(new String[0]));
@@ -294,6 +303,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         }, "music-helper-output");
         reader.setDaemon(true);
         reader.start();
+        OfflineDownloadReport.Attempt test = progress == null ? null : progress.downloadTest();
+        int exit = -1;
         try {
             for (;;) {
                 try { child.exitValue(); break; }
@@ -315,11 +326,16 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             reader.join(2000);
             if (control.cancelled) return "";
             String output = captured.toString();
-            if (child.exitValue() != 0) throw providerFailure(output, budget.currentPhase(), offlineSource);
+            exit = child.exitValue();
+            if (exit != 0) throw providerFailure(output, budget.currentPhase(), offlineSource);
             return output;
         } finally {
             child.destroy();
             control.detach();
+            if (test != null) {
+                try { test.helperOutput(captured.toString(), budget.currentPhase(), exit); }
+                catch (RuntimeException ignored) { /* Reporting must never affect the original helper result. */ }
+            }
         }
     }
 

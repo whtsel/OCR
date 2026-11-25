@@ -24,6 +24,7 @@ import check_blackbox_p11 as p11
 
 PKG = 'com.blackboxstream.mobile.offline.desktop'
 SIDE_PKG = 'com.blackboxstream.mobile.offline.search'
+DOWNLOAD_TEST_PKG = 'com.blackboxstream.mobile.offline.diagnostic'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -111,10 +112,13 @@ def force_stop():
 
 
 @contextmanager
-def recording_server(payloads, holds=None, unknown=(), before_headers=None, started=None, short_body=(), counts=None):
+def recording_server(payloads, holds=None, unknown=(), before_headers=None, started=None, short_body=(), counts=None,
+                     media_errors=None):
     """Real helper subprocesses over adb reverse; never contact a music provider."""
     holds = holds or {}
     before_headers = before_headers or {}
+    media_errors = media_errors or {}
+    get_counts = Counter() if counts is None else counts
     seen = set()
     count_lock = threading.Lock()
 
@@ -126,9 +130,11 @@ def recording_server(payloads, holds=None, unknown=(), before_headers=None, star
                 return
             if started is not None:
                 started.add(self.path)
-            if send_body and counts is not None:
+            if send_body:
                 with count_lock:
-                    counts[self.path] += 1
+                    get_counts[self.path] += 1
+                    if self.path in media_errors and get_counts[self.path] > 1:
+                        data = media_errors[self.path]  # Opening the source succeeded; the audio request failed.
             gate = before_headers.get(self.path)
             if gate is not None and not gate.wait(timeout=18):
                 self.send_error(504)
@@ -189,26 +195,26 @@ def entries(js):
     return js('JSON.parse(OfflineMusic.library()).tracks')
 
 
-def write_fixture(target, data):
-    p11.adb('shell', 'run-as', PKG, 'mkdir', '-p', str(Path(target).parent))
+def write_fixture(target, data, package=PKG):
+    p11.adb('shell', 'run-as', package, 'mkdir', '-p', str(Path(target).parent))
     # Use the shell protocol so ADB waits for the device write to close. A raw exec-in
     # stream can lose its trailing bytes or fail to reflect the device exit code.
-    subprocess.run(['adb', 'shell', '-T', f"run-as {PKG} sh -c 'base64 -d > {target}'"],
+    subprocess.run(['adb', 'shell', '-T', f"run-as {package} sh -c 'base64 -d > {target}'"],
                    input=base64.b64encode(data), check=True, timeout=14)
-    verify_on_device(target, data, 'Staged ' + target)
+    verify_on_device(target, data, 'Staged ' + target, package)
 
 
-def write_listing(track, entries, watch_errors=None):
+def write_listing(track, entries, watch_errors=None, package=PKG):
     data = json.dumps(dict(entries=entries, watch_errors=watch_errors or {})).encode('utf-8')
-    write_fixture(f'files/offline-music/fixture-listings/{track["key"]}.json', data)
+    write_fixture(f'files/offline-music/fixture-listings/{track["key"]}.json', data, package)
 
 
 def stage(track, data):
     write_fixture(f'files/offline-music/staging/{track["key"]}/audio.m4a', data)
 
-def verify_on_device(path, data, label):
+def verify_on_device(path, data, label, package=PKG):
     # Hash the bytes in app storage, rather than reading a large binary buffer through ADB.
-    output = p11.adb('shell', 'run-as', PKG, 'sha256sum', path)
+    output = p11.adb('shell', 'run-as', package, 'sha256sum', path)
     expected = hashlib.sha256(data).hexdigest()
     if not output.startswith(expected + ' '):
         raise RuntimeError(f'{label} bytes differ (expected {expected}, saw {output[:64]})')
@@ -625,7 +631,79 @@ def check_update(apk, tone, seconds):
     print('::notice::PASS same-signer 1.5.4 update kept saved bytes, playlist and Retry; the same audio previously flagged now saved')
 
 
-def smoke(apk, root, upgrade_from=None, side_by_side=None):
+def check_download_test(apk, tone):
+    pkg = DOWNLOAD_TEST_PKG
+    airplane(True)
+    p11.adb('install', apk, timeout=100)
+    p11.adb('shell', 'run-as', pkg, 'mkdir', '-p', 'files/offline-music')
+    p11.adb('shell', 'run-as', pkg, 'touch', 'files/offline-music/fixture-only')
+    cases = [
+        (ESPRESSO, 'Sabrina Carpenter', "Short n' Sweet", 175, TRACKS[ESPRESSO][0], 'saved', 'publish file'),
+        ('On the Low', 'Burna Boy', 'African Giant', 185, 'UFsskuvj8GQ', 'refused', 'open source'),
+        ('Media rejection', 'Test artist', 'Synthetic', 185, 'TESTBODY001', 'refused', 'audio transfer'),
+        ('Unknown detail', 'Test artist', 'Synthetic', 185, 'TESTPRIV001', 'refused', 'open source'),
+        ('Recovered source', 'Test artist', 'Synthetic', 185, 'TESTOLD0001', 'saved', 'publish file'),
+    ]
+    records = [dict(ref=f'fixture:download-test:{i}', title=title, artist=artist, album=album, seconds=seconds)
+               for i, (title, artist, album, seconds, *_) in enumerate(cases)]
+    with page(pkg) as js:
+        open_music(js)
+        click(js, '#om-tab-downloads')
+        wait(js, "!document.querySelector('#om-download-test').hidden && document.querySelector('#om-copy-test').disabled"
+                 " && !JSON.parse(OfflineMusic.library()).connected", 'Download Test did not start empty and offline')
+        if entries(js) or js('OfflineMusic.downloadTestReport()'):
+            raise RuntimeError('Download Test shared the original app’s data')
+        request = json.dumps(dict(tracks=records, label='Controlled report test'))
+        js(f"OfflineMusic.queue('enqueue',{json.dumps(request)})")
+        rows = {row['title']: row for row in entries(js)}
+        for title, artist, _, seconds, video, _, _ in cases:
+            item = dict(id=video, title=title, channel=artist + ' - Topic', duration=seconds)
+            listing, watch_errors = [item], {}
+            if video == 'TESTPRIV001':
+                watch_errors[video] = 'Video unavailable. Test detail https://example.invalid/?token=TEST_ONLY_SECRET'
+            elif video == 'TESTOLD0001':
+                watch_errors[video] = 'Video unavailable'
+                listing.append(dict(item, id='TESTNEW0001', title=title + ' (Official Audio)'))
+            write_listing(rows[title], listing, watch_errors, package=pkg)
+        esp, low = f'/{TRACKS[ESPRESSO][0]}.m4a', '/UFsskuvj8GQ.m4a'
+        media, recovered = '/TESTBODY001.m4a', '/TESTNEW0001.m4a'
+        counts = Counter()
+        with recording_server({esp: tone, low: 403, media: tone, recovered: tone},
+                              counts=counts, media_errors={media: 403}):
+            airplane(False)
+            expected = {title: result for title, _, _, _, _, result, _ in cases}
+            wait(js, f"JSON.parse(OfflineMusic.library()).tracks.every(t => {{const outcome = {json.dumps(expected)}[t.title];"
+                     "return outcome === 'saved' ? t.state === 'saved' : t.state === 'failed' && t.reason === outcome})",
+                 'The diagnostic build did not reproduce the controlled saves and failures', 80)
+            if counts != {esp: 2, low: 1, media: 2, recovered: 2}:
+                raise RuntimeError(f'Reporting changed the original provider requests: {counts}')
+        report = js('OfflineMusic.downloadTestReport()')
+        parts = report.split('\n\n')[1:]
+        if len(parts) != 6 or 'bundled helper 2026.10.26' not in report:
+            raise RuntimeError('The report did not include one row per real attempt and helper version')
+        for title, _, _, _, video, outcome, stage in cases:
+            notes = [part for part in parts if part.startswith(title + ' — ')]
+            source = 'TESTNEW0001' if video == 'TESTOLD0001' else video
+            if not any(f'Source: {source}' in n and f'Stage: {stage} | Result: {outcome}' in n for n in notes):
+                raise RuntimeError(f'The test report lost the actual source, stage or result for {title}')
+            if video == 'TESTOLD0001' and not any('Next: fresh search' in n and 'source-unavailable' in n for n in notes):
+                raise RuntimeError('The report lost the original unavailable attempt before the fresh search')
+            if video in ('UFsskuvj8GQ', 'TESTBODY001') and not any('Errors: HTTP 403' in n for n in notes):
+                raise RuntimeError(f'The report lost the real HTTP status for {title}')
+        if f'Published: {len(tone)} B' not in report or re.search(r'://|127\.0\.0\.1|TEST_ONLY_SECRET', report):
+            raise RuntimeError('The report lost published bytes or copied a raw helper URL/token')
+        wait(js, "!document.querySelector('#om-copy-test').disabled", 'The test report was not copyable')
+        click(js, '#om-copy-test')
+    p11.adb('shell', 'am', 'force-stop', pkg)
+    airplane(True)
+    with page(pkg) as js:
+        open_music(js)
+        if js('OfflineMusic.downloadTestReport()') != report:
+            raise RuntimeError('The safe download report did not survive reopening the app')
+    print('::notice::PASS Download Test distinguished a source-open 403 from a media-transfer 403, confirmed the fresh search and control, and retained only safe report data')
+
+
+def smoke(apk, root, upgrade_from=None, side_by_side=None, download_test=None):
     tones = {}
     for i, (title, (video, seconds)) in enumerate(TRACKS.items()):
         target = root / f'{video}.m4a'
@@ -818,6 +896,13 @@ def smoke(apk, root, upgrade_from=None, side_by_side=None):
     check_unpinned_album(album_tone.read_bytes(), 213)
     check_fresh_search(tones[ESPRESSO])
     check_provider_refusal()
+    with page() as js:
+        open_music(js)
+        click(js, '#om-tab-downloads')
+        if js("!document.querySelector('#om-download-test').hidden || !!OfflineMusic.downloadTestReport()"):
+            raise RuntimeError('The regular install collected or exposed diagnostic reports')
+    if download_test:
+        check_download_test(download_test, tones[ESPRESSO])
     if side_by_side:
         force_stop()
         airplane(True)
@@ -893,14 +978,16 @@ if __name__ == '__main__':
     mode = args.add_mutually_exclusive_group()
     mode.add_argument('--live', action='store_true')
     mode.add_argument('--upgrade-from', type=Path, help='1.5.4 debug APK signed with the same test key')
-    args.add_argument('--side-by-side', type=Path, help='x86 sibling of the separately installable release')
+    sibling = args.add_mutually_exclusive_group()
+    sibling.add_argument('--side-by-side', type=Path, help='x86 sibling of the separately installable release')
+    sibling.add_argument('--download-test', type=Path, help='x86 sibling of the separate Download Test APK')
     request = args.parse_args()
     try:
         if request.live:
             live_trial(request.apk)
         else:
             with tempfile.TemporaryDirectory() as directory:
-                smoke(request.apk, Path(directory), request.upgrade_from, request.side_by_side)
+                smoke(request.apk, Path(directory), request.upgrade_from, request.side_by_side, request.download_test)
     except Exception as error:
         print('::error::' + p11.diagnostic(str(error)).replace('\n', ' / '))
         raise

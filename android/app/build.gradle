@@ -8,6 +8,9 @@ def musicHelper = providers.gradleProperty('bbxMusicHelper').getOrElse('true') =
 def helperAbi = providers.gradleProperty('bbxHelperAbi').getOrElse('arm64-v8a')
 def offlineMusic = providers.gradleProperty('bbxOfflineMusic').getOrElse('false') == 'true'
 def offlineSideBySide = offlineMusic && providers.gradleProperty('bbxOfflineSideBySide').getOrElse('false') == 'true'
+def offlineDownloadTest = offlineMusic && providers.gradleProperty('bbxOfflineDownloadTest').getOrElse('false') == 'true'
+def offlineId = offlineDownloadTest ? 'com.blackboxstream.mobile.offline.diagnostic' : offlineSideBySide ? 'com.blackboxstream.mobile.offline.search' : 'com.blackboxstream.mobile.offline.desktop'
+def offlineVersion = offlineDownloadTest ? '1.5.9-download-test' : '1.5.9-offline'
 if (offlineMusic && !musicHelper) throw new GradleException('The offline v90 build requires the pinned music helper.')
 def fastPreview = !offlineMusic && providers.gradleProperty('bbxFastStartPreview').getOrElse('false') == 'true'
 def preview = offlineMusic || fastPreview || providers.gradleProperty('bbxHelperPreview').getOrElse('false') == 'true'
@@ -27,8 +30,8 @@ android {
         testInstrumentationRunner 'com.blackboxstream.mobile.BlackBoxSmoke'
         if (musicHelper) {
             versionCode(offlineMusic ? 23 : 13)
-            if (offlineMusic) applicationId(offlineSideBySide ? 'com.blackboxstream.mobile.offline.search' : 'com.blackboxstream.mobile.offline.desktop')
-            versionName(offlineMusic ? '1.5.9-offline' : fastPreview ? '1.4.8-fast' : preview ? '1.4.8-music' : '1.4.8')
+            if (offlineMusic) applicationId(offlineId)
+            versionName(offlineMusic ? offlineVersion : fastPreview ? '1.4.8-fast' : preview ? '1.4.8-music' : '1.4.8')
             if (!(helperAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException('Unsupported helper ABI: ' + helperAbi)
             ndk { abiFilters += [helperAbi] }
         }
@@ -70,6 +73,7 @@ if (musicHelper) {
         inputs.property('musicPreview', preview)
         inputs.property('fastStartPreview', fastPreview)
         inputs.property('offlineMusic', offlineMusic)
+        inputs.property('offlineDownloadTest', offlineDownloadTest)
         outputs.dir(helperRaw)
         if (preview) outputs.dir(previewRes)
         doLast {
@@ -84,7 +88,7 @@ if (musicHelper) {
             if (preview) {
                 def label = previewRes.get().file('values/strings.xml').asFile
                 label.parentFile.mkdirs()
-                def appName = offlineMusic ? 'BlackBox Stream v90 Offline 1.5.9' : fastPreview ? 'BlackBox Music Fast Start' : 'BlackBox Music v90'
+                def appName = offlineDownloadTest ? 'BlackBox Stream v90 Download Test' : offlineMusic ? 'BlackBox Stream v90 Offline 1.5.9' : fastPreview ? 'BlackBox Music Fast Start' : 'BlackBox Music v90'
                 label.text = "<resources><string name=\"app_name\">${appName}</string></resources>"
             }
         }

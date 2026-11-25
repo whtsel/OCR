@@ -46,7 +46,12 @@ public final class OfflineMusicService extends Service {
         return "com.blackboxstream.mobile.offline.desktop".equals(pkg)
                 || "com.blackboxstream.mobile.offline.retry".equals(pkg)
                 || "com.blackboxstream.mobile.offline.refresh".equals(pkg)
-                || "com.blackboxstream.mobile.offline.search".equals(pkg);
+                || "com.blackboxstream.mobile.offline.search".equals(pkg)
+                || isDownloadTest(context);
+    }
+
+    static boolean isDownloadTest(Context context) {
+        return "com.blackboxstream.mobile.offline.diagnostic".equals(context.getPackageName());
     }
 
     static String snapshot() {

@@ -1,6 +1,8 @@
 package com.blackboxstream.mobile;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -173,6 +175,23 @@ public final class V90Activity extends Activity {
             return closed || V90Api.expired() ? "{\"error\":\"Music is not available.\"}" : musicLibrary.command(action, body);
         }
         @JavascriptInterface public String progress() { return closed || V90Api.expired() ? "{}" : musicLibrary.progress(); }
+        @JavascriptInterface public String downloadTestReport() {
+            return closed || V90Api.expired() ? "" : musicLibrary.downloadTestReport();
+        }
+        @JavascriptInterface public boolean copyDownloadTestReport() {
+            String report = downloadTestReport();
+            if (report.isEmpty()) return false;
+            main.post(() -> {
+                if (!active()) return;
+                ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+                if (clipboard == null) { toast("Couldn't open Android's clipboard."); return; }
+                try {
+                    clipboard.setPrimaryClip(ClipData.newPlainText("BlackBox download test", report));
+                    toast("Test report copied.");
+                } catch (RuntimeException failed) { toast("Couldn't copy the test report."); }
+            });
+            return true;
+        }
         @JavascriptInterface public String player() { return closed || V90Api.expired() ? "{}" : OfflineMusicService.snapshot(); }
         @JavascriptInterface public void playback(String action, String value) {
             if (action == null || action.length() > 12 || value == null || value.length() > 70000) return;

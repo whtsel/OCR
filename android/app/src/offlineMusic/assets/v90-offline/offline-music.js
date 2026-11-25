@@ -421,6 +421,8 @@
   function renderDownloads() {
     const pending = new Map();
     progressRows.clear(); lastProgress = '';
+    id('om-download-test').hidden = !data.downloadTest;
+    id('om-copy-test').disabled = !data.reportReady;
     const waiting = data.tracks.filter(track => !['saved','failed'].includes(track.state));
     for (const track of waiting) batchOf(pending, track.batch).push(track);
     id('om-pause').hidden = !waiting.length && !data.paused;
@@ -565,6 +567,7 @@
   id('navMusic').addEventListener('click', () => { page = 'collection'; }, true);
   for (const tab of id('om-tabs').querySelectorAll('button')) tab.onclick = () => show(tab.dataset.omPage);
   id('om-add-songs').onclick = () => show('find'); id('om-saved-library').onclick = () => show('collection');
+  id('om-copy-test').onclick = () => bridge.copyDownloadTestReport();
   id('om-pause').onclick = () => command(data.paused ? 'resume' : 'pause');
   id('om-now').onclick = () => id('om-player').showModal(); id('om-player-close').onclick = () => id('om-player').close();
   id('om-mini-toggle').onclick = id('om-play-toggle').onclick = () => play('toggle');

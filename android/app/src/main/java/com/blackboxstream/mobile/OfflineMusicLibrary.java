@@ -43,7 +43,10 @@ final class OfflineMusicLibrary {
         default boolean needsLookup(PreparedMusic.Track track) { return true; }
         default void published(PreparedMusic.Track track, File staging) { }
     }
-    interface Progress { void report(String phase, long received, long total); }
+    interface Progress {
+        void report(String phase, long received, long total);
+        default OfflineDownloadReport.Attempt downloadTest() { return null; }
+    }
 
     static synchronized OfflineMusicLibrary open(Context context) {
         if (instance == null) instance = new OfflineMusicLibrary(context.getApplicationContext());
@@ -131,6 +134,7 @@ final class OfflineMusicLibrary {
     private final SharedPreferences prefs;
     private final ConnectivityManager network;
     private final Downloader downloader;
+    private final OfflineDownloadReport downloadTest;
     private static final class Job {
         String phase = "preparing";
         long received, total;
@@ -152,6 +156,7 @@ final class OfflineMusicLibrary {
         File root = new File(app.getFilesDir(), "offline-music");
         saved = new File(root, "saved"); stage = new File(root, "staging");
         prefs = app.getSharedPreferences("v90-offline-music", Context.MODE_PRIVATE);
+        downloadTest = OfflineMusicService.isDownloadTest(app) ? new OfflineDownloadReport(app) : null;
         paused = prefs.getBoolean("paused", false);
         try { playlists = new JSONArray(prefs.getString("playlists", "[]")); }
         catch (JSONException invalid) { Log.w(TAG, "Unreadable Music playlists"); }
@@ -330,8 +335,10 @@ final class OfflineMusicLibrary {
                 rows.put(row);
             }
             lastLink = link;
-            return lastSnapshot = new JSONObject().put("tracks", rows).put("paused", paused)
-                    .put("connected", link > 0).put("metered", link == 1).put("playlists", playlists).put("available", downloader != null).toString();
+            JSONObject state = new JSONObject().put("tracks", rows).put("paused", paused)
+                    .put("connected", link > 0).put("metered", link == 1).put("playlists", playlists).put("available", downloader != null);
+            if (downloadTest != null) state.put("downloadTest", true).put("reportReady", downloadTest.ready());
+            return lastSnapshot = state.toString();
         } catch (JSONException invalid) { return error("Your Music library could not be read."); }
     }
 
@@ -340,6 +347,8 @@ final class OfflineMusicLibrary {
     private static boolean retryable(String reason) {
         return !"signin".equals(reason) && !"refused".equals(reason) && !"metadata".equals(reason);
     }
+
+    synchronized String downloadTestReport() { return downloadTest == null ? "" : downloadTest.text(); }
 
     /** Separate from the durable list so byte ticks never rebuild or persist the queue. */
     synchronized String progress() {
@@ -395,19 +404,36 @@ final class OfflineMusicLibrary {
     private void download(Entry entry, Job job, File work) {
         String failure = "", unavailable = "", key = entry.track.key;
         boolean deferred = false, attempted = false;
+        OfflineDownloadReport.Attempt test = null;
+        long publishedBytes = 0;
         try {
+            int connection;
             synchronized (this) {
-                deferred = paused || link() == 0 || V90Api.expired() || cooldownUntil > SystemClock.elapsedRealtime();
+                connection = paused ? 0 : link();
+                deferred = connection == 0 || V90Api.expired() || cooldownUntil > SystemClock.elapsedRealtime();
             }
             if (!deferred) {
                 attempted = true;
+                if (downloadTest != null) test = new OfflineDownloadReport.Attempt(entry.track, entry.autoRetries, connection);
                 if (!directory(work) || !directory(saved)) throw new Refusal("storage");
-                File result = downloader.fetch(entry.track, work, entry.excludedSource,
-                        (phase, received, total) -> report(key, job, phase, received, total));
+                Progress progress = (phase, received, total) -> report(key, job, phase, received, total);
+                if (test != null) {
+                    OfflineDownloadReport.Attempt trace = test;
+                    progress = new Progress() {
+                        @Override public OfflineDownloadReport.Attempt downloadTest() { return trace; }
+                        @Override public void report(String phase, long received, long total) {
+                            OfflineMusicLibrary.this.report(key, job, phase, received, total);
+                        }
+                    };
+                }
+                File result = downloader.fetch(entry.track, work, entry.excludedSource, progress);
+                if (test != null) test.publication();
                 // Like desktop, a successful helper run commits its completed output. No media probe.
                 if (!hasOutput(result) || !work.getCanonicalFile().equals(result.getCanonicalFile().getParentFile()))
                     throw new Refusal("incomplete");
-                if (!result.renameTo(file(entry))) throw new Refusal("storage");
+                File destination = file(entry);
+                if (!result.renameTo(destination)) throw new Refusal("storage");
+                if (test != null) publishedBytes = destination.length();
                 try { downloader.published(entry.track, work); }
                 catch (RuntimeException ignored) { /* Optional source hints cannot undo a completed save. */ }
             }
@@ -425,25 +451,33 @@ final class OfflineMusicLibrary {
             }
         }
         synchronized (this) {
+            String next = deferred ? "wait for connection" : "none";
             if (!deferred) {
                 if (!unavailable.isEmpty()) {
                     // Give the fresh search a normal lookup slot. Do not spend a transfer retry,
                     // and keep the failed source excluded if a subsequent transfer is interrupted.
                     entries.put(key, entry.refresh(unavailable));
+                    next = "fresh search";
                 } else if (entry.autoRetries < MAX_AUTO_RETRIES && retryAutomatically(failure)) {
                     // Release both queue slots during backoff. The normal scheduler checks pause,
                     // network and cooldown again before starting any new helper process.
                     long delay = FIRST_RETRY_DELAY_MS << entry.autoRetries;
                     entries.put(key, entry.retryAt(SystemClock.elapsedRealtime() + delay));
                     wakeups.schedule(this::kick, delay, TimeUnit.MILLISECONDS);
+                    next = "automatic retry";
                 } else {
                     entries.put(key, entry.result(failure, failure.isEmpty()));
                 }
                 if ("limited".equals(failure)) {
                     cooldownUntil = SystemClock.elapsedRealtime() + 60000;
+                    next = "provider cooldown";
                     wakeups.schedule(() -> { synchronized (this) { lastSnapshot = null; kick(); } }, 60, TimeUnit.SECONDS);
                 }
                 try { persist(); } catch (IOException | JSONException ignored) { Log.w(TAG, "Music job result could not be recorded"); }
+            }
+            if (test != null) {
+                try { downloadTest.record(test, failure.isEmpty() ? "saved" : failure, next, job.received, publishedBytes); }
+                catch (RuntimeException ignored) { /* Optional local reporting never changes a download. */ }
             }
             active.remove(key);
             lastSnapshot = null;

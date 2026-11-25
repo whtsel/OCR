@@ -6,6 +6,10 @@ on:
         description: Publish a tested, separately installable ARM64 APK
         type: boolean
         default: false
+      publish_download_test:
+        description: Publish the separate ARM64 Download Test APK with local copyable reports
+        type: boolean
+        default: false
       verify_live_catalogue:
         description: Compare a fresh Espresso save in full v90 Find and the archived-helper pilot (no upload)
         type: boolean
@@ -28,7 +32,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: blackbox-v90-offline-${{ github.ref }}-${{ inputs.verify_live_catalogue && 'live' || inputs.publish_apk && 'publish' || 'fixtures' }}
+  group: blackbox-v90-offline-${{ github.ref }}-${{ inputs.verify_live_catalogue && 'live' || inputs.publish_download_test && 'download-test' || inputs.publish_apk && 'publish' || 'fixtures' }}
   cancel-in-progress: true
 jobs:
   offline:
@@ -36,9 +40,16 @@ jobs:
     timeout-minutes: 25
     env:
       GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx3g
-      APK_PACKAGE: ${{ inputs.publish_apk && 'com.blackboxstream.mobile.offline.search' || 'com.blackboxstream.mobile.offline.desktop' }}
-      APK_NAME: ${{ inputs.publish_apk && 'BlackBox-Stream-v90-Offline-1.5.9-ARM64.apk' || 'BlackBox-Stream-v90-Offline-test-only.apk' }}
+      APK_PACKAGE: ${{ inputs.publish_download_test && 'com.blackboxstream.mobile.offline.diagnostic' || inputs.publish_apk && 'com.blackboxstream.mobile.offline.search' || 'com.blackboxstream.mobile.offline.desktop' }}
+      ARTIFACT_NAME: ${{ inputs.publish_download_test && 'BlackBox-Stream-v90-Download-Test-ARM64' || inputs.publish_apk && 'BlackBox-Stream-v90-Offline-1.5.9-ARM64' || 'BlackBox-Stream-v90-Offline-test-only' }}
+      APK_VERSION: ${{ inputs.publish_download_test && '1.5.9-download-test' || '1.5.9-offline' }}
+      APK_LABEL: ${{ inputs.publish_download_test && 'BlackBox Stream v90 Download Test' || 'BlackBox Stream v90 Offline 1.5.9' }}
     steps:
+      - name: Verify the selected build mode
+        if: ${{ inputs.publish_download_test && (inputs.publish_apk || inputs.verify_live_catalogue) }}
+        run: |
+          echo '::error::Choose just publish_download_test for the diagnostic build.'
+          exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -65,7 +76,8 @@ jobs:
         run: |
           log=$(mktemp)
           if ! (cd android && gradle :app:assembleRelease --no-daemon --console=plain -PbbxOfflineMusic=true \
-              -PbbxOfflineSideBySide=${{ inputs.publish_apk && 'true' || 'false' }}) > "$log" 2>&1; then
+              -PbbxOfflineSideBySide=${{ inputs.publish_apk && 'true' || 'false' }} \
+              -PbbxOfflineDownloadTest=${{ inputs.publish_download_test && 'true' || 'false' }}) > "$log" 2>&1; then
             tail -80 "$log"
             detail=$(grep -A5 -E 'error:|What went wrong:' "$log" | head -c 2000 || true)
             printf '::error::%s\n' "${detail//$'\n'/' / '}"
@@ -81,7 +93,7 @@ jobs:
           phase=alignment
           trap 'code=$?; echo "::error::ARM64 verification failed during $phase (exit $code)"; exit "$code"' ERR
           tools="$ANDROID_HOME/build-tools/35.0.0"
-          apk="$RUNNER_TEMP/$APK_NAME"
+          apk="$RUNNER_TEMP/$ARTIFACT_NAME.apk"
           "$tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/v90-unsigned.apk" "$RUNNER_TEMP/aligned.apk"
           phase=key-generation
           keytool -genkeypair -keystore "$RUNNER_TEMP/offline-preview.p12" -storepass test-only -keypass test-only \
@@ -95,8 +107,8 @@ jobs:
           "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
           metadata=$(grep -E '^(package:|application-label:|launchable-activity:|native-code:|application-debuggable)' "$RUNNER_TEMP/badging.txt")
           echo "::notice::${metadata//$'\n'/' / '}"
-          grep -Fq "package: name='$APK_PACKAGE' versionCode='23' versionName='1.5.9-offline'" "$RUNNER_TEMP/badging.txt"
-          grep -Fxq "application-label:'BlackBox Stream v90 Offline 1.5.9'" "$RUNNER_TEMP/badging.txt"
+          grep -Fq "package: name='$APK_PACKAGE' versionCode='23' versionName='$APK_VERSION'" "$RUNNER_TEMP/badging.txt"
+          grep -Fxq "application-label:'$APK_LABEL'" "$RUNNER_TEMP/badging.txt"
           grep -q "^launchable-activity: name='com.blackboxstream.mobile.V90Activity'" "$RUNNER_TEMP/badging.txt"
           grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"
           if grep -q '^application-debuggable' "$RUNNER_TEMP/badging.txt"; then echo '::error::Debuggable phone package'; exit 1; fi
@@ -123,11 +135,12 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Build the x86 sibling of the phone install
-        if: ${{ inputs.publish_apk && !inputs.verify_live_catalogue }}
+        if: ${{ (inputs.publish_apk || inputs.publish_download_test) && !inputs.verify_live_catalogue }}
         run: |
           log=$(mktemp)
           if ! (cd android && gradle :app:assembleDebug --no-daemon --console=plain -PbbxOfflineMusic=true \
-              -PbbxOfflineSideBySide=true -PbbxHelperAbi=x86_64) > "$log" 2>&1; then
+              -PbbxOfflineSideBySide=${{ inputs.publish_apk && 'true' || 'false' }} -PbbxHelperAbi=x86_64 \
+              -PbbxOfflineDownloadTest=${{ inputs.publish_download_test && 'true' || 'false' }}) > "$log" 2>&1; then
             tail -80 "$log"
             echo '::error::Could not build the x86 sibling of the APK'
             exit 1
@@ -167,16 +180,16 @@ jobs:
             "$RUNNER_TEMP/v90-debug.apk" "$RUNNER_TEMP/pilot-live.apk" ${{ inputs.pilot_only && '--only-pilot' || '' }};
             else python3 -B -u .github/ci/smoke_v90_offline.py "$RUNNER_TEMP/v90-debug.apk"
             --upgrade-from "$RUNNER_TEMP/v90-offline-reference/android/app/build/outputs/apk/debug/app-debug.apk"
-            ${{ inputs.publish_apk && '--side-by-side "$RUNNER_TEMP/v90-side-by-side-debug.apk"' || '' }}; fi
+            ${{ inputs.publish_download_test && '--download-test "$RUNNER_TEMP/v90-side-by-side-debug.apk"' || inputs.publish_apk && '--side-by-side "$RUNNER_TEMP/v90-side-by-side-debug.apk"' || '' }}; fi
       - name: Require ARM64 package verification
         if: ${{ !inputs.verify_live_catalogue && steps.package.outcome != 'success' }}
         run: exit 1
-      # Only an explicit request publishes the separate app, never the existing-package test build.
+      # Only an explicit request publishes a separate phone install, never the existing-package test build.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ inputs.publish_apk && !inputs.verify_live_catalogue }}
+        if: ${{ (inputs.publish_apk || inputs.publish_download_test) && !inputs.verify_live_catalogue }}
         with:
-          name: BlackBox-Stream-v90-Offline-1.5.9-ARM64
-          path: ${{ runner.temp }}/BlackBox-Stream-v90-Offline-1.5.9-ARM64.apk
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/${{ env.ARTIFACT_NAME }}.apk
           if-no-files-found: error
           compression-level: 0
           retention-days: 30

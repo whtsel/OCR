@@ -19,6 +19,10 @@
   <div class="om-mark"><img src="/offline-music/icon.svg" alt="" width="27" height="27"> BLACKBOX <span>MUSIC</span></div>
   <header class="om-heading"><h1 id="om-download-title">Downloads<span>.</span></h1><p>Saved songs are ready to play offline.</p></header>
   <div class="om-section-head om-download-opts"><button type="button" class="om-button" id="om-add-songs">+ Add songs</button></div>
+  <section class="om-group" id="om-download-test" hidden aria-labelledby="om-test-title">
+    <div class="om-section-head"><h2 id="om-test-title">Download test</h2><button type="button" class="om-link" id="om-copy-test" disabled>Copy test report</button></div>
+    <p>Queue a song that fails and one that normally saves. When the queue is clear, copy the local report. Nothing is sent automatically.</p>
+  </section>
   <section class="om-group"><div class="om-section-head"><h2>Queue</h2><button type="button" class="om-link" id="om-pause" hidden></button></div><div class="om-cards" id="om-pending"></div></section>
   <section class="om-group" id="om-failed" hidden><div class="om-section-head"><h2>Needs attention</h2></div><div class="om-list" id="om-issues"></div></section>
   <section class="om-group"><div class="om-section-head"><h2>Saved</h2><button type="button" class="om-link" id="om-saved-library">Open Collection</button></div><div class="om-list" id="om-finished"></div></section>
