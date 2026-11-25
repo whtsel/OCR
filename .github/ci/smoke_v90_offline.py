@@ -23,7 +23,7 @@ from websocket import create_connection
 import check_blackbox_p11 as p11
 
 PKG = 'com.blackboxstream.mobile.offline.desktop'
-SIDE_PKG = 'com.blackboxstream.mobile.offline.background'
+SIDE_PKG = 'com.blackboxstream.mobile.offline.retry'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}

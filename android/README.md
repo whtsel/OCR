@@ -4,14 +4,14 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-The current fix targets the existing `com.blackboxstream.mobile.offline.desktop` package,
-keeps background playback, and adds automatic retries to Downloads. Updating the installed
-1.5.4 app requires its original signing key, which the 1.5.4 workflow did not retain.
-Keep that app installed to keep its saved songs. CI uses a temporary test key and does not
-publish an APK. The earlier 1.5.6 preview used `com.blackboxstream.mobile.offline.background`;
-it was a separate install with its own Collection, not an update or a migration.
-Android 7.0 or later and an up-to-date System WebView are required. The original v90 expiry
-still applies (end of 31 March 2027 UTC).
+**BlackBox Stream v90 Offline 1.5.7** keeps background playback and adds automatic download
+retries. The installable ARM64 APK uses `com.blackboxstream.mobile.offline.retry`, so it can
+install without removing 1.5.4 or the 1.5.6 preview. It starts with its own Collection.
+The default source build still uses `com.blackboxstream.mobile.offline.desktop`. Updating
+1.5.4 requires the original signing key, which that workflow did not retain. The temporary
+preview signing key is not an update key for an older installation. Android 7.0 or later
+and an up-to-date System WebView are required. The original v90 expiry still applies
+(end of 31 March 2027 UTC).
 
 - **Music → Find** keeps the original v90 Music discovery UI: fourteen genre shelves, instant and
   structured results, and ordered album tracklists. Suggestions and submitted results use the same
@@ -42,12 +42,14 @@ still applies (end of 31 March 2027 UTC).
 - Movies, TV Series, Anime, My List, device Library/imports, and Local Share retain their Android
   workflows. The movie/TV/anime catalogue still needs your own TMDB key for online results.
 
-Build the same-package candidate with `cd android && gradle :app:assembleRelease -PbbxOfflineMusic=true`
+Build with `cd android && gradle :app:assembleRelease -PbbxOfflineMusic=true`
 (Gradle 8.9, JDK 17 and Android SDK 35; allow up to 3 GiB of Java heap for release dependencies).
-The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) verifies the ARM64
-candidate and tests a same-signer x86 upgrade from the exact 1.5.4 source. This checks that the
-update keeps saved bytes, playlists, and the Retry item, and saves a previously flagged fixture.
-Controlled transfers exercise the retry limit, pause/resume, and refusal handling. The emulator
+Add `-PbbxOfflineSideBySide=true` for the separate package. The
+[Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) verifies the ARM64
+candidate and tests a same-signer x86 upgrade from the exact 1.5.4 source. The test update
+keeps saved bytes, playlists, and the Retry item, and saves a previously flagged fixture.
+Dispatch with `publish_apk=true` to also check the separate installation and upload its signed
+ARM64 APK. Controlled transfers exercise the retry limit, pause/resume, and refusal handling. The emulator
 also checks playlist continuation behind Android Settings in airplane mode, system media
 Pause/Play, and cleanup on Stop. These tests do not verify live provider downloads on a phone.
 Dispatch the workflow

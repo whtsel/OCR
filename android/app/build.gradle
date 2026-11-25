@@ -26,9 +26,9 @@ android {
         versionName '1.4.4-transport'
         testInstrumentationRunner 'com.blackboxstream.mobile.BlackBoxSmoke'
         if (musicHelper) {
-            versionCode(offlineMusic ? 20 : 13)
-            if (offlineMusic) applicationId(offlineSideBySide ? 'com.blackboxstream.mobile.offline.background' : 'com.blackboxstream.mobile.offline.desktop')
-            versionName(offlineMusic ? '1.5.6-offline' : fastPreview ? '1.4.8-fast' : preview ? '1.4.8-music' : '1.4.8')
+            versionCode(offlineMusic ? 21 : 13)
+            if (offlineMusic) applicationId(offlineSideBySide ? 'com.blackboxstream.mobile.offline.retry' : 'com.blackboxstream.mobile.offline.desktop')
+            versionName(offlineMusic ? '1.5.7-offline' : fastPreview ? '1.4.8-fast' : preview ? '1.4.8-music' : '1.4.8')
             if (!(helperAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException('Unsupported helper ABI: ' + helperAbi)
             ndk { abiFilters += [helperAbi] }
         }
@@ -84,7 +84,7 @@ if (musicHelper) {
             if (preview) {
                 def label = previewRes.get().file('values/strings.xml').asFile
                 label.parentFile.mkdirs()
-                def appName = offlineMusic ? 'BlackBox Stream v90 Offline 1.5.6' : fastPreview ? 'BlackBox Music Fast Start' : 'BlackBox Music v90'
+                def appName = offlineMusic ? 'BlackBox Stream v90 Offline 1.5.7' : fastPreview ? 'BlackBox Music Fast Start' : 'BlackBox Music v90'
                 label.text = "<resources><string name=\"app_name\">${appName}</string></resources>"
             }
         }
