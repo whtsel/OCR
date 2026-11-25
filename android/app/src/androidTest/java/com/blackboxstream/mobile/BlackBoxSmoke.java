@@ -226,7 +226,7 @@ public final class BlackBoxSmoke extends Instrumentation {
         Class<?> runtime = Class.forName("com.blackboxstream.mobile.BundledMusicRuntime");
         Object instance = runtime.getDeclaredConstructor(Context.class).newInstance(app);
         java.lang.reflect.Method run = runtime.getDeclaredMethod("execute", PreparedMusic.Control.class, File.class,
-                boolean.class, OfflineMusicLibrary.Progress.class, String[].class);
+                boolean.class, OfflineMusicLibrary.Progress.class, String.class, String[].class);
         run.setAccessible(true);
         java.lang.reflect.Method offer = runtime.getDeclaredMethod("maybeOfferStream", String.class, boolean.class,
                 File.class, PreparedMusic.Control.class);
@@ -237,11 +237,12 @@ public final class BlackBoxSmoke extends Instrumentation {
         assertPass("Prepare a fresh test directory", scratch.mkdir());
         Activity desktop = null;
         try {
-            String installed = (String) run.invoke(instance, new PreparedMusic.Control(), scratch, false, null, new String[] {"--version"});
+            String installed = (String) run.invoke(instance, new PreparedMusic.Control(), scratch, false, null, null,
+                    new String[] {"--version"});
             assertPass("Pinned Android Python runtime executes yt-dlp 2026.10.26", PreparedMusic.VERSION.equals(installed.trim()));
             File video = new File(scratch, "fixture.mp4");
             copyFixture("dawn.mp4", video);
-            String phases = (String) run.invoke(instance, new PreparedMusic.Control(), scratch, false, null,
+            String phases = (String) run.invoke(instance, new PreparedMusic.Control(), scratch, false, null, null,
                     new String[] {"--enable-file-urls", "--no-simulate", "--quiet", "--progress", "--newline",
                             "--progress-template", ProgressiveMusicAudio.PROGRESS_TEMPLATE,
                             "--print", "before_dl:BBX_DOWNLOAD_START %(ext)s", "-x", "--audio-format", "m4a",
@@ -658,7 +659,8 @@ public final class BlackBoxSmoke extends Instrumentation {
     }
 
     private void verifyOfflineFailureStages(Class<?> runtime) throws Exception {
-        java.lang.reflect.Method classify = runtime.getDeclaredMethod("providerFailure", String.class, MusicPreparationBudget.Phase.class);
+        java.lang.reflect.Method classify = runtime.getDeclaredMethod("providerFailure", String.class,
+                MusicPreparationBudget.Phase.class, String.class);
         classify.setAccessible(true);
         for (String[] test : new String[][] {
                 {"LOOKUP", "ERROR: The request timed out", "lookup-io"},
@@ -672,8 +674,29 @@ public final class BlackBoxSmoke extends Instrumentation {
                 {"LOOKUP", "ERROR: This video is only available to Music Premium members", "refused"},
                 {"FINALIZE", "ERROR: No space left on device", "storage"},
                 {"LOOKUP", "WARNING: HTTP Error 429\nERROR: No supported format", "helper"}}) {
-            Throwable failure = (Throwable) classify.invoke(null, test[1], MusicPreparationBudget.Phase.valueOf(test[0]));
+            Throwable failure = (Throwable) classify.invoke(null, test[1], MusicPreparationBudget.Phase.valueOf(test[0]), null);
             assertPass("Offline failure keeps its stage and reason: " + test[2], test[2].equals(OfflineMusicLibrary.classify(failure)));
+        }
+        String id = "STALE000001";
+        String watch = "ERROR: [youtube] " + id + ": Video unavailable";
+        String removed = watch + ". This video has been removed by the uploader.";
+        MusicPreparationBudget.Phase lookup = MusicPreparationBudget.Phase.LOOKUP;
+        Throwable direct = (Throwable) classify.invoke(null, removed, lookup, id);
+        assertPass("The direct Offline pin is eligible for one fresh search when confirmed removed",
+                direct instanceof OfflineMusicLibrary.SourceGone && id.equals(((OfflineMusicLibrary.SourceGone) direct).id));
+        for (Object[] test : new Object[][] {
+                {"BBX_PC_OPEN:" + id + "\n" + removed, lookup, "", "source-gone"},
+                {removed, lookup, "", "refused"}, // No selected source marker.
+                {removed, lookup, "OTHER000001", "refused"},
+                {removed, lookup, null, "refused"}, // Streaming preview keeps its policy.
+                {removed, MusicPreparationBudget.Phase.TRANSFER, id, "refused"},
+                {watch, lookup, id, "refused"},
+                {removed + "\nERROR: HTTP Error 403: Forbidden", lookup, id, "refused"},
+                {removed + "\nBBX_PROVIDER_SIGNIN", lookup, id, "signin"},
+                {removed + "\nBBX_PROVIDER_LIMITED", lookup, id, "limited"}}) {
+            Throwable failure = (Throwable) classify.invoke(null, test[0], test[1], test[2]);
+            assertPass("Fresh search is limited to a confirmed removed Offline watch source: " + test[3],
+                    test[3].equals(OfflineMusicLibrary.classify(failure)));
         }
         for (MusicPreparationBudget.Limit limit : MusicPreparationBudget.Limit.values())
             assertPass("Deadline is not labelled a connection error: " + limit.code,
