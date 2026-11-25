@@ -402,7 +402,9 @@ def check_background():
                  'Saved audio lost its media playback foreground service')
 
     def in_state(state):
-        return lambda dump: ('active=true' in dump and f'PlaybackState {{state={state},' in dump
+        # Newer Android dumps label the state (e.g. PLAYING(3)) instead of printing only its number.
+        pattern = re.compile(rf'\bPlaybackState \{{state=(?:[A-Z_]+\()?{state}\b')
+        return lambda dump: ('active=true' in dump and pattern.search(dump)
                              and any(second['title'] in line for line in dump.splitlines() if line.strip().startswith('metadata:')))
 
     wait_android(music_session, in_state(3), 'Saved playlist did not reach its next track behind Settings')
