@@ -23,7 +23,7 @@ from websocket import create_connection
 import check_blackbox_p11 as p11
 
 PKG = 'com.blackboxstream.mobile.offline.desktop'
-SIDE_PKG = 'com.blackboxstream.mobile.offline.retry'
+SIDE_PKG = 'com.blackboxstream.mobile.offline.refresh'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -189,19 +189,22 @@ def entries(js):
     return js('JSON.parse(OfflineMusic.library()).tracks')
 
 
-def write_staged(track, name, data):
-    directory = 'files/offline-music/staging/' + track['key']
-    p11.adb('shell', 'run-as', PKG, 'mkdir', '-p', directory)
+def write_fixture(target, data):
+    p11.adb('shell', 'run-as', PKG, 'mkdir', '-p', str(Path(target).parent))
     # Use the shell protocol so ADB waits for the device write to close. A raw exec-in
     # stream can lose its trailing bytes or fail to reflect the device exit code.
-    target = f'{directory}/{name}'
     subprocess.run(['adb', 'shell', '-T', f"run-as {PKG} sh -c 'base64 -d > {target}'"],
                    input=base64.b64encode(data), check=True, timeout=14)
-    verify_on_device(target, data, 'Staged ' + track['title'])
+    verify_on_device(target, data, 'Staged ' + target)
+
+
+def write_listing(track, entries, watch_errors=None):
+    data = json.dumps(dict(entries=entries, watch_errors=watch_errors or {})).encode('utf-8')
+    write_fixture(f'files/offline-music/fixture-listings/{track["key"]}.json', data)
 
 
 def stage(track, data):
-    write_staged(track, 'audio.m4a', data)
+    write_fixture(f'files/offline-music/staging/{track["key"]}/audio.m4a', data)
 
 def verify_on_device(path, data, label):
     # Hash the bytes in app storage, rather than reading a large binary buffer through ADB.
@@ -455,8 +458,7 @@ def check_unpinned_album(tone, tone_seconds):
     selected, remix = 'AUDIO000004', 'REMIX000004'
     source = dict(id=selected, title=title, channel='Black Sherif - Topic', duration=201)
     alternate = dict(source, id=remix, title=title + ' (Remix)', duration=seconds)
-    metadata = json.dumps(dict(entries=[alternate, source])).encode('utf8')
-    write_staged(row, 'pc-fixture.json', metadata)
+    write_listing(row, [alternate, source])
     route = f'/{selected}.m4a'
     counts = Counter()
     with recording_server({route: tone, f'/{remix}.m4a': tone}, counts=counts), page() as js:
@@ -473,6 +475,53 @@ def check_unpinned_album(tone, tone_seconds):
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Cold album playback was not offline')
         check_cold_seek(js, row, tone_seconds)
     print('PASS a PC-style unpinned source saved and played without a second metadata or duration check')
+
+
+def check_fresh_search(tone):
+    removed = 'Video unavailable. This video has been removed by the uploader.'
+    cases = [
+        # Exercise the existing pinned row without requesting its real audio.
+        ('On the Low', 'Burna Boy', 'African Giant', 'UFsskuvj8GQ', 'FRESH000001', removed, None, 'saved'),
+        ('Low Orbit', 'North Signal', 'Night Transit', 'STALE000002', 'FRESH000002', removed, removed, 'source-gone'),
+        ('Daylight', 'Fixture Artist', 'Test Album', 'STALE000003', 'FRESH000003', 'Video unavailable', None, 'refused'),
+    ]
+    tracks = [dict(ref=f'fixture:refresh:{i}', title=title, artist=artist, album=album, seconds=185)
+              for i, (title, artist, album, *_) in enumerate(cases)]
+    routes = {'/COVER000001.m4a': tone}
+    for _, _, _, _, new, _, _, _ in cases:
+        routes[f'/{new}.m4a'] = tone
+    counts = Counter()
+    airplane(True)
+    with page() as js:
+        open_music(js)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Fresh search trial started online')
+        request = json.dumps(dict(tracks=tracks, label='Controlled source refresh'))
+        js(f"OfflineMusic.queue('enqueue',{json.dumps(request)})")
+        rows = {row['ref']: row for row in entries(js)}
+        for track, (title, artist, _, old, new, before, after, _) in zip(tracks, cases):
+            row = rows[track['ref']]
+            first = dict(id=old, title=title, channel=artist + ' - Topic', duration=185)
+            cover = dict(first, id='COVER000001', title=f'{title} (Cover)')
+            replacement = dict(first, id=new, title=f'{title} (Official Audio)')
+            watch_errors = {old: before}
+            if after:
+                watch_errors[new] = after
+            write_listing(row, [first, cover, replacement], watch_errors)
+        with recording_server(routes, counts=counts):
+            airplane(False)
+            for track, (*_, outcome) in zip(tracks, cases):
+                row = rows[track['ref']]
+                key = row['key']
+                desired = "t.state==='saved'" if outcome == 'saved' else f"t.state==='failed' && t.reason==='{outcome}'"
+                wait(js, f"(()=>{{const t=JSON.parse(OfflineMusic.library()).tracks.find(t=>t.key==='{key}');"
+                         f"return {desired} && !t.retry}})()", f'Unexpected fresh search result for {row["title"]}', 45)
+                if outcome == 'saved':
+                    verify_bytes(row, tone)
+                else:
+                    p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', f'files/offline-music/saved/{key}.m4a')
+            if counts != {'/FRESH000001.m4a': 2}:
+                raise RuntimeError(f'Unexpected opens/transfers during the fresh search: {counts}')
+    print('::notice::PASS a removed source triggered one fresh search, saved the selected recording, and did not recover repeatedly or after a refusal')
 
 
 def check_provider_refusal():
@@ -758,6 +807,7 @@ def smoke(apk, root, upgrade_from=None, side_by_side=None):
     p11.run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=960:duration=213',
             '-c:a', 'aac', '-movflags', '+faststart', album_tone, timeout=30)
     check_unpinned_album(album_tone.read_bytes(), 213)
+    check_fresh_search(tones[ESPRESSO])
     check_provider_refusal()
     if side_by_side:
         force_stop()

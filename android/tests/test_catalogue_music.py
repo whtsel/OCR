@@ -333,13 +333,34 @@ class TestDesktopSave(unittest.TestCase):
         self.assertEqual(engine.downloads, [self.source['id']])
         self.assertIs(engine.transfer_inputs[0], info)  # Use the same extractor result, no second watch lookup.
         self.assertEqual(chosen, [self.source['id']])
-        self.assertEqual(stages, ['BBX_CATALOGUE_QUERY', 'BBX_PC_OPEN'])
+        self.assertEqual(stages, ['BBX_CATALOGUE_QUERY', 'BBX_PC_OPEN:' + self.source['id']])
 
         cached = DesktopEngine([], videos)
         self.assertFalse(resolver.prepare_pc(cached, *self.wanted, chosen.append, remembered=self.source['id']))
         self.assertEqual(cached.queries, [])
         self.assertEqual(cached.inspections, [self.source['id']])
         self.assertEqual(cached.downloads, [self.source['id']])
+
+    def test_pc_fresh_search_skips_the_removed_id_but_uses_the_same_selector(self):
+        gone = self.source['id']
+        cover = dict(self.source, id='COVER000001', title='Low Orbit (Cover)')
+        # The original ID would win the normal search and might still be listed by the provider.
+        rows = [self.source, cover, self.alternative]
+        engine = DesktopEngine(rows, {self.alternative['id']: self.alternative})
+        marks, stages = [], []
+        self.assertFalse(resolver.prepare_pc(engine, *self.wanted, marks.append,
+                                             remembered=gone, stage=stages.append, exclude=gone))
+        self.assertEqual(engine.queries, ['North Signal Low Orbit'])
+        self.assertEqual(engine.inspections, [self.alternative['id']])
+        self.assertEqual(engine.downloads, marks)
+        self.assertEqual(marks, [self.alternative['id']])
+        self.assertEqual(stages, ['BBX_PC_REFRESH', 'BBX_PC_OPEN:' + self.alternative['id']])
+
+        engine = DesktopEngine(rows[:2], {})
+        self.assertEqual(resolver.prepare_pc(engine, *self.wanted, marks.append, exclude=gone), 'BBX_NO_PC_MATCH')
+        self.assertEqual(engine.queries, ['North Signal Low Orbit'])
+        self.assertEqual(engine.inspections, [])
+        self.assertEqual(engine.downloads, [])
 
     def test_pc_does_not_substitute_after_a_refusal_or_failed_transfer(self):
         for message in ('HTTP Error 403', 'Sign in to confirm you are not a bot', 'HTTP Error 429'):

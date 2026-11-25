@@ -39,7 +39,7 @@ final class OfflineMusicLibrary {
 
     // Loading the standalone v90 build does not load any helper dependencies.
     interface Downloader {
-        File fetch(PreparedMusic.Track track, File staging, Progress progress) throws Exception;
+        File fetch(PreparedMusic.Track track, File staging, String excludedSource, Progress progress) throws Exception;
         default boolean needsLookup(PreparedMusic.Track track) { return true; }
         default void published(PreparedMusic.Track track, File staging) { }
     }
@@ -56,28 +56,36 @@ final class OfflineMusicLibrary {
         Refusal(String code, String message) { super(message); this.code = code; }
     }
 
+    // Only emitted when the selected watch source is confirmed gone, not for access or transfer failures.
+    static final class SourceGone extends IOException {
+        final String id;
+        SourceGone(String id) { super("The selected source was removed."); this.id = id; }
+    }
+
     private static final class Entry {
         final JSONObject info;
         final PreparedMusic.Track track;
-        final String batch, label, failure;
+        final String batch, label, failure, excludedSource;
         final boolean complete;
         final int autoRetries;
         final long retryAt;
 
-        Entry(JSONObject row, String batch, String label, String failure, boolean complete, int autoRetries) throws JSONException {
+        Entry(JSONObject row, String batch, String label, String failure, boolean complete, int autoRetries,
+                String excludedSource) throws JSONException {
             info = clean(row);
             JSONObject spec = new JSONObject(info.toString());
             // A missing edition/duration is a visible blocked queue item, not permission to look up a substitute.
             spec.put("source", "");
             track = new PreparedMusic.Track(spec, false);
             this.batch = batch; this.label = label; this.failure = failure; this.complete = complete;
+            this.excludedSource = PreparedMusic.videoId(excludedSource) ? excludedSource : "";
             this.autoRetries = Math.max(0, Math.min(MAX_AUTO_RETRIES, autoRetries));
             retryAt = 0; // A short, process-local backoff; the attempt budget survives reopening the app.
         }
 
-        private Entry(Entry prev, String reason, boolean complete, int autoRetries, long retryAt) {
+        private Entry(Entry prev, String reason, boolean complete, int autoRetries, long retryAt, String excludedSource) {
             info = prev.info; track = prev.track; batch = prev.batch; label = prev.label;
-            failure = reason; this.complete = complete;
+            failure = reason; this.complete = complete; this.excludedSource = excludedSource;
             this.autoRetries = autoRetries; this.retryAt = retryAt;
         }
 
@@ -100,12 +108,14 @@ final class OfflineMusicLibrary {
         }
 
         boolean identified() { return track.seconds > 0 && !track.album.isEmpty(); }
-        Entry result(String reason, boolean saved) { return new Entry(this, reason, saved, 0, 0); }
-        Entry retryAt(long when) { return new Entry(this, "", false, autoRetries + 1, when); }
+        Entry result(String reason, boolean saved) { return new Entry(this, reason, saved, 0, 0, ""); }
+        Entry refresh(String source) { return new Entry(this, "", false, autoRetries, 0, source); }
+        Entry retryAt(long when) { return new Entry(this, "", false, autoRetries + 1, when, excludedSource); }
         JSONObject encode() throws JSONException {
             JSONObject row = new JSONObject(info.toString()).put("batch", batch).put("label", label)
                     .put("failure", failure).put("complete", complete);
             if (autoRetries > 0) row.put("autoRetries", autoRetries);
+            if (!excludedSource.isEmpty()) row.put("excludedSource", excludedSource);
             return row;
         }
     }
@@ -144,7 +154,8 @@ final class OfflineMusicLibrary {
                 try {
                     JSONObject row = rows.getJSONObject(i);
                     Entry entry = new Entry(row, row.getString("batch"), row.getString("label"),
-                            row.getString("failure"), row.optBoolean("complete"), row.optInt("autoRetries"));
+                            row.getString("failure"), row.optBoolean("complete"), row.optInt("autoRetries"),
+                            row.optString("excludedSource"));
                     if (ready(entry) != null) entry = entry.result("", true); // A kill may land between rename and prefs write.
                     else if (entry.complete) entry = entry.result("missing", false);
                     entries.put(entry.track.key, entry);
@@ -217,7 +228,7 @@ final class OfflineMusicLibrary {
                     if (tracks.length() == 0 || tracks.length() > MAX_BATCH) return error("Queue up to 120 songs at a time.");
                     String batch = UUID.randomUUID().toString(), label = Entry.text(request, "label", 240);
                     for (int i = 0; i < tracks.length(); i++) {
-                        Entry entry = new Entry(tracks.getJSONObject(i), batch, label, "", false, 0);
+                        Entry entry = new Entry(tracks.getJSONObject(i), batch, label, "", false, 0, "");
                         if (!entry.identified()) entry = entry.result("metadata", false);
                         if (!entries.containsKey(entry.track.key) && entries.size() >= MAX_RECORDS) {
                             entries.clear(); entries.putAll(before);
@@ -359,7 +370,7 @@ final class OfflineMusicLibrary {
             if (entry.complete || !entry.failure.isEmpty() || entry.retryAt > now
                     || active.containsKey(entry.track.key) || ready(entry) != null) continue;
             File work = new File(stage, entry.track.key);
-            boolean lookup = downloader.needsLookup(entry.track);
+            boolean lookup = !entry.excludedSource.isEmpty() || downloader.needsLookup(entry.track);
             if (lookup && lookups >= PARALLEL_LOOKUPS) continue;
             if (lookup) lookups++;
             Job job = new Job(lookup);
@@ -374,7 +385,7 @@ final class OfflineMusicLibrary {
     }
 
     private void download(Entry entry, Job job, File work) {
-        String failure = "", key = entry.track.key;
+        String failure = "", gone = "", key = entry.track.key;
         boolean deferred = false, attempted = false;
         try {
             synchronized (this) {
@@ -383,7 +394,8 @@ final class OfflineMusicLibrary {
             if (!deferred) {
                 attempted = true;
                 if (!directory(work) || !directory(saved)) throw new Refusal("storage");
-                File result = downloader.fetch(entry.track, work, (phase, received, total) -> report(key, job, phase, received, total));
+                File result = downloader.fetch(entry.track, work, entry.excludedSource,
+                        (phase, received, total) -> report(key, job, phase, received, total));
                 // Like desktop, a successful helper run commits its completed output. No media probe.
                 if (!hasOutput(result) || !work.getCanonicalFile().equals(result.getCanonicalFile().getParentFile()))
                     throw new Refusal("incomplete");
@@ -393,6 +405,7 @@ final class OfflineMusicLibrary {
             }
         } catch (Exception | LinkageError stopped) {
             failure = classify(stopped);
+            if (stopped instanceof SourceGone && entry.excludedSource.isEmpty()) gone = ((SourceGone) stopped).id;
             // A lost transport can defer the attempt; a refusal or file failure cannot.
             deferred = link() == 0 && waitForConnection(failure);
         } finally {
@@ -404,7 +417,11 @@ final class OfflineMusicLibrary {
         }
         synchronized (this) {
             if (!deferred) {
-                if (entry.autoRetries < MAX_AUTO_RETRIES && retryAutomatically(failure)) {
+                if (!gone.isEmpty()) {
+                    // Give the fresh search a normal lookup slot. Do not spend a transfer retry,
+                    // and keep the failed source excluded if a subsequent transfer is interrupted.
+                    entries.put(key, entry.refresh(gone));
+                } else if (entry.autoRetries < MAX_AUTO_RETRIES && retryAutomatically(failure)) {
                     // Release both queue slots during backoff. The normal scheduler checks pause,
                     // network and cooldown again before starting any new helper process.
                     long delay = FIRST_RETRY_DELAY_MS << entry.autoRetries;
@@ -440,6 +457,7 @@ final class OfflineMusicLibrary {
     }
 
     static String classify(Throwable error) {
+        if (error instanceof SourceGone) return "source-gone";
         if (error instanceof Refusal) return ((Refusal) error).code;
         if (error instanceof PreparedMusic.ProviderRateLimited) return "limited";
         String problem = String.valueOf(error.getMessage()).toLowerCase(Locale.ROOT);

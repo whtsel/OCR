@@ -370,7 +370,7 @@ def pc_length(actual, expected):
     return not actual or not expected or abs(actual - expected) <= max(45, expected * .38)
 
 
-def pc_pick(entries, title, artist, seconds):
+def pc_pick(entries, title, artist, seconds, exclude=''):
     """Mirror bestFullTrackResult in the untouched desktop app.js (tested against it)."""
     wanted, words, credits = pc_text(title), pc_words(title), pc_words(artist)
     best, high = '', -999
@@ -378,7 +378,7 @@ def pc_pick(entries, title, artist, seconds):
         if not isinstance(item, dict):
             continue
         video = item.get('ytId') or item.get('id')
-        if not isinstance(video, str) or not VIDEO_ID.fullmatch(video):
+        if not isinstance(video, str) or not VIDEO_ID.fullmatch(video) or video == exclude:
             continue
         label = pc_text(item.get('title'))
         visible = f"{item.get('title') or ''} {item.get('channel') or ''}".lower()
@@ -397,16 +397,16 @@ def pc_pick(entries, title, artist, seconds):
     return best
 
 
-def prepare_pc(engine, title, artist, seconds, mark, remembered='', stage=lambda _: None, download=True):
+def prepare_pc(engine, title, artist, seconds, mark, remembered='', stage=lambda _: None, download=True, exclude=''):
     """Open the selected ID once and transfer with those same resolved formats."""
-    video = remembered if VIDEO_ID.fullmatch(remembered) else ''
+    video = remembered if not exclude and VIDEO_ID.fullmatch(remembered) else ''
     if not video:
-        stage('BBX_CATALOGUE_QUERY')
+        stage('BBX_PC_REFRESH' if exclude else 'BBX_CATALOGUE_QUERY')
         response = engine.extract_info(f'ytsearch{PC_SEARCH_COUNT}:{artist} {title}', download=False, process=False)
-        video = pc_pick((response or {}).get('entries'), title, artist, seconds)
+        video = pc_pick((response or {}).get('entries'), title, artist, seconds, exclude)
     if not video:
         return 'BBX_NO_PC_MATCH'
-    stage('BBX_PC_OPEN')
+    stage('BBX_PC_OPEN:' + video)
     # Keep the 1.5.4 extraction/transfer path, without a second title, live-label
     # or duration check. The extraction supplies the media URLs for the download.
     info = engine.extract_info(f'https://www.youtube.com/watch?v={video}', download=False, process=False)
@@ -436,7 +436,10 @@ class PcFixture:
     def extract_info(self, url, **options):
         if url.startswith('ytsearch'):
             return {'entries': self.data['entries']}
-        video = url.rsplit('=', 1)[1]  # Selected from the test listing by prepare_pc.
+        video = url.rsplit('=', 1)[1]
+        if problem := self.data.get('watch_errors', {}).get(video):
+            from yt_dlp.utils import DownloadError
+            raise DownloadError(f'[youtube] {video}: {problem}')
         return self.engine.extract_info(f'http://127.0.0.1:19090/{video}.m4a', **options)
 
     def process_ie_result(self, info, *, download):
@@ -446,6 +449,9 @@ class PcFixture:
 def main():
     pin, title, artist, album, seconds, remembered, policy, *options = sys.argv[1:]
     seconds = int(seconds)
+    exclude = ''
+    if policy.endswith('-refresh'):
+        policy, exclude, remembered = policy.removesuffix('-refresh'), remembered, ''
     sys.path.insert(0, pin)
     from yt_dlp import YoutubeDL, parse_options
     from yt_dlp.utils import DownloadError, ExtractorError
@@ -469,7 +475,7 @@ def main():
             if policy == 'pc-fixture':
                 engine = PcFixture(engine)
             if pc_save:
-                problem = prepare_pc(engine, title, artist, seconds, mark, remembered, stage, download)
+                problem = prepare_pc(engine, title, artist, seconds, mark, remembered, stage, download, exclude)
                 if problem:
                     print(problem, file=sys.stderr)
                 return 3 if problem else 0

@@ -272,7 +272,7 @@ final class SaveCheck {
             if (!flag.isFile() && !flag.createNewFile()) throw new OfflineMusicLibrary.Refusal("fixture");
         }
         beforeRequest(job);
-        return new WholeFileMusicRuntime(app).fetch(track, stage, (part, bytes, total) -> {
+        return new WholeFileMusicRuntime(app).fetch(track, stage, "", (part, bytes, total) -> {
             if ("downloading".equals(part)) phase(job, "transfer", bytes, total);
             else if ("finishing".equals(part)) phase(job, "finish", bytes, total);
         });

@@ -82,22 +82,24 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         return PIN.contentEquals(actual);
     }
 
+    private static final String PC_OPEN = "BBX_PC_OPEN:";
     private static final String BYTE_PROGRESS = "download:BBX_MEDIA:%(progress.status)s\n"
             + "BBX_BYTES:%(progress.status)s:%(progress.downloaded_bytes)s:%(progress.total_bytes)s";
 
     @Override public PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control) throws Exception {
-        return fetch(track, scratch, control, track.source, null, false, null);
+        return fetch(track, scratch, control, track.source, "", null, false, null);
     }
 
     /** Resolve like v90 desktop, then save one complete file without progressive playback. */
-    File saveOffline(PreparedMusic.Track track, File scratch, String pinned, String fixture,
+    File saveOffline(PreparedMusic.Track track, File scratch, String pinned, String excludedSource, String fixture,
             OfflineMusicLibrary.Progress progress) throws Exception {
-        PreparedMusic.Result result = fetch(track, scratch, new PreparedMusic.Control(), pinned, fixture, true, progress);
+        PreparedMusic.Result result = fetch(track, scratch, new PreparedMusic.Control(), pinned, excludedSource,
+                fixture, true, progress);
         return result == null ? null : result.audio;
     }
 
     private PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control,
-            String directId, String fixture, boolean offline, OfflineMusicLibrary.Progress progress) throws Exception {
+            String directId, String excludedSource, String fixture, boolean offline, OfflineMusicLibrary.Progress progress) throws Exception {
         if (control.cancelled) return null;
         // Download the accepted recording from the same v90 extractor session. Prefer AAC
         // when offered, no speculative second transfer, and no retry of a provider refusal.
@@ -111,29 +113,33 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         // A fresh resolution may pick a different transfer format; never append to old audio bytes.
         if (offline) options.add("--no-continue");
         File audio = new File(scratch, "audio.m4a");
-        boolean pcFixture = fixture != null && directId.isEmpty() && hasPcFixture(scratch);
+        boolean pcFixture = fixture != null && hasPcFixture(scratch);
         if (fixture != null && !pcFixture) {
             // Only the test APK may supply a native-generated local tone path; never a bridge URL.
             options.add("http://127.0.0.1:19090/" + fixture + ".m4a");
-            execute(control, scratch, false, progress, options.toArray(new String[0]));
+            execute(control, scratch, false, progress, null, options.toArray(new String[0]));
             return new PreparedMusic.Result(audio, "");
         }
-        if (!directId.isEmpty()) {
+        if (!directId.isEmpty() && !pcFixture) {
             if (!offline) {
                 int min = Math.max(1, track.seconds - 6);
                 int max = track.seconds == 0 ? PreparedMusic.MAX_SECONDS : track.seconds + 6;
                 options.addAll(Arrays.asList("--match-filters", "id = " + directId + " & !is_live & !was_live & duration >= " + min + " & duration <= " + max));
             }
             options.add("https://www.youtube.com/watch?v=" + directId);
-            execute(control, scratch, false, progress, options.toArray(new String[0]));
+            execute(control, scratch, false, progress, offline ? directId : null, options.toArray(new String[0]));
             return new PreparedMusic.Result(audio, directId);
         }
         new File(scratch, "source-id").delete();
         String artist = offline ? WholeFileMusicRuntime.lookupArtist(track) : track.artist;
         String policy = pcFixture ? "pc-fixture" : offline ? "pc" : "exact";
-        options.addAll(0, Arrays.asList(track.title, artist, track.album, Integer.toString(track.seconds),
-                pcFixture ? "" : remembered(track.key), policy));
-        execute(control, scratch, true, progress, options.toArray(new String[0]));
+        String source = pcFixture ? directId : remembered(track.key);
+        if (!excludedSource.isEmpty()) {
+            policy += "-refresh";
+            source = excludedSource; // Ignore remembered and pinned IDs on this search.
+        }
+        options.addAll(0, Arrays.asList(track.title, artist, track.album, Integer.toString(track.seconds), source, policy));
+        execute(control, scratch, true, progress, offline ? "" : null, options.toArray(new String[0]));
         if (control.cancelled) return null;
         return new PreparedMusic.Result(audio, offline ? "" : sourceId(scratch));
     }
@@ -198,7 +204,9 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         if (progress == null) return;
         if ("BBX_CATALOGUE_QUERY".equals(line) || "BBX_CATALOGUE_ALTERNATE".equals(line)) {
             progress.report("searching", 0, 0);
-        } else if ("BBX_PC_OPEN".equals(line)) {
+        } else if ("BBX_PC_REFRESH".equals(line)) {
+            progress.report("refreshing", 0, 0);
+        } else if (line.startsWith(PC_OPEN)) {
             progress.report("opening", 0, 0);
         } else if (line.startsWith("BBX_DOWNLOAD_START ")) {
             progress.report("downloading", 0, 0);
@@ -216,7 +224,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
     }
 
     private String execute(PreparedMusic.Control control, File scratch, boolean discover,
-            OfflineMusicLibrary.Progress progress, String... args) throws Exception {
+            OfflineMusicLibrary.Progress progress, String offlineSource, String... args) throws Exception {
         long initAt = SystemClock.elapsedRealtime();
         try { start(); }
         catch (Exception | LinkageError failed) {
@@ -269,7 +277,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                     else if (phase == MusicPreparationBudget.Phase.FINALIZE) control.stage("downloaded, finalize audio");
                     else if ("BBX_CATALOGUE_QUERY".equals(line)) control.stage("search catalogue");
                     else if ("BBX_CATALOGUE_ALTERNATE".equals(line)) control.stage("search alternate wording");
-                    else if ("BBX_PC_OPEN".equals(line)) control.stage("open selected source");
+                    else if (line.startsWith(PC_OPEN)) control.stage("open selected source");
                     else if ("BBX_CATALOGUE_VERIFY".equals(line)) control.stage("verify source metadata");
                     if (line.startsWith("BBX_PUBLIC_PROBE:")) {
                         if (probe && line.length() <= 1000) Log.i("BlackBoxMusic", line);
@@ -306,7 +314,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             reader.join(2000);
             if (control.cancelled) return "";
             String output = captured.toString();
-            if (child.exitValue() != 0) throw providerFailure(output, budget.currentPhase());
+            if (child.exitValue() != 0) throw providerFailure(output, budget.currentPhase(), offlineSource);
             return output;
         } finally {
             child.destroy();
@@ -314,10 +322,18 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         }
     }
 
-    static IOException providerFailure(String output, MusicPreparationBudget.Phase phase) {
+    static IOException providerFailure(String output, MusicPreparationBudget.Phase phase, String offlineSource) {
         // Use only failure lines and fixed companion markers, not progress or upload titles.
         StringBuilder problems = new StringBuilder();
+        String opened = offlineSource;
+        boolean gone = false;
         for (String line : output.split("\n")) {
+            if ("".equals(offlineSource) && line.startsWith(PC_OPEN)) {
+                opened = line.substring(PC_OPEN.length());
+                gone = false;
+            }
+            if (!gone && phase == MusicPreparationBudget.Phase.LOOKUP && PreparedMusic.videoId(opened))
+                gone = removedWatchSource(line, opened);
             if (line.startsWith("ERROR:") || line.startsWith("BBX_PROVIDER_") || line.equals("BBX_NO_EXACT_RECORDING")
                     || line.equals("BBX_NO_PC_MATCH") || line.equals("BBX_PC_INCOMPLETE_SOURCE"))
                 problems.append(line).append('\n');
@@ -329,11 +345,15 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                 || message.contains("sign-in") || message.contains("not a bot") || message.contains("login_required")
                 || message.contains("login required"))
             return new OfflineMusicLibrary.Refusal("signin", "The provider requires sign-in. No account session was used.");
-        if (message.contains("bbx_provider_refused") || message.contains("http error 403") || message.contains("video unavailable")
+        if (message.contains("bbx_provider_refused") || message.contains("http error 403")
                 || message.contains("private video") || message.contains("video is private") || message.contains("music premium")
                 || message.contains("premium members") || message.contains("members-only") || message.contains("members only")
                 || message.contains("subscriber-only") || message.contains("not available in your country")
                 || message.contains("not available in your region"))
+            return new OfflineMusicLibrary.Refusal("refused", "The provider did not allow this recording.");
+        if (gone) return new OfflineMusicLibrary.SourceGone(opened);
+        // “Video unavailable” by itself is ambiguous. It does not grant a fresh search.
+        if (message.contains("video unavailable"))
             return new OfflineMusicLibrary.Refusal("refused", "The provider did not allow this recording.");
         if (message.contains("bbx_no_pc_match"))
             return new OfflineMusicLibrary.Refusal("no-source", "No matching source was returned by the provider.");
@@ -353,5 +373,13 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             return new OfflineMusicLibrary.Refusal("lookup-io", "The provider lookup was interrupted. Nothing played.");
         }
         return new OfflineMusicLibrary.Refusal("helper", "The helper could not prepare this exact recording.");
+    }
+
+    private static boolean removedWatchSource(String line, String selected) {
+        String prefix = "ERROR: [youtube] " + selected + ": ";
+        if (!line.startsWith(prefix)) return false;
+        String reason = line.substring(prefix.length()).trim().toLowerCase(Locale.ROOT);
+        return reason.matches("(?:video unavailable\\. )?(?:this )?video (?:has been (?:removed|deleted)"
+                + "(?: by (?:the|its) uploader)?|does not exist)\\.?");
     }
 }

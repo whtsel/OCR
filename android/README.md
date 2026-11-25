@@ -4,9 +4,9 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.7** keeps background playback and adds automatic download
-retries. The installable ARM64 APK uses `com.blackboxstream.mobile.offline.retry`, so it can
-install without removing 1.5.4 or the 1.5.6 preview. It starts with its own Collection.
+**BlackBox Stream v90 Offline 1.5.8** adds a fresh search when a selected source is explicitly
+reported removed. The installable ARM64 APK uses `com.blackboxstream.mobile.offline.refresh`,
+so it installs alongside 1.5.7 without removing the older app. It starts with its own Collection.
 The default source build still uses `com.blackboxstream.mobile.offline.desktop`. Updating
 1.5.4 requires the original signing key, which that workflow did not retain. The temporary
 preview signing key is not an update key for an older installation. Android 7.0 or later
@@ -25,7 +25,11 @@ and an up-to-date System WebView are required. The original v90 expiry still app
   another; a provider rate limit pauses new jobs briefly. Progress rings show actual received bytes
   against a known transfer size, or spin during lookup and unknown-length transfers.
   The 1.5.4 **artist + song** ranking, known IDs, and existing fallback for titles that the PC
-  tokenizer cannot represent are unchanged. The 1.5.4 helper opens the selected source once and
+  tokenizer cannot represent are unchanged. If the PC-style save path gets a definite removal
+  for the selected watch source, it requeues the same song for one fresh artist-and-title search,
+  ignoring the pin or cached ID and excluding the removed result. If the replacement is also
+  removed, it stops rather than searching again. An ambiguous “Video unavailable” message or an
+  access refusal does not trigger this recovery. The helper opens the selected source once and
   transfers its resolved audio without a second title or duration gate. Regular Downloads do not
   probe the finished file. A save still needs a successful transfer and fresh, bounded output in
   the job directory, moved atomically to Collection. Temporary lookup or transfer failures and
@@ -49,7 +53,7 @@ Add `-PbbxOfflineSideBySide=true` for the separate package. The
 candidate and tests a same-signer x86 upgrade from the exact 1.5.4 source. The test update
 keeps saved bytes, playlists, and the Retry item, and saves a previously flagged fixture.
 Dispatch with `publish_apk=true` to also check the separate installation and upload its signed
-ARM64 APK. Controlled transfers exercise the retry limit, pause/resume, and refusal handling. The emulator
+ARM64 APK. Controlled transfers exercise fresh search, the retry limit, pause/resume, and refusal handling. The emulator
 also checks playlist continuation behind Android Settings in airplane mode, system media
 Pause/Play, and cleanup on Stop. These tests do not verify live provider downloads on a phone.
 Dispatch the workflow

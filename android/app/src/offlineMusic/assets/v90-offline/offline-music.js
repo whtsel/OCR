@@ -354,7 +354,7 @@
   const jobStatus = {working:'Preparing recording…', offline:'Waiting for internet',
     paused:'Paused', queued:'Queued', retrying:'Waiting to retry…', cooldown:'Waiting for the provider cooldown'};
   const failures = { metadata:'Recording details missing in the catalogue', exact:'Exact recording not verified',
-    'no-source':'No matching source found', 'incomplete-source':'Selected source did not report complete audio',
+    'no-source':'No matching source found', 'source-gone':'Selected source was removed', 'incomplete-source':'Selected source did not report complete audio',
     signin:'Provider requires sign-in', refused:'Provider refused this recording',
     'lookup-timeout':'Recording lookup timed out', 'lookup-io':'Provider lookup interrupted',
     'transfer-timeout':'Audio transfer timed out', 'transfer-idle':'Audio transfer stopped receiving data', 'transfer-io':'Audio transfer interrupted',
@@ -366,7 +366,7 @@
   let lastProgress = '';
   const size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB`
     : bytes >= 1024 ? `${Math.floor(bytes / 1024)} KB` : `${bytes} B`;
-  const phaseLabel = {preparing:'Preparing recording…', searching:'Finding recording…', opening:'Opening source…',
+  const phaseLabel = {preparing:'Preparing recording…', searching:'Finding recording…', refreshing:'Searching again for this recording…', opening:'Opening source…',
     downloading:'Downloading', finishing:'Finishing audio…'};
   const retryLabel = track => track.retry ? ` · Retry ${track.retry} of ${track.retryLimit}` : '';
   function progressRing(track, row) {
