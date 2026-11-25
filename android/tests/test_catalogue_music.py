@@ -304,66 +304,78 @@ class TestSelection(unittest.TestCase):
 
 
 class DesktopEngine(Engine):
-    def __init__(self, rows, outcome=0):
-        super().__init__(rows, {})
-        self.outcome = outcome
+    def __init__(self, rows, videos, transfer_error=None):
+        super().__init__(rows, videos)
+        self.transfer_error = transfer_error
+        self.transfer_inputs = []
 
-    def extract_info(self, url, **options):
-        if not url.startswith('ytsearch'):
-            raise AssertionError('The desktop route must not inspect selected metadata separately')
-        return super().extract_info(url, **options)
-
-    def download(self, urls):
-        self.downloads.extend(urls)
-        if isinstance(self.outcome, Exception):
-            raise self.outcome
-        return self.outcome
+    def process_ie_result(self, info, *, download):
+        self.transfer_inputs.append(info)
+        super().process_ie_result(info, download=download)
+        if self.transfer_error:
+            raise self.transfer_error
 
 
 class TestDesktopSave(unittest.TestCase):
     wanted = ('Low Orbit', 'North Signal', 183)
     source = dict(id='SOURCE00001', title='Low Orbit', channel='North Signal - Topic')
     alternative = dict(source, id='OTHER000001', title='Low Orbit (Official Audio)')
-    url = 'https://www.youtube.com/watch?v=SOURCE00001'
 
-    def test_cold_selection_downloads_the_id_without_a_second_check(self):
-        engine = DesktopEngine({'North Signal Low Orbit': [self.alternative, self.source]})
+    def test_pc_opens_once_then_transfers_without_a_metadata_gate(self):
+        # The listing picks this ID. The extractor's later title and duration would fail the old check.
+        info = dict(self.source, title='Low Orbit (Radio Edit)', duration=120)
+        videos = {self.source['id']: info}
+        engine = DesktopEngine({'North Signal Low Orbit': [self.alternative, self.source]}, videos)
         chosen, stages = [], []
         self.assertFalse(resolver.prepare_pc(engine, *self.wanted, chosen.append, stage=stages.append))
         self.assertEqual(engine.queries, ['North Signal Low Orbit'])
-        self.assertEqual(engine.inspections, [])
-        self.assertEqual(engine.downloads, [self.url])
+        self.assertEqual(engine.inspections, [self.source['id']])
+        self.assertEqual(engine.downloads, [self.source['id']])
+        self.assertIs(engine.transfer_inputs[0], info)  # Use the same extractor result, no second watch lookup.
         self.assertEqual(chosen, [self.source['id']])
         self.assertEqual(stages, ['BBX_CATALOGUE_QUERY', 'BBX_PC_OPEN'])
 
-        cached = DesktopEngine([])
+        cached = DesktopEngine([], videos)
         self.assertFalse(resolver.prepare_pc(cached, *self.wanted, chosen.append, remembered=self.source['id']))
         self.assertEqual(cached.queries, [])
-        self.assertEqual(cached.downloads, [self.url])
+        self.assertEqual(cached.inspections, [self.source['id']])
+        self.assertEqual(cached.downloads, [self.source['id']])
 
-    def test_desktop_download_does_not_substitute_after_a_refusal_or_failed_transfer(self):
+    def test_pc_does_not_substitute_after_a_refusal_or_failed_transfer(self):
         for message in ('HTTP Error 403', 'Sign in to confirm you are not a bot', 'HTTP Error 429'):
             with self.subTest(message=message):
-                engine = DesktopEngine([self.source, self.alternative], outcome=LookupError(message))
-                with self.assertRaises(LookupError):
+                engine = DesktopEngine([self.source, self.alternative], {self.source['id']: LookupError(message)})
+                with self.assertRaisesRegex(LookupError, message):
                     resolver.prepare_pc(engine, *self.wanted, lambda _: self.fail('failed source was marked saved'))
-                self.assertEqual(engine.downloads, [self.url])
-        engine = DesktopEngine([self.source, self.alternative], outcome=1)
-        self.assertEqual(resolver.prepare_pc(engine, *self.wanted, lambda _: self.fail('failed source was marked saved')),
-                         'BBX_PC_DOWNLOAD_FAILED')
-        self.assertEqual(engine.downloads, [self.url])
-        engine = DesktopEngine([dict(self.source, title='Low Orbit (Cover)')])
+                self.assertEqual(engine.inspections, [self.source['id']])
+                self.assertEqual(engine.downloads, [])
+        engine = DesktopEngine([self.source, self.alternative], {self.source['id']: self.source}, LookupError('short body'))
+        with self.assertRaisesRegex(LookupError, 'short body'):
+            resolver.prepare_pc(engine, *self.wanted, lambda _: self.fail('failed source was marked saved'))
+        self.assertEqual(engine.downloads, [self.source['id']])
+        engine = DesktopEngine([dict(self.source, title='Low Orbit (Cover)')], {})
         self.assertEqual(resolver.prepare_pc(engine, *self.wanted, lambda _: self.fail('cover selected')), 'BBX_NO_PC_MATCH')
+        self.assertEqual(engine.inspections, [])
         self.assertEqual(engine.downloads, [])
 
+    def test_pc_still_stops_for_an_invalid_or_restricted_source(self):
+        for result, marker in ((dict(self.source, availability='needs_auth'), 'BBX_PROVIDER_SIGNIN'),
+                               (dict(self.source, availability='premium_only'), 'BBX_PROVIDER_REFUSED'),
+                               (dict(self.source, _type='playlist'), 'BBX_PC_INCOMPLETE_SOURCE'),
+                               (self.alternative, 'BBX_PC_INCOMPLETE_SOURCE')):
+            with self.subTest(result=result):
+                engine = DesktopEngine([self.source], {self.source['id']: result})
+                self.assertEqual(resolver.prepare_pc(engine, *self.wanted, lambda _: self.fail('invalid source marked')), marker)
+                self.assertEqual(engine.downloads, [])
+
     def test_optional_source_hint_cannot_reject_a_completed_transfer(self):
-        engine = DesktopEngine([self.source])
+        engine = DesktopEngine([self.source], {self.source['id']: self.source})
 
         def cannot_remember(_):
             raise OSError('Source hint unavailable')
 
         self.assertFalse(resolver.prepare_pc(engine, *self.wanted, cannot_remember))
-        self.assertEqual(engine.downloads, [self.url])
+        self.assertEqual(engine.downloads, [self.source['id']])
 
 
 if __name__ == '__main__':

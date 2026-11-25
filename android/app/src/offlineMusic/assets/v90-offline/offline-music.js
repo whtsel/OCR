@@ -352,7 +352,7 @@
   }
 
   const jobStatus = {working:'Preparing recording…', offline:'Waiting for internet',
-    paused:'Paused', queued:'Queued', cooldown:'Waiting for the provider cooldown'};
+    paused:'Paused', queued:'Queued', retrying:'Waiting to retry…', cooldown:'Waiting for the provider cooldown'};
   const failures = { metadata:'Recording details missing in the catalogue', exact:'Exact recording not verified',
     'no-source':'No matching source found', 'incomplete-source':'Selected source did not report complete audio',
     signin:'Provider requires sign-in', refused:'Provider refused this recording',
@@ -368,6 +368,7 @@
     : bytes >= 1024 ? `${Math.floor(bytes / 1024)} KB` : `${bytes} B`;
   const phaseLabel = {preparing:'Preparing recording…', searching:'Finding recording…', opening:'Opening source…',
     downloading:'Downloading', finishing:'Finishing audio…'};
+  const retryLabel = track => track.retry ? ` · Retry ${track.retry} of ${track.retryLimit}` : '';
   function progressRing(track, row) {
     const wrap = node('div', 'om-progress is-indeterminate');
     wrap.setAttribute('role', 'progressbar');
@@ -386,7 +387,7 @@
     const number = node('span', 'om-progress-number');
     number.setAttribute('aria-hidden', 'true');
     wrap.append(svg, number);
-    progressRows.set(track.key, {wrap, number, status:row.querySelector('.om-status')});
+    progressRows.set(track.key, {wrap, number, status:row.querySelector('.om-status'), retry:retryLabel(track)});
     row.append(wrap);
   }
   function syncProgress() {
@@ -395,12 +396,12 @@
     if (raw === lastProgress) return;
     const jobs = JSON.parse(raw);
     lastProgress = raw;
-    for (const [key, {wrap, number, status}] of progressRows) {
+    for (const [key, {wrap, number, status, retry}] of progressRows) {
       const job = jobs[key];
       if (!job) continue;
       const known = job.total > 0 && job.received >= 0 && job.received <= job.total;
       const percent = known ? Math.floor(job.received / job.total * 100) : null;
-      const label = phaseLabel[job.phase] || phaseLabel.preparing;
+      const label = (phaseLabel[job.phase] || phaseLabel.preparing) + retry;
       const received = job.received > 0 && job.phase === 'downloading';
       status.textContent = received ? `${label} · ${size(job.received)}${known ? ` / ${size(job.total)}` : ''}` : label;
       wrap.classList.toggle('is-indeterminate', !known);
@@ -429,7 +430,7 @@
         const head = node('header'); head.append(node('strong', '', rows[0].label), node('small', '', count(rows.length))); block.append(head);
       }
       for (const track of rows) {
-        const row = card(track, jobStatus[track.state] || 'Queued', track.state === 'working' ? [] : [
+        const row = card(track, (jobStatus[track.state] || 'Queued') + retryLabel(track), track.state === 'working' ? [] : [
           button('✕', () => command('remove', track.key), 'om-round', `Remove ${track.title} from queue`)]);
         if (track.state === 'working') progressRing(track, row);
         block.append(row);

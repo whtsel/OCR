@@ -32,6 +32,8 @@ final class OfflineMusicLibrary {
     private static final int MAX_PLAYLISTS = 100;
     private static final int PARALLEL_DOWNLOADS = 5;
     private static final int PARALLEL_LOOKUPS = 2;
+    private static final int MAX_AUTO_RETRIES = 3;
+    private static final long FIRST_RETRY_DELAY_MS = 2_000;
     static final String TAG = "BlackBoxOfflineMusic";
     private static OfflineMusicLibrary instance;
 
@@ -59,19 +61,24 @@ final class OfflineMusicLibrary {
         final PreparedMusic.Track track;
         final String batch, label, failure;
         final boolean complete;
+        final int autoRetries;
+        final long retryAt;
 
-        Entry(JSONObject row, String batch, String label, String failure, boolean complete) throws JSONException {
+        Entry(JSONObject row, String batch, String label, String failure, boolean complete, int autoRetries) throws JSONException {
             info = clean(row);
             JSONObject spec = new JSONObject(info.toString());
             // A missing edition/duration is a visible blocked queue item, not permission to look up a substitute.
             spec.put("source", "");
             track = new PreparedMusic.Track(spec, false);
             this.batch = batch; this.label = label; this.failure = failure; this.complete = complete;
+            this.autoRetries = Math.max(0, Math.min(MAX_AUTO_RETRIES, autoRetries));
+            retryAt = 0; // A short, process-local backoff; the attempt budget survives reopening the app.
         }
 
-        private Entry(Entry prev, String reason, boolean complete) {
+        private Entry(Entry prev, String reason, boolean complete, int autoRetries, long retryAt) {
             info = prev.info; track = prev.track; batch = prev.batch; label = prev.label;
             failure = reason; this.complete = complete;
+            this.autoRetries = autoRetries; this.retryAt = retryAt;
         }
 
         private static String text(JSONObject row, String name, int limit) throws JSONException {
@@ -93,10 +100,13 @@ final class OfflineMusicLibrary {
         }
 
         boolean identified() { return track.seconds > 0 && !track.album.isEmpty(); }
-        Entry result(String reason, boolean saved) { return new Entry(this, reason, saved); }
+        Entry result(String reason, boolean saved) { return new Entry(this, reason, saved, 0, 0); }
+        Entry retryAt(long when) { return new Entry(this, "", false, autoRetries + 1, when); }
         JSONObject encode() throws JSONException {
-            return new JSONObject(info.toString()).put("batch", batch).put("label", label)
+            JSONObject row = new JSONObject(info.toString()).put("batch", batch).put("label", label)
                     .put("failure", failure).put("complete", complete);
+            if (autoRetries > 0) row.put("autoRetries", autoRetries);
+            return row;
         }
     }
 
@@ -112,7 +122,7 @@ final class OfflineMusicLibrary {
     }
 
     private final ExecutorService workers = Executors.newFixedThreadPool(PARALLEL_DOWNLOADS);
-    private final ScheduledExecutorService cooldown = Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledExecutorService wakeups = Executors.newSingleThreadScheduledExecutor();
     private final Map<String, Entry> entries = new LinkedHashMap<>();
     private JSONArray playlists = new JSONArray();
     private final Map<String, Job> active = new LinkedHashMap<>();
@@ -134,7 +144,7 @@ final class OfflineMusicLibrary {
                 try {
                     JSONObject row = rows.getJSONObject(i);
                     Entry entry = new Entry(row, row.getString("batch"), row.getString("label"),
-                            row.getString("failure"), row.optBoolean("complete"));
+                            row.getString("failure"), row.optBoolean("complete"), row.optInt("autoRetries"));
                     if (ready(entry) != null) entry = entry.result("", true); // A kill may land between rename and prefs write.
                     else if (entry.complete) entry = entry.result("missing", false);
                     entries.put(entry.track.key, entry);
@@ -207,7 +217,7 @@ final class OfflineMusicLibrary {
                     if (tracks.length() == 0 || tracks.length() > MAX_BATCH) return error("Queue up to 120 songs at a time.");
                     String batch = UUID.randomUUID().toString(), label = Entry.text(request, "label", 240);
                     for (int i = 0; i < tracks.length(); i++) {
-                        Entry entry = new Entry(tracks.getJSONObject(i), batch, label, "", false);
+                        Entry entry = new Entry(tracks.getJSONObject(i), batch, label, "", false, 0);
                         if (!entry.identified()) entry = entry.result("metadata", false);
                         if (!entries.containsKey(entry.track.key) && entries.size() >= MAX_RECORDS) {
                             entries.clear(); entries.putAll(before);
@@ -292,10 +302,13 @@ final class OfflineMusicLibrary {
                 else if (paused) status = "paused";
                 else if (link == 0) status = "offline";
                 else if (cooldownUntil > SystemClock.elapsedRealtime()) status = "cooldown";
+                else if (entry.autoRetries > 0) status = "retrying";
                 else status = "queued";
-                rows.put(new JSONObject(entry.info.toString()).put("key", entry.track.key).put("state", status)
+                JSONObject row = new JSONObject(entry.info.toString()).put("key", entry.track.key).put("state", status)
                         .put("batch", entry.batch).put("label", entry.label).put("reason", reason)
-                        .put("retryable", retryable(reason)));
+                        .put("retryable", retryable(reason));
+                if (entry.autoRetries > 0) row.put("retry", entry.autoRetries).put("retryLimit", MAX_AUTO_RETRIES);
+                rows.put(row);
             }
             lastLink = link;
             return lastSnapshot = new JSONObject().put("tracks", rows).put("paused", paused)
@@ -336,13 +349,15 @@ final class OfflineMusicLibrary {
     }
 
     private synchronized void kick() {
+        long now = SystemClock.elapsedRealtime();
         if (paused || active.size() >= PARALLEL_DOWNLOADS || downloader == null || V90Api.expired()
-                || cooldownUntil > SystemClock.elapsedRealtime() || link() == 0) return;
+                || cooldownUntil > now || link() == 0) return;
         int lookups = 0;
         for (Job job : active.values()) if (job.resolving) lookups++;
         for (Entry entry : entries.values()) {
             if (active.size() >= PARALLEL_DOWNLOADS) break;
-            if (entry.complete || !entry.failure.isEmpty() || active.containsKey(entry.track.key) || ready(entry) != null) continue;
+            if (entry.complete || !entry.failure.isEmpty() || entry.retryAt > now
+                    || active.containsKey(entry.track.key) || ready(entry) != null) continue;
             File work = new File(stage, entry.track.key);
             boolean lookup = downloader.needsLookup(entry.track);
             if (lookup && lookups >= PARALLEL_LOOKUPS) continue;
@@ -389,10 +404,18 @@ final class OfflineMusicLibrary {
         }
         synchronized (this) {
             if (!deferred) {
-                entries.put(key, entries.get(key).result(failure, failure.isEmpty()));
+                if (entry.autoRetries < MAX_AUTO_RETRIES && retryAutomatically(failure)) {
+                    // Release both queue slots during backoff. The normal scheduler checks pause,
+                    // network and cooldown again before starting any new helper process.
+                    long delay = FIRST_RETRY_DELAY_MS << entry.autoRetries;
+                    entries.put(key, entry.retryAt(SystemClock.elapsedRealtime() + delay));
+                    wakeups.schedule(this::kick, delay, TimeUnit.MILLISECONDS);
+                } else {
+                    entries.put(key, entry.result(failure, failure.isEmpty()));
+                }
                 if ("limited".equals(failure)) {
                     cooldownUntil = SystemClock.elapsedRealtime() + 60000;
-                    cooldown.schedule(() -> { synchronized (this) { lastSnapshot = null; kick(); } }, 60, TimeUnit.SECONDS);
+                    wakeups.schedule(() -> { synchronized (this) { lastSnapshot = null; kick(); } }, 60, TimeUnit.SECONDS);
                 }
                 try { persist(); } catch (IOException | JSONException ignored) { Log.w(TAG, "Music job result could not be recorded"); }
             }
@@ -400,6 +423,12 @@ final class OfflineMusicLibrary {
             lastSnapshot = null;
             kick();
         }
+    }
+
+    private static boolean retryAutomatically(String reason) {
+        // Never retry an access refusal, rate limit, catalogue mismatch, or local setup/storage error.
+        return waitForConnection(reason) || "finalize-timeout".equals(reason) || "finalize".equals(reason)
+                || "incomplete".equals(reason) || "helper".equals(reason);
     }
 
     private static boolean waitForConnection(String reason) {

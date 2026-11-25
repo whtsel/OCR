@@ -4,15 +4,14 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.6 (ARM64)** adds background playback of saved music and
-keeps the verification patch based on 1.5.4. The installable APK uses
-`com.blackboxstream.mobile.offline.background` so it can coexist with the previously signed
-1.5.4 app. It does not update or access the old app's Collection; keep that app installed to
-access its songs. The new installation starts with its own empty Collection. The default
-source build still uses `com.blackboxstream.mobile.offline.desktop` and can update the old app
-only if signed with its original key, which the 1.5.4 workflow did not retain. The CI test
-signer isn't a production update key. Android 7.0 or later and an up-to-date System WebView are
-required. The original v90 expiry still applies (end of 31 March 2027 UTC).
+The current fix targets the existing `com.blackboxstream.mobile.offline.desktop` package,
+keeps background playback, and adds automatic retries to Downloads. Updating the installed
+1.5.4 app requires its original signing key, which the 1.5.4 workflow did not retain.
+Keep that app installed to keep its saved songs. CI uses a temporary test key and does not
+publish an APK. The earlier 1.5.6 preview used `com.blackboxstream.mobile.offline.background`;
+it was a separate install with its own Collection, not an update or a migration.
+Android 7.0 or later and an up-to-date System WebView are required. The original v90 expiry
+still applies (end of 31 March 2027 UTC).
 
 - **Music → Find** keeps the original v90 Music discovery UI: fourteen genre shelves, instant and
   structured results, and ordered album tracklists. Suggestions and submitted results use the same
@@ -26,12 +25,14 @@ required. The original v90 expiry still applies (end of 31 March 2027 UTC).
   another; a provider rate limit pauses new jobs briefly. Progress rings show actual received bytes
   against a known transfer size, or spin during lookup and unknown-length transfers.
   The 1.5.4 **artist + song** ranking, known IDs, and existing fallback for titles that the PC
-  tokenizer cannot represent are unchanged. After choosing a source with the PC ranker, the
-  downloader opens that URL directly instead of requiring another metadata decision. Regular
-  Downloads no longer probe the finished file for audio or compare its duration. A save still
-  needs a successful helper run and a new, bounded output in the job directory, moved atomically
-  to Collection. Previously interrupted staging is discarded, not accepted as a save. Sign-in
-  requests and refusals remain failures, not a reason to substitute another source.
+  tokenizer cannot represent are unchanged. The 1.5.4 helper opens the selected source once and
+  transfers its resolved audio without a second title or duration gate. Regular Downloads do not
+  probe the finished file. A save still needs a successful transfer and fresh, bounded output in
+  the job directory, moved atomically to Collection. Temporary lookup or transfer failures and
+  incomplete output get up to **three automatic retries** with 2, 4 and 8 seconds of backoff.
+  They stay in Downloads while waiting and do not block the other queue slots. Pause and lack of
+  internet defer new attempts. After the last failure, manual **Retry** remains available. Sign-in,
+  refusal, and rate-limit responses do not auto-retry; the existing provider cooldown still applies.
 - **Collection** plays its saved, app-private files without the helper or a connection. Starting
   a saved song or playlist creates an Android media playback session. It continues when you open
   another app, including the next saved track in a playlist. Use Android's media controls to
@@ -41,15 +42,14 @@ required. The original v90 expiry still applies (end of 31 March 2027 UTC).
 - Movies, TV Series, Anime, My List, device Library/imports, and Local Share retain their Android
   workflows. The movie/TV/anime catalogue still needs your own TMDB key for online results.
 
-Build the separate package with `cd android && gradle :app:assembleRelease -PbbxOfflineMusic=true -PbbxOfflineSideBySide=true`
+Build the same-package candidate with `cd android && gradle :app:assembleRelease -PbbxOfflineMusic=true`
 (Gradle 8.9, JDK 17 and Android SDK 35; allow up to 3 GiB of Java heap for release dependencies).
-The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) verifies the signed
-ARM64 package and exercises x86 siblings with controlled media. It also builds the exact 1.5.4
-sources under the same test signer to check that an update retains saved bytes, the playlist
-and the Retry item, and that the previously flagged fixture now saves. The emulator switches to
-Android Settings in airplane mode and checks playlist continuation, system media Pause/Play,
-and cleanup on Stop. A separate-package install must leave the original Collection intact.
-These tests do not verify live provider availability or a specific phone's background policy.
+The [Offline Android workflow](../.github/workflows/blackbox-v90-offline.yml) verifies the ARM64
+candidate and tests a same-signer x86 upgrade from the exact 1.5.4 source. This checks that the
+update keeps saved bytes, playlists, and the Retry item, and saves a previously flagged fixture.
+Controlled transfers exercise the retry limit, pause/resume, and refusal handling. The emulator
+also checks playlist continuation behind Android Settings in airplane mode, system media
+Pause/Play, and cleanup on Stop. These tests do not verify live provider downloads on a phone.
 Dispatch the workflow
 with `verify_live_catalogue=true` to compare a fresh **Espresso** save from the original Find
 with a fresh save in the archived-helper pilot. Both select `51zjlMhdSTE` and run on the same x86
@@ -78,9 +78,9 @@ fixture gate is not a live provider test.
 - `node --test android/tests/test_pc_offline_selection.cjs` runs the shipped PC selector and the
   Android mirror on the same listings and compares their selected IDs. This tests the ranking,
   not whether a provider returns the same listing on each platform.
-- `python3 -B android/tests/test_catalogue_music.py` checks that PC selection uses only one download
-  URL without a second metadata inspection, never substitutes after a refusal, and leaves the
-  separate streaming preview's exact resolver intact.
+- `python3 -B android/tests/test_catalogue_music.py` checks that the selected source opens once
+  for transfer, with no additional metadata gate. Refusals do not trigger another source, and the
+  separate streaming preview's exact resolver is unchanged.
 
 ### Confirmed phone save: Espresso
 

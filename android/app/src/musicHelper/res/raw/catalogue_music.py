@@ -398,7 +398,7 @@ def pc_pick(entries, title, artist, seconds):
 
 
 def prepare_pc(engine, title, artist, seconds, mark, remembered='', stage=lambda _: None, download=True):
-    """Pick an ID from the listing, then give that URL directly to the downloader."""
+    """Open the selected ID once and transfer with those same resolved formats."""
     video = remembered if VIDEO_ID.fullmatch(remembered) else ''
     if not video:
         stage('BBX_CATALOGUE_QUERY')
@@ -407,8 +407,15 @@ def prepare_pc(engine, title, artist, seconds, mark, remembered='', stage=lambda
     if not video:
         return 'BBX_NO_PC_MATCH'
     stage('BBX_PC_OPEN')
-    if download and engine.download([f'https://www.youtube.com/watch?v={video}']):
-        return 'BBX_PC_DOWNLOAD_FAILED'
+    # Keep the 1.5.4 extraction/transfer path, without a second title, live-label
+    # or duration check. The extraction supplies the media URLs for the download.
+    info = engine.extract_info(f'https://www.youtube.com/watch?v={video}', download=False, process=False)
+    if not isinstance(info, dict) or info.get('id') != video or info.get('_type', 'video') != 'video':
+        return 'BBX_PC_INCOMPLETE_SOURCE'
+    if info.get('availability') not in (None, 'public', 'unlisted'):
+        return 'BBX_PROVIDER_SIGNIN' if info['availability'] == 'needs_auth' else 'BBX_PROVIDER_REFUSED'
+    if download:
+        engine.process_ie_result(info, download=True)
     try:
         mark(video)  # Optional hint, not a condition for saving a completed file.
     except OSError:
@@ -426,14 +433,14 @@ class PcFixture:
             raise ValueError('Oversized resolver fixture')
         self.data = json.loads(data)
 
-    def extract_info(self, url, **_):
-        if not url.startswith('ytsearch'):
-            raise ValueError('PC resolution must not make a separate metadata inspection')
-        return {'entries': self.data['entries']}
+    def extract_info(self, url, **options):
+        if url.startswith('ytsearch'):
+            return {'entries': self.data['entries']}
+        video = url.rsplit('=', 1)[1]  # Selected from the test listing by prepare_pc.
+        return self.engine.extract_info(f'http://127.0.0.1:19090/{video}.m4a', **options)
 
-    def download(self, urls):
-        video = urls[0].rsplit('=', 1)[1]  # Selected from the test listing by prepare_pc.
-        return self.engine.download([f'http://127.0.0.1:19090/{video}.m4a'])
+    def process_ie_result(self, info, *, download):
+        return self.engine.process_ie_result(info, download=download)
 
 
 def main():
@@ -444,6 +451,11 @@ def main():
     from yt_dlp.utils import DownloadError, ExtractorError
 
     params = parse_options(options).ydl_opts
+    pc_save = policy in ('pc', 'pc-fixture') and bool(pc_words(title))
+    if pc_save:
+        # This path calls process_ie_result directly, not the CLI's exit-code wrapper.
+        # Propagate transfer/postprocessing failures before offering any file to Android.
+        params['ignoreerrors'] = False
 
     def stage(marker):
         print(marker, flush=True)
@@ -456,7 +468,7 @@ def main():
             download = not params.get('simulate')
             if policy == 'pc-fixture':
                 engine = PcFixture(engine)
-            if policy in ('pc', 'pc-fixture') and pc_words(title):
+            if pc_save:
                 problem = prepare_pc(engine, title, artist, seconds, mark, remembered, stage, download)
                 if problem:
                     print(problem, file=sys.stderr)

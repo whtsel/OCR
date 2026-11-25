@@ -5,6 +5,7 @@ The separate --live diagnostic requests one catalogue song without a fixture or 
 """
 import argparse
 import base64
+from collections import Counter
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
@@ -110,11 +111,12 @@ def force_stop():
 
 
 @contextmanager
-def recording_server(payloads, holds=None, unknown=(), before_headers=None, started=None, short_body=()):
+def recording_server(payloads, holds=None, unknown=(), before_headers=None, started=None, short_body=(), counts=None):
     """Real helper subprocesses over adb reverse; never contact a music provider."""
     holds = holds or {}
     before_headers = before_headers or {}
     seen = set()
+    count_lock = threading.Lock()
 
     class Fixture(BaseHTTPRequestHandler):
         def serve(self, send_body):
@@ -124,6 +126,9 @@ def recording_server(payloads, holds=None, unknown=(), before_headers=None, star
                 return
             if started is not None:
                 started.add(self.path)
+            if send_body and counts is not None:
+                with count_lock:
+                    counts[self.path] += 1
             gate = before_headers.get(self.path)
             if gate is not None and not gate.wait(timeout=18):
                 self.send_error(504)
@@ -445,20 +450,21 @@ def check_unpinned_album(tone, tone_seconds):
     key = row['key']
     for file in (f'files/offline-music/staging/{key}', f'files/offline-music/saved/{key}.m4a'):
         p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', file)
-    # An unpinned PC listing, no separate watch metadata. The completed tone has
-    # neither the catalogue duration nor the selected listing's reported duration.
+    # An unpinned PC listing. Open and transfer that chosen ID; the complete tone
+    # has neither the catalogue duration nor the selected listing's reported duration.
     selected, remix = 'AUDIO000004', 'REMIX000004'
     source = dict(id=selected, title=title, channel='Black Sherif - Topic', duration=201)
     alternate = dict(source, id=remix, title=title + ' (Remix)', duration=seconds)
     metadata = json.dumps(dict(entries=[alternate, source])).encode('utf8')
     write_staged(row, 'pc-fixture.json', metadata)
     route = f'/{selected}.m4a'
-    with recording_server({route: tone, f'/{remix}.m4a': tone}) as requests, page() as js:
+    counts = Counter()
+    with recording_server({route: tone, f'/{remix}.m4a': tone}, counts=counts), page() as js:
         airplane(False)
         wait(js, f"JSON.parse(OfflineMusic.library()).tracks.some(t=>t.key==='{key}'&&t.state==='saved')",
              'The completed helper output was not published without verification', 75)
-        if requests != {route}:
-            raise RuntimeError('The desktop selector did not transfer just the chosen source')
+        if counts != {route: 2}:  # One open request and one transfer, not a second source extraction.
+            raise RuntimeError(f'The desktop selector did not open and transfer just the chosen source: {counts}')
         verify_bytes(row, tone)
     force_stop()
     airplane(True)
@@ -483,15 +489,15 @@ def check_provider_refusal():
             raise RuntimeError('Synthetic refusal row did not wait for the fixture server')
         key = row['key']
         route = f'/{key}.m4a'
-        started = set()
+        counts = Counter()
         click(js, '#om-tab-downloads')
-        with recording_server({route: 403}, started=started):
+        with recording_server({route: 403}, counts=counts):
             airplane(False)
             wait(js, f"(()=>{{const t=JSON.parse(OfflineMusic.library()).tracks.find(t=>t.key==='{key}');"
                      "return t.state==='failed' && t.reason==='refused' && !t.retryable})()",
                  'A provider refusal was treated as a retryable lookup or transfer error', 35)
-            if started != {route}:
-                raise RuntimeError('The helper did not reach the synthetic refusal')
+            if counts != {route: 1}:
+                raise RuntimeError(f'Provider refusal did not stop after one request: {counts}')
         wait(js, "document.querySelector('#om-issues').textContent.includes('Provider refused this recording')"
                  " && !document.querySelector('[aria-label=\"Retry Synthetic refusal\"]')",
              'Downloads did not show a non-retryable refusal')
@@ -662,17 +668,26 @@ def smoke(apk, root, upgrade_from=None, side_by_side=None):
     kwaku_route = f'/{TRACKS[KWAKU][0]}.m4a'
     short = {kwaku_route}
     routes = {f'/{video}.m4a': tones[title] for title, (video, _) in TRACKS.items()}
-    with recording_server(routes, short_body=short) as received, page() as js:
+    counts = Counter()
+    with recording_server(routes, short_body=short, counts=counts) as received, page() as js:
         open_music(js)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Android reconnected before queue recovery')
         if [t['state'] for t in entries(js)] != ['offline', 'offline']:
             raise RuntimeError('Queue did not survive force-stop')
+        click(js, '#om-tab-downloads')
         airplane(False)
+        wait(js, "JSON.parse(OfflineMusic.library()).tracks[0].state==='retrying' && "
+                 "document.querySelector('#om-pending').textContent.includes('Retry 1 of 3')",
+             'A short transfer was flagged before the first automatic retry', 35)
         wait(js, "JSON.parse(OfflineMusic.library()).tracks.map(t=>t.state).join(',')==='failed,saved'",
-             'A failed transfer was published or stopped the independent job', 115)
+             'An exhausted download was published or stopped the independent job', 115)
         failed, complete = entries(js)
-        if not failed['retryable'] or received != set(routes):
-            raise RuntimeError('Stale staging bypassed the intended interrupted transfer')
+        # The pinned helper makes an open and a transfer GET per attempt. Three
+        # automatic retries plus the initial attempt means eight GETs for Kwaku.
+        expected = dict.fromkeys(routes, 2)
+        expected[kwaku_route] = 8
+        if not failed['retryable'] or received != set(routes) or counts != expected:
+            raise RuntimeError(f'Expected exactly three retries without publishing stale staging: {counts}')
         p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', f'files/offline-music/saved/{failed["key"]}.m4a')
         verify_bytes(complete, tones[ESPRESSO])
         airplane(True)
@@ -682,12 +697,22 @@ def smoke(apk, root, upgrade_from=None, side_by_side=None):
         wait(js, f'!!document.querySelector({json.dumps(retry)})', 'The exact failed recording did not appear in Needs attention')
         click(js, retry)
         wait(js, "JSON.parse(OfflineMusic.library()).tracks[0].state==='offline'", 'Retry did not respect offline mode')
-        short.clear()
-        received.clear()
+        counts.clear()
         airplane(False)
-        wait(js, "JSON.parse(OfflineMusic.library()).tracks.every(t=>t.state==='saved')", 'Retry did not save the completed file', 65)
-        if kwaku_route not in received:
-            raise RuntimeError('Retry did not request the full recording')
+        wait(js, "(()=>{const t=JSON.parse(OfflineMusic.library()).tracks[0];"
+                 "return t.state==='retrying' && t.retry===3})()",
+             'Manual Retry did not start a fresh bounded series of attempts', 65)
+        click(js, '#om-pause')
+        wait(js, "JSON.parse(OfflineMusic.library()).tracks[0].state==='paused'", 'Pause ignored a pending retry')
+        time.sleep(8.2)  # Let the third retry's eight-second backoff expire while paused.
+        if counts != {kwaku_route: 6}:
+            raise RuntimeError(f'An automatic retry did not wait for Resume: {counts}')
+        short.clear()
+        click(js, '#om-pause')
+        wait(js, "JSON.parse(OfflineMusic.library()).tracks.every(t=>t.state==='saved')",
+             'The third automatic retry did not save after Resume', 65)
+        if counts != {kwaku_route: 8}:
+            raise RuntimeError(f'The automatic retry did not transfer the full recording once: {counts}')
         verify_bytes(failed, tones[KWAKU])
         click(js, '#om-tab-collection')
         click(js, '#om-new-playlist')
@@ -695,7 +720,7 @@ def smoke(apk, root, upgrade_from=None, side_by_side=None):
         click(js, '#om-playlist-save')
         if js("document.querySelector('#om-playlist-dialog').open") or not js("JSON.parse(OfflineMusic.library()).playlists.some(l=>l.name==='Offline fixture' && l.keys.length===2)"):
             raise RuntimeError('The playlist did not commit both exact saved songs')
-        print('::notice::PASS durable queue, stale staging discarded, interrupted helper transfer not published, verified retry bytes')
+        print('::notice::PASS three automatic retries, no partial save, independent queue progress, pause/resume, and complete bytes on recovery')
     force_stop()
     airplane(True)
     p11.adb('logcat', '-c')

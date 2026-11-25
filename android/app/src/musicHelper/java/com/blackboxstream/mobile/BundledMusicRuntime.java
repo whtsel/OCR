@@ -319,7 +319,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         StringBuilder problems = new StringBuilder();
         for (String line : output.split("\n")) {
             if (line.startsWith("ERROR:") || line.startsWith("BBX_PROVIDER_") || line.equals("BBX_NO_EXACT_RECORDING")
-                    || line.equals("BBX_NO_PC_MATCH"))
+                    || line.equals("BBX_NO_PC_MATCH") || line.equals("BBX_PC_INCOMPLETE_SOURCE"))
                 problems.append(line).append('\n');
         }
         String message = problems.toString().toLowerCase(Locale.ROOT);
@@ -337,6 +337,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             return new OfflineMusicLibrary.Refusal("refused", "The provider did not allow this recording.");
         if (message.contains("bbx_no_pc_match"))
             return new OfflineMusicLibrary.Refusal("no-source", "No matching source was returned by the provider.");
+        if (message.contains("bbx_pc_incomplete_source"))
+            return new OfflineMusicLibrary.Refusal("incomplete-source", "The selected source did not describe complete audio.");
         if (message.contains("bbx_no_exact_recording"))
             return new OfflineMusicLibrary.Refusal("exact", "No exact full recording could be verified. Nothing else was played.");
         if (message.contains("no space left"))
