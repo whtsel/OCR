@@ -44,7 +44,7 @@ public final class OfflineMusicService extends Service {
     static boolean isOfflineBuild(Context context) {
         String pkg = context.getPackageName();
         return "com.blackboxstream.mobile.offline.desktop".equals(pkg)
-                || "com.blackboxstream.mobile.offline.background".equals(pkg);
+                || "com.blackboxstream.mobile.offline.retry".equals(pkg);
     }
 
     static String snapshot() {
