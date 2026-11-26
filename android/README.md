@@ -4,9 +4,9 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.10** lets five songs start together and gives a selected
-source its own opening deadline. The installable ARM64 APK uses
-`com.blackboxstream.mobile.offline.parallel`, so it installs alongside previous versions
+**BlackBox Stream v90 Offline 1.5.11** resolves new catalogue downloads with an artist/title
+search instead of built-in recording IDs. The installable ARM64 APK uses
+`com.blackboxstream.mobile.offline.resolve`, so it installs alongside previous versions
 without removing them. It starts with its own Collection.
 The default source build still uses `com.blackboxstream.mobile.offline.desktop`. Updating
 1.5.4 requires the original signing key, which that workflow did not retain. The temporary
@@ -24,18 +24,18 @@ and an up-to-date System WebView are required. The original v90 expiry still app
   A song occupies one slot from lookup through publication, so a sixth waits for a slot to free up.
   Offline artist/title resolution has up to 80 seconds after helper launch to select a source, then
   up to 80 seconds to open the first selected source and start transfer. A repeated or late
-  selection cannot reset that deadline. Direct known-ID opens and the streaming preview keep
-  their previous deadlines. This addresses lookup timeouts, not sources that fail to open early.
+  selection cannot reset that deadline. The separate streaming preview keeps its previous deadlines.
   Pause lets active jobs finish but does not start another; a provider rate limit pauses new jobs
   briefly. Progress rings show actual received bytes against a known transfer size, or spin during
   lookup and unknown-length transfers.
-  The 1.5.4 **artist + song** ranking, known IDs, and existing fallback for titles that the PC
-  tokenizer cannot represent are unchanged. If the selected source was removed or its open
-  request returns only “Video unavailable,” Downloads requeues the same song for one fresh
-  artist-and-title search, skipping the old ID. A second unavailable source stops rather than
-  searching again. Downloads marks failed rows when a fresh search was attempted. Explicit
-  access refusals, sign-in, rate limits, and errors during the transfer do not trigger a fresh
-  search. The helper opens the selected source once and
+  The desktop-style **artist + song** ranking stays the same, with strict matching for titles
+  that the PC tokenizer cannot represent. No catalogue row has a preset download ID. A source
+  is remembered for that exact release only after its complete file is saved. If the selected
+  source was removed or its open request returns only “Video unavailable,” Downloads forgets
+  any matching hint and requeues the same song for one fresh search, skipping the old ID.
+  A second unavailable source stops. Downloads marks failed rows when a fresh search was
+  attempted. Explicit access refusals, sign-in, rate limits, and errors during transfer do not
+  trigger a fresh search. The helper opens the selected source once and
   transfers its resolved audio without a second title or duration gate. Regular Downloads do not
   probe the finished file. A save still needs a successful transfer and fresh, bounded output in
   the job directory, moved atomically to Collection. Temporary lookup or transfer failures and
@@ -64,10 +64,10 @@ also checks playlist continuation behind Android Settings in airplane mode, syst
 Pause/Play, and cleanup on Stop. These tests do not verify live provider downloads on a phone.
 Dispatch the workflow
 with `verify_live_catalogue=true` to compare a fresh **Espresso** save from the original Find
-with a fresh save in the archived-helper pilot. Both select `51zjlMhdSTE` and run on the same x86
-emulator, without preseeded files or account credentials. The pilot calls the archived `audio(id)`
-method, whereas full v90 uses its own bounded helper runner. Matching helper hashes are not proof of
-matching behavior. A live pass requires a newly published, playable file and a seek beyond halfway
+with a fresh save in the archived-helper pilot. They run on the same x86 emulator without preseeded
+files or account credentials. Full v90 searches by artist and title; the pilot calls the archived
+`audio(id)` method with `51zjlMhdSTE`. Use the isolated fixed-source Save Check for a comparison
+that holds the media ID constant. Matching helper hashes are not proof of matching behavior. A live pass requires a newly published, playable file and a seek beyond halfway
 after force-stop with networking off. Refusals are reported, not worked around; this diagnostic
 publishes no APK. The test signing key is not a production update key.
 
@@ -83,16 +83,15 @@ Espresso recording, with one explicit attempt at a time, separate empty audio st
 local result text. It does not import, update or overwrite either installed music app. Its
 fixture gate is not a live provider test.
 
-### Download Test 3: diagnose a failed save on the phone
+### Download Test 4: diagnose a failed save on the phone
 
 Dispatch the Offline workflow with **`publish_download_test=true`** for the separate, signed ARM64
-**BlackBox Stream v90 Download Test 3** APK. It installs alongside the normal app and the previous
-Download Tests with its own empty Collection. It runs the same 1.5.10 queue, deadlines, selection,
+**BlackBox Stream v90 Download Test 4** APK. It installs alongside the normal app and previous
+Download Tests with its own empty Collection. It runs the same 1.5.11 queue, deadlines, selection,
 transfer, publication, and retries; it adds no network requests, verification pass, or refusal workaround.
 
-1. In **Music → Find**, queue just **JOY!** (*Echo The Angels*) and let the queue clear. Then queue a
-   known-good control, such as **Espresso**, on the same connection. Try **On the Low** (*African Giant*)
-   separately if diagnosing that recording too.
+1. In **Music → Find**, queue just the failing song and let the queue clear. Then queue a song that
+   normally saves on the same connection.
 2. Tap **Music → Downloads → Copy test report** and paste the text into the support conversation.
    No IDs, account sign-in, developer tools, or raw logs are needed.
 

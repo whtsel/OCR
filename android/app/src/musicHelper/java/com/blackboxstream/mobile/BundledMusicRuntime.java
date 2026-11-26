@@ -35,12 +35,15 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
     private boolean ready;
     private String companion;
 
-    BundledMusicRuntime(Context app) {
+    BundledMusicRuntime(Context app) { this(app, false); }
+
+    BundledMusicRuntime(Context app, boolean fixtureOnly) {
         this.app = app;
         root = new File(app.getNoBackupFilesDir(), "youtubedl-android");
         nativeDir = new File(app.getApplicationInfo().nativeLibraryDir);
         script = new File(root, "yt-dlp/yt-dlp");
-        sourceHints = new AtomicFile(new File(root, "recording-sources-v1.json"));
+        // Each APK has its own storage. Only debug fixtures use a separate cache of synthetic IDs.
+        sourceHints = new AtomicFile(new File(root, fixtureOnly ? "fixture-recording-sources-v1.json" : "recording-sources-v1.json"));
     }
 
     @Override public void warm() throws Exception { start(); }
@@ -91,12 +94,22 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         return fetch(track, scratch, control, track.source, "", null, false, null);
     }
 
-    /** Resolve like v90 desktop, then save one complete file without progressive playback. */
-    File saveOffline(PreparedMusic.Track track, File scratch, String pinned, String excludedSource, String fixture,
+    /** Resolve and save one whole file. Downloads passes no direct ID; the isolated Save Check can. */
+    File saveOffline(PreparedMusic.Track track, File scratch, String directId, String excludedSource, String fixture,
             OfflineMusicLibrary.Progress progress) throws Exception {
-        PreparedMusic.Result result = fetch(track, scratch, new PreparedMusic.Control(), pinned, excludedSource,
-                fixture, true, progress);
-        return result == null ? null : result.audio;
+        try {
+            PreparedMusic.Result result = fetch(track, scratch, new PreparedMusic.Control(), directId, excludedSource,
+                    fixture, true, progress);
+            return result == null ? null : result.audio;
+        } catch (OfflineMusicLibrary.SourceUnavailable gone) {
+            // Only an eligible selected-source error invalidates a successful hint, never a
+            // transport interruption or permission refusal. The queue still owns the one refresh.
+            if (directId.isEmpty()) {
+                try { forgetSource(track.key, gone.id); }
+                catch (RuntimeException ignored) { /* Cache maintenance cannot replace the real outcome. */ }
+            }
+            throw gone;
+        }
     }
 
     private PreparedMusic.Result fetch(PreparedMusic.Track track, File scratch, PreparedMusic.Control control,
@@ -126,7 +139,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             return new PreparedMusic.Result(audio, "");
         }
         if (!directId.isEmpty() && !pcFixture) {
-            if (test != null) test.choose("built-in ID", directId);
+            if (test != null) test.choose("fixed test source", directId);
             if (!offline) {
                 int min = Math.max(1, track.seconds - 6);
                 int max = track.seconds == 0 ? PreparedMusic.MAX_SECONDS : track.seconds + 6;
@@ -139,14 +152,10 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         new File(scratch, "source-id").delete();
         String artist = offline ? WholeFileMusicRuntime.lookupArtist(track) : track.artist;
         String policy = pcFixture ? "pc-fixture" : offline ? "pc" : "exact";
-        String source = pcFixture ? directId : remembered(track.key);
-        if (!excludedSource.isEmpty()) {
-            policy += "-refresh";
-            source = excludedSource; // Ignore remembered and pinned IDs on this search.
-        }
+        String source = excludedSource.isEmpty() ? remembered(track.key) : excludedSource;
+        if (!excludedSource.isEmpty()) policy += "-refresh"; // This argument is an exclusion, not a source hint.
         if (test != null) {
             if (!excludedSource.isEmpty()) test.choose("fresh search", "");
-            else if (!directId.isEmpty()) test.choose("built-in ID", directId);
             else if (!source.isEmpty()) test.choose("remembered ID", source);
             else test.choose("artist/title search", "");
         }
@@ -200,15 +209,30 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             hints.remove(track.key);
             hints.put(track.key, providerId);
             while (hints.size() > SOURCE_HINT_LIMIT) hints.remove(hints.keySet().iterator().next());
-            JSONArray rows = new JSONArray();
-            hints.forEach((key, id) -> rows.put(new JSONArray().put(key).put(id)));
-            FileOutputStream out = null;
-            try {
-                out = sourceHints.startWrite();
-                out.write(rows.toString().getBytes(StandardCharsets.UTF_8));
-                sourceHints.finishWrite(out);
-            } catch (IOException failed) { sourceHints.failWrite(out); }
+            writeHints(hints);
         }
+    }
+
+    private void forgetSource(String key, String failedId) {
+        synchronized (SOURCE_HINT_LOCK) {
+            Map<String, String> hints = readHints();
+            if (failedId.equals(hints.get(key))) {
+                hints.remove(key);
+                writeHints(hints);
+            }
+        }
+    }
+
+    /** Calls are serialized by SOURCE_HINT_LOCK. A hint is never a condition for saving. */
+    private void writeHints(Map<String, String> hints) {
+        JSONArray rows = new JSONArray();
+        hints.forEach((key, id) -> rows.put(new JSONArray().put(key).put(id)));
+        FileOutputStream out = null;
+        try {
+            out = sourceHints.startWrite();
+            out.write(rows.toString().getBytes(StandardCharsets.UTF_8));
+            sourceHints.finishWrite(out);
+        } catch (IOException failed) { sourceHints.failWrite(out); }
     }
 
     // Parse only byte counts emitted by the CLI; an absent/estimated total stays indeterminate.

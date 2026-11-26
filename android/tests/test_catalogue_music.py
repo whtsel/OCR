@@ -297,6 +297,15 @@ class TestSelection(unittest.TestCase):
                 self.assertEqual(engine.inspections, [official['id']])
                 self.assertEqual(engine.downloads, [])
 
+    def test_offline_fallback_does_not_open_a_shipped_hint(self):
+        row = ('Joro', 'Wizkid', 'Joro', 262)
+        self.assertIsNotNone(resolver.published(*row))
+        engine = Engine([], {})
+        self.assertFalse(resolver.prepare(engine, *row, lambda _: self.fail('no source found'), LookupError,
+                                          use_published_hint=False))
+        self.assertEqual(engine.queries, ['Wizkid Joro'])
+        self.assertEqual(engine.inspections, [])
+
     def test_non_latin_recording_is_supported(self):
         info = dict(official, title='夜に駆ける', track='夜に駆ける', artists=['YOASOBI'], album='THE BOOK',
                     channel='YOASOBI', channel_is_verified=True, duration=261)

@@ -23,8 +23,8 @@ from websocket import create_connection
 import check_blackbox_p11 as p11
 
 PKG = 'com.blackboxstream.mobile.offline.desktop'
-SIDE_PKG = 'com.blackboxstream.mobile.offline.parallel'
-DOWNLOAD_TEST_PKG = 'com.blackboxstream.mobile.offline.diagnostic3'
+SIDE_PKG = 'com.blackboxstream.mobile.offline.resolve'
+DOWNLOAD_TEST_PKG = 'com.blackboxstream.mobile.offline.diagnostic4'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -440,14 +440,14 @@ def check_background():
     print('::notice::PASS saved playlist advanced while Settings was open offline, media Pause/Play worked, and Stop released the service')
 
 
-def check_unpinned_album(tone, tone_seconds):
+def check_catalogue_album(tone, tone_seconds):
     title, ref, seconds = 'The Victory Song', 'album:d735721521:1:1', 175
     airplane(True)
     with page() as js:
         open_music(js)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Queue is not offline for album fixture setup')
         if any(t['ref'] == ref or t['state'] != 'saved' for t in entries(js)):
-            raise RuntimeError('Unpinned album trial requires a fresh slot with no other pending job')
+            raise RuntimeError('Catalogue album trial requires a fresh slot with no other pending job')
         click(js, '#om-tab-find')
         query(js, 'Black Sherif The Victory Song')
         control = '#musicTorrGrid [aria-label="Queue The Victory Song"]:not(:disabled)'
@@ -460,7 +460,7 @@ def check_unpinned_album(tone, tone_seconds):
     key = row['key']
     for file in (f'files/offline-music/staging/{key}', f'files/offline-music/saved/{key}.m4a'):
         p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', file)
-    # An unpinned PC listing. Open and transfer that chosen ID; the complete tone
+    # A PC-style listing. Open and transfer that chosen ID; the complete tone
     # has neither the catalogue duration nor the selected listing's reported duration.
     selected, remix = 'AUDIO000004', 'REMIX000004'
     source = dict(id=selected, title=title, channel='Black Sherif - Topic', duration=201)
@@ -481,15 +481,91 @@ def check_unpinned_album(tone, tone_seconds):
         open_music(js)
         wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Cold album playback was not offline')
         check_cold_seek(js, row, tone_seconds)
-    print('PASS a PC-style unpinned source saved and played without a second metadata or duration check')
+    print('PASS a PC-style source saved and played without a second metadata or duration check')
+
+
+def check_source_memory(tone):
+    record = dict(ref='fixture:source-memory', title='Quiet Signal', artist='Test artist',
+                  album='First edition', seconds=185)
+    other = dict(record, album='Second edition')
+    video = 'HINT0000001'
+    route = f'/{video}.m4a'
+    hint_file = 'no_backup/youtubedl-android/fixture-recording-sources-v1.json'
+
+    def queue(js, *tracks):
+        body = json.dumps(dict(tracks=tracks, label='Source memory check'))
+        js(f"OfflineMusic.queue('enqueue',{json.dumps(body)})")
+        return [next(row for row in entries(js) if row['ref'] == t['ref'] and row['album'] == t['album']) for t in tracks]
+
+    def await_row(js, track, predicate, message):
+        key = json.dumps(track['key'])
+        return wait(js, f'JSON.parse(OfflineMusic.library()).tracks.find(t=>t.key==={key})', message, 55,
+                    accept=lambda row: row is not None and predicate(row))
+
+    def offline(js):
+        airplane(True)
+        wait(js, 'JSON.parse(OfflineMusic.library()).connected===false', 'Source-memory trial requires an offline queue')
+
+    def delete(js, row):
+        js(f"OfflineMusic.queue('delete',{json.dumps(row['key'])})")
+        if any(t['key'] == row['key'] for t in entries(js)):
+            raise RuntimeError('Deleted source-memory fixture is still queued')
+
+    def hints():
+        return dict(json.loads(p11.adb('shell', 'run-as', PKG, 'cat', hint_file)))
+
+    airplane(True)
+    with page() as js:
+        open_music(js)
+        offline(js)
+        first, = queue(js, record)
+        write_listing(first, [dict(id=video, title=record['title'], channel=record['artist'], duration=record['seconds'])])
+        counts = Counter()
+        with recording_server({route: tone}, counts=counts):
+            airplane(False)
+            await_row(js, first, lambda t: t['state'] == 'saved', 'A new song did not save from the search listing')
+            if counts != {route: 2} or hints().get(first['key']) != video:
+                raise RuntimeError('A completed search save was not remembered for the exact track')
+            verify_bytes(first, tone)
+            offline(js)
+        delete(js, first)
+    force_stop()
+    with page() as js:
+        open_music(js)
+        offline(js)
+        repeated, distinct = queue(js, record, other)
+        if repeated['key'] != first['key'] or distinct['key'] == first['key']:
+            raise RuntimeError('Memory altered the track key or conflated distinct editions')
+        # With no search results, only the previously saved edition can find audio.
+        write_listing(repeated, [])
+        write_listing(distinct, [])
+        counts.clear()
+        with recording_server({route: tone}, counts=counts):
+            airplane(False)
+            await_row(js, repeated, lambda t: t['state'] == 'saved', 'Cold re-save did not use the successful source')
+            await_row(js, distinct, lambda t: t['reason'] == 'no-source', 'A different edition reused the successful source')
+            if counts != {route: 2} or distinct['key'] in hints():
+                raise RuntimeError('An unsaved edition made a transfer or changed the source cache')
+            offline(js)
+        delete(js, repeated)
+        unavailable, = queue(js, record)
+        write_listing(unavailable, [], {video: 'Video unavailable'})
+        counts.clear()
+        with recording_server({route: tone}, counts=counts):
+            airplane(False)
+            await_row(js, unavailable, lambda t: t['reason'] == 'no-source' and t.get('freshSearch'),
+                      'A remembered source did not get its one fresh search when unavailable')
+            if counts or unavailable['key'] in hints():
+                raise RuntimeError('An unavailable remembered source was transferred or retained')
+    p11.adb('shell', 'run-as', PKG, 'test', '!', '-e', 'no_backup/youtubedl-android/recording-sources-v1.json')
+    print('::notice::PASS successful source reused after restart only for the exact edition; unavailable hint expired and refreshed once')
 
 
 def check_fresh_search(tone):
     removed = 'Video unavailable. This video has been removed by the uploader.'
     unavailable = 'Video unavailable'
     cases = [
-        # Exercise the existing pinned row without requesting its real audio.
-        ('On the Low', 'Burna Boy', 'African Giant', 'UFsskuvj8GQ', 'FRESH000001', unavailable, None, 'saved'),
+        ('Night Drive', 'Fixture Artist', 'Night Transit', 'STALE000001', 'FRESH000001', unavailable, None, 'saved'),
         ('Low Orbit', 'North Signal', 'Night Transit', 'STALE000002', 'FRESH000002', removed, removed, 'source-gone'),
         ('Daylight', 'Fixture Artist', 'Test Album', 'STALE000003', 'FRESH000003', unavailable, unavailable, 'source-unavailable'),
         ('Moonrise', 'Fixture Artist', 'Test Album', 'STALE000004', 'FRESH000004',
@@ -552,8 +628,9 @@ def check_provider_refusal():
         row, = [t for t in entries(js) if t['ref'] == record['ref']]
         if row['state'] != 'offline':
             raise RuntimeError('Synthetic refusal row did not wait for the fixture server')
-        key = row['key']
-        route = f'/{key}.m4a'
+        key, video = row['key'], 'DECLINE0001'
+        write_listing(row, [dict(id=video, title=row['title'], channel=row['artist'], duration=row['seconds'])])
+        route = f'/{video}.m4a'
         counts = Counter()
         click(js, '#om-tab-downloads')
         with recording_server({route: 403}, counts=counts):
@@ -639,8 +716,8 @@ def check_download_test(apk, tone):
     p11.adb('shell', 'run-as', pkg, 'mkdir', '-p', 'files/offline-music')
     p11.adb('shell', 'run-as', pkg, 'touch', 'files/offline-music/fixture-only')
     cases = [
-        (ESPRESSO, 'Sabrina Carpenter', "Short n' Sweet", 175, TRACKS[ESPRESSO][0], 'saved', 'publish file'),
-        ('On the Low', 'Burna Boy', 'African Giant', 185, 'UFsskuvj8GQ', 'refused', 'open source'),
+        (ESPRESSO, 'Sabrina Carpenter', "Short n' Sweet", 175, 'TESTCTRL001', 'saved', 'publish file'),
+        ('Source rejection', 'Test artist', 'Synthetic', 185, 'TESTOPEN001', 'refused', 'open source'),
         ('Media rejection', 'Test artist', 'Synthetic', 185, 'TESTBODY001', 'refused', 'audio transfer'),
         ('Unknown detail', 'Test artist', 'Synthetic', 185, 'TESTPRIV001', 'refused', 'open source'),
         ('Recovered source', 'Test artist', 'Synthetic', 185, 'TESTOLD0001', 'saved', 'publish file'),
@@ -666,21 +743,21 @@ def check_download_test(apk, tone):
                 watch_errors[video] = 'Video unavailable'
                 listing.append(dict(item, id='TESTNEW0001', title=title + ' (Official Audio)'))
             write_listing(rows[title], listing, watch_errors, package=pkg)
-        esp, low = f'/{TRACKS[ESPRESSO][0]}.m4a', '/UFsskuvj8GQ.m4a'
+        esp, denied = '/TESTCTRL001.m4a', '/TESTOPEN001.m4a'
         media, recovered = '/TESTBODY001.m4a', '/TESTNEW0001.m4a'
         counts = Counter()
-        with recording_server({esp: tone, low: 403, media: tone, recovered: tone},
+        with recording_server({esp: tone, denied: 403, media: tone, recovered: tone},
                               counts=counts, media_errors={media: 403}):
             airplane(False)
             expected = {title: result for title, _, _, _, _, result, _ in cases}
             wait(js, f"JSON.parse(OfflineMusic.library()).tracks.every(t => {{const outcome = {json.dumps(expected)}[t.title];"
                      "return outcome === 'saved' ? t.state === 'saved' : t.state === 'failed' && t.reason === outcome})",
                  'The diagnostic build did not reproduce the controlled saves and failures', 80)
-            if counts != {esp: 2, low: 1, media: 2, recovered: 2}:
+            if counts != {esp: 2, denied: 1, media: 2, recovered: 2}:
                 raise RuntimeError(f'Reporting changed the original provider requests: {counts}')
         report = js('OfflineMusic.downloadTestReport()')
         parts = report.split('\n\n')[1:]
-        if len(parts) != 6 or 'Download Test 3' not in report or 'bundled helper 2026.10.26' not in report:
+        if len(parts) != 6 or 'Download Test 4' not in report or 'bundled helper 2026.10.26' not in report:
             raise RuntimeError('The detailed report did not include one row per real attempt and helper version')
         peak = 0
         for part in parts:
@@ -705,7 +782,7 @@ def check_download_test(apk, tone):
                     raise RuntimeError('The report lost the original unavailable attempt before the fresh search')
                 if 'Excluded: TESTOLD0001' not in result or 'artist/title search=' not in result:
                     raise RuntimeError('The report lost the excluded source and timing of the fresh search')
-            if video in ('UFsskuvj8GQ', 'TESTBODY001') and f'Errors: HTTP 403 ({stage} +' not in result:
+            if video in ('TESTOPEN001', 'TESTBODY001') and f'Errors: HTTP 403 ({stage} +' not in result:
                 raise RuntimeError(f'The report lost the real HTTP status and its phase for {title}')
             if stage in ('audio transfer', 'publish file'):
                 if not re.search(r'(?m)^  Media: format .* \| (?:mp4|m4a) \| .* \| http\b', result) or 'audio transfer=' not in result:
@@ -827,9 +904,13 @@ def smoke(apk, root, upgrade_from=None, side_by_side=None, download_test=None):
     force_stop()
     # A complete-looking file in staging is not a completed helper run in this attempt.
     stage(pending[0], tones[KWAKU])
-    kwaku_route = f'/{TRACKS[KWAKU][0]}.m4a'
+    # Formerly pinned catalogue rows now use the same listing search as any other song.
+    selected = {KWAKU: 'SONGSRC0001', ESPRESSO: 'SONGSRC0002'}
+    for row in pending:
+        write_listing(row, [dict(id=selected[row['title']], title=row['title'], channel=row['artist'], duration=row['seconds'])])
+    kwaku_route = f'/{selected[KWAKU]}.m4a'
     short = {kwaku_route}
-    routes = {f'/{video}.m4a': tones[title] for title, (video, _) in TRACKS.items()}
+    routes = {f'/{video}.m4a': tones[title] for title, video in selected.items()}
     counts = Counter()
     with recording_server(routes, short_body=short, counts=counts) as received, page() as js:
         open_music(js)
@@ -846,7 +927,7 @@ def smoke(apk, root, upgrade_from=None, side_by_side=None, download_test=None):
         wait(js, "JSON.parse(OfflineMusic.library()).tracks.map(t=>t.state).join(',')==='failed,saved'",
              'An exhausted download was published or stopped the independent job', 115)
         failed, complete = entries(js)
-        # The pinned helper makes an open and a transfer GET per attempt. Three
+        # The packaged helper makes an open and a transfer GET per attempt. Three
         # automatic retries plus the initial attempt means eight GETs for Kwaku.
         expected = dict.fromkeys(routes, 2)
         expected[kwaku_route] = 8
@@ -921,7 +1002,8 @@ def smoke(apk, root, upgrade_from=None, side_by_side=None, download_test=None):
     album_tone = root / 'album-control.m4a'
     p11.run('ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=960:duration=213',
             '-c:a', 'aac', '-movflags', '+faststart', album_tone, timeout=30)
-    check_unpinned_album(album_tone.read_bytes(), 213)
+    check_catalogue_album(album_tone.read_bytes(), 213)
+    check_source_memory(tones[ESPRESSO])
     check_fresh_search(tones[ESPRESSO])
     check_provider_refusal()
     with page() as js:

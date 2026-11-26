@@ -7,7 +7,7 @@ on:
         type: boolean
         default: false
       publish_download_test:
-        description: Publish the separate ARM64 Download Test 3 APK with detailed local reports
+        description: Publish the separate ARM64 Download Test 4 APK with detailed local reports
         type: boolean
         default: false
       verify_live_catalogue:
@@ -41,11 +41,11 @@ jobs:
     timeout-minutes: 25
     env:
       GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx3g
-      APK_PACKAGE: ${{ inputs.publish_download_test && 'com.blackboxstream.mobile.offline.diagnostic3' || inputs.publish_apk && 'com.blackboxstream.mobile.offline.parallel' || 'com.blackboxstream.mobile.offline.desktop' }}
-      ARTIFACT_NAME: ${{ inputs.publish_download_test && 'BlackBox-Stream-v90-Download-Test-3-ARM64' || inputs.publish_apk && 'BlackBox-Stream-v90-Offline-1.5.10-ARM64' || 'BlackBox-Stream-v90-Offline-test-only' }}
-      APK_VERSION: ${{ inputs.publish_download_test && '1.5.10-download-test.3' || '1.5.10-offline' }}
-      APK_VERSION_CODE: ${{ inputs.publish_download_test && '25' || '24' }}
-      APK_LABEL: ${{ inputs.publish_download_test && 'BlackBox Stream v90 Download Test 3' || 'BlackBox Stream v90 Offline 1.5.10' }}
+      APK_PACKAGE: ${{ inputs.publish_download_test && 'com.blackboxstream.mobile.offline.diagnostic4' || inputs.publish_apk && 'com.blackboxstream.mobile.offline.resolve' || 'com.blackboxstream.mobile.offline.desktop' }}
+      ARTIFACT_NAME: ${{ inputs.publish_download_test && 'BlackBox-Stream-v90-Download-Test-4-ARM64' || inputs.publish_apk && 'BlackBox-Stream-v90-Offline-1.5.11-ARM64' || 'BlackBox-Stream-v90-Offline-test-only' }}
+      APK_VERSION: ${{ inputs.publish_download_test && '1.5.11-download-test.4' || '1.5.11-offline' }}
+      APK_VERSION_CODE: ${{ inputs.publish_download_test && '26' || '25' }}
+      APK_LABEL: ${{ inputs.publish_download_test && 'BlackBox Stream v90 Download Test 4' || 'BlackBox Stream v90 Offline 1.5.11' }}
     steps:
       - name: Verify the selected build mode
         if: ${{ inputs.publish_download_test && (inputs.publish_apk || inputs.verify_live_catalogue) }}

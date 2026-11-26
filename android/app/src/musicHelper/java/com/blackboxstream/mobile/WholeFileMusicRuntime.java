@@ -4,7 +4,6 @@ import android.content.Context;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.util.Locale;
 
 /** Save-only adapter for the packaged v90 helper. It never creates a streaming reader. */
 final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
@@ -13,15 +12,14 @@ final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
     private final File fixtureListings;
 
     WholeFileMusicRuntime(Context app) {
-        resolver = new BundledMusicRuntime(app);
         fixtureOnly = (app.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
                 && new File(app.getFilesDir(), "offline-music/fixture-only").isFile();
+        resolver = new BundledMusicRuntime(app, fixtureOnly);
         fixtureListings = new File(app.getFilesDir(), "offline-music/fixture-listings");
     }
 
     @Override public void published(PreparedMusic.Track track, File staging) {
-        if (fixtureOnly || !pinned(track).isEmpty()) return;
-        // Remember an ID only after a completed transfer has been published.
+        // Remember the resolved ID for this exact recording only after publication has succeeded.
         try { resolver.rememberSource(track, BundledMusicRuntime.sourceId(staging)); }
         catch (java.io.IOException ignored) { /* A missing hint only means another search next time. */ }
     }
@@ -35,7 +33,6 @@ final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
         for (File file : leftovers) {
             if (!file.delete()) throw new OfflineMusicLibrary.Refusal("storage");
         }
-        String video = excludedSource.isEmpty() ? pinned(track) : "";
         if (fixtureOnly) {
             // Test listings live outside staging so a second real helper process can read them.
             File listing = new File(fixtureListings, track.key + ".json");
@@ -46,31 +43,9 @@ final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
                 }
             }
         }
-        return resolver.saveOffline(track, staging, video, excludedSource,
-                fixtureOnly ? (video.isEmpty() ? track.key : video) : null, progress);
-    }
-
-    private static String wordKey(String text) {
-        return text.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]+", " ").trim();
-    }
-
-    // Restore the recording map from the v90 Music build. The Offline bridge still
-    // cannot supply a provider ID. The matched catalogue rows use these known IDs directly.
-    static String pinned(PreparedMusic.Track track) {
-        String title = wordKey(track.title), artist = wordKey(track.artist), album = wordKey(track.album);
-        if (title.equals("espresso") && artist.equals("sabrina carpenter")
-                && (album.equals("short n sweet") || album.equals("espresso")) && Math.abs(175 - track.seconds) <= 3) return "51zjlMhdSTE";
-        if (title.equals("kwaku the traveller") && artist.equals("black sherif")
-                && (album.equals("kwaku the traveller") || album.equals("the villain i never was"))
-                && Math.abs(185 - track.seconds) <= 3) return "Hb6I7GoTvzI";
-        if (title.equals("bad guy") && artist.equals("billie eilish")
-                && album.equals("when we all fall asleep where do we go") && Math.abs(194 - track.seconds) <= 3) return "ZD6rXLXZOEI";
-        if (title.equals("on the low") && artist.equals("burna boy")
-                && (album.equals("on the low") || album.equals("african giant")) && Math.abs(185 - track.seconds) <= 3) return "UFsskuvj8GQ";
-        if (title.equals("blinding lights") && artist.equals("the weeknd")
-                && (album.equals("after hours") || album.equals("after hours deluxe") || album.equals("the highlights"))
-                && Math.abs(200 - track.seconds) <= 3) return "fHI8X4OXluQ";
-        return "";
+        // Catalogue rows never supply a fixed provider ID. Search unless this exact row
+        // has a remembered successful save; a refresh ignores even that remembered source.
+        return resolver.saveOffline(track, staging, "", excludedSource, fixtureOnly ? track.key : null, progress);
     }
 
     static String lookupArtist(PreparedMusic.Track track) {

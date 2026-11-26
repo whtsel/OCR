@@ -282,11 +282,12 @@ def provider_stop(problem):
     return ''
 
 
-def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembered='', stage=lambda _: None, download=True):
+def prepare(engine, title, artist, album, seconds, mark, lookup_error, remembered='', stage=lambda _: None, download=True,
+            use_published_hint=True):
     checked = set()
     rejected = None
     inspected = False
-    hint = published(title, artist, album, seconds)
+    hint = published(title, artist, album, seconds) if use_published_hint else None
     probe = hint and os.environ.get('BBX_PUBLIC_PROBE') == '1'
 
     def verify(video, listing=None):
@@ -479,9 +480,9 @@ def main():
                 if problem:
                     print(problem, file=sys.stderr)
                 return 3 if problem else 0
-            # Keep 1.5.4 selection for titles the PC tokenizer cannot represent.
+            # Keep strict matching for titles the PC tokenizer cannot represent, without preset IDs in Offline.
             found = prepare(engine, title, artist, album, seconds, mark,
-                            (DownloadError, ExtractorError), remembered, stage, download)
+                            (DownloadError, ExtractorError), remembered, stage, download, use_published_hint=policy == 'exact')
     except (DownloadError, ExtractorError) as problem:
         # Give Android a fixed status for a refusal; never use it to try another source.
         outcome = provider_stop(problem)

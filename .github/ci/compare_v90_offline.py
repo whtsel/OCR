@@ -154,7 +154,7 @@ def main(full, pilot, only_pilot=False):
         if len(names) != 6 or any(a.read(n) != b.read(n) for n in names):
             raise RuntimeError('The six x86 runtime files are not identical')
     mode = 'pilot reference' if only_pilot else 'A/B'
-    note(f'Cold {mode} of Espresso ({VIDEO}), one job per app, matching x86 runtime; no fixtures, no credentials')
+    note(f'Cold {mode} of Espresso, matching x86 runtime; full v90 searches and p11 opens {VIDEO}. No fixtures or credentials.')
     p11.adb('shell', 'wm', 'size', '720x1560')
     p11.adb('shell', 'wm', 'density', '320')
     results = {}

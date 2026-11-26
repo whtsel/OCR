@@ -265,17 +265,14 @@ final class SaveCheck {
         PreparedMusic.Track track = new PreparedMusic.Track(new JSONObject().put("ref", "album:1752214909:1:7")
                 .put("title", "Espresso").put("artist", "Sabrina Carpenter").put("album", "Short n' Sweet")
                 .put("seconds", SECONDS).put("source", ""));
-        if (!VIDEO.equals(WholeFileMusicRuntime.pinned(track))) throw new OfflineMusicLibrary.Refusal("metadata");
-        if (SaveCheckBuild.FIXTURES) {
-            File flag = new File(app.getFilesDir(), "offline-music/fixture-only");
-            folder(flag.getParentFile());
-            if (!flag.isFile() && !flag.createNewFile()) throw new OfflineMusicLibrary.Refusal("fixture");
-        }
         beforeRequest(job);
-        return new WholeFileMusicRuntime(app).fetch(track, stage, "", (part, bytes, total) -> {
-            if ("downloading".equals(part)) phase(job, "transfer", bytes, total);
-            else if ("finishing".equals(part)) phase(job, "finish", bytes, total);
-        });
+        // This isolated comparison intentionally holds the provider ID constant.
+        // The main Offline queue resolves from the catalogue instead of supplying it.
+        return new BundledMusicRuntime(app).saveOffline(track, stage, VIDEO, "", SaveCheckBuild.FIXTURES ? VIDEO : null,
+                (part, bytes, total) -> {
+                    if ("downloading".equals(part)) phase(job, "transfer", bytes, total);
+                    else if ("finishing".equals(part)) phase(job, "finish", bytes, total);
+                });
     }
 
     private static String classify(Throwable failure) {

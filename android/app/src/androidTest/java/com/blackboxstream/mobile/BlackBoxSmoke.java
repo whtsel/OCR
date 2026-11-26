@@ -222,7 +222,7 @@ public final class BlackBoxSmoke extends Instrumentation {
     private void verifyHelperFixtures() throws Exception {
         Context app = getTargetContext();
         assertPass("Helper fixtures run only on the disposable preview package", musicPreview(app));
-        verifyOfflineRecordingHints();
+        verifyOfflineLookupCredits();
         Class<?> runtime = Class.forName("com.blackboxstream.mobile.BundledMusicRuntime");
         Object instance = runtime.getDeclaredConstructor(Context.class).newInstance(app);
         java.lang.reflect.Method run = runtime.getDeclaredMethod("execute", PreparedMusic.Control.class, File.class,
@@ -613,17 +613,8 @@ public final class BlackBoxSmoke extends Instrumentation {
         }
     }
 
-    private void verifyOfflineRecordingHints() throws Exception {
+    private void verifyOfflineLookupCredits() throws Exception {
         Class<?> adapter = Class.forName("com.blackboxstream.mobile.WholeFileMusicRuntime");
-        java.lang.reflect.Method pinned = adapter.getDeclaredMethod("pinned", PreparedMusic.Track.class);
-        PreparedMusic.Track billie = new PreparedMusic.Track(spec("pick:655095912", "bad guy", "Billie Eilish",
-                "WHEN WE ALL FALL ASLEEP, WHERE DO WE GO?", 194, ""));
-        PreparedMusic.Track burna = new PreparedMusic.Track(spec("pick:585584062", "On the Low", "Burna Boy", "On the Low", 185, ""));
-        PreparedMusic.Track remix = new PreparedMusic.Track(spec("pick:other", "bad guy (Remix)", "Billie Eilish", billie.album, 194, ""));
-        PreparedMusic.Track wrongRelease = new PreparedMusic.Track(spec("pick:other", "On the Low", "Burna Boy", "Other Album", 185, ""));
-        assertPass("Offline uses the earlier exact bad guy and On the Low IDs, not same-length remixes or editions",
-                "ZD6rXLXZOEI".equals(pinned.invoke(null, billie)) && "UFsskuvj8GQ".equals(pinned.invoke(null, burna))
-                        && "".equals(pinned.invoke(null, remix)) && "".equals(pinned.invoke(null, wrongRelease)));
         java.lang.reflect.Method credits = adapter.getDeclaredMethod("lookupArtist", PreparedMusic.Track.class);
         PreparedMusic.Track duet = new PreparedMusic.Track(spec("pick:1873297197", "Calm Down", "Rema", "Calm Down", 239, ""));
         PreparedMusic.Track solo = new PreparedMusic.Track(spec("pick:other", "Calm Down", "Rema", "Calm Down", 220, ""));
