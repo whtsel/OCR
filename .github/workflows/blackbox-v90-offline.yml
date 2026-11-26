@@ -7,7 +7,7 @@ on:
         type: boolean
         default: false
       publish_download_test:
-        description: Publish the separate ARM64 Download Test APK with local copyable reports
+        description: Publish the separate ARM64 Download Test 2 APK with detailed local reports
         type: boolean
         default: false
       verify_live_catalogue:
@@ -40,10 +40,11 @@ jobs:
     timeout-minutes: 25
     env:
       GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx3g
-      APK_PACKAGE: ${{ inputs.publish_download_test && 'com.blackboxstream.mobile.offline.diagnostic' || inputs.publish_apk && 'com.blackboxstream.mobile.offline.search' || 'com.blackboxstream.mobile.offline.desktop' }}
-      ARTIFACT_NAME: ${{ inputs.publish_download_test && 'BlackBox-Stream-v90-Download-Test-ARM64' || inputs.publish_apk && 'BlackBox-Stream-v90-Offline-1.5.9-ARM64' || 'BlackBox-Stream-v90-Offline-test-only' }}
-      APK_VERSION: ${{ inputs.publish_download_test && '1.5.9-download-test' || '1.5.9-offline' }}
-      APK_LABEL: ${{ inputs.publish_download_test && 'BlackBox Stream v90 Download Test' || 'BlackBox Stream v90 Offline 1.5.9' }}
+      APK_PACKAGE: ${{ inputs.publish_download_test && 'com.blackboxstream.mobile.offline.diagnostic2' || inputs.publish_apk && 'com.blackboxstream.mobile.offline.search' || 'com.blackboxstream.mobile.offline.desktop' }}
+      ARTIFACT_NAME: ${{ inputs.publish_download_test && 'BlackBox-Stream-v90-Download-Test-2-ARM64' || inputs.publish_apk && 'BlackBox-Stream-v90-Offline-1.5.9-ARM64' || 'BlackBox-Stream-v90-Offline-test-only' }}
+      APK_VERSION: ${{ inputs.publish_download_test && '1.5.9-download-test.2' || '1.5.9-offline' }}
+      APK_VERSION_CODE: ${{ inputs.publish_download_test && '24' || '23' }}
+      APK_LABEL: ${{ inputs.publish_download_test && 'BlackBox Stream v90 Download Test 2' || 'BlackBox Stream v90 Offline 1.5.9' }}
     steps:
       - name: Verify the selected build mode
         if: ${{ inputs.publish_download_test && (inputs.publish_apk || inputs.verify_live_catalogue) }}
@@ -107,7 +108,7 @@ jobs:
           "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
           metadata=$(grep -E '^(package:|application-label:|launchable-activity:|native-code:|application-debuggable)' "$RUNNER_TEMP/badging.txt")
           echo "::notice::${metadata//$'\n'/' / '}"
-          grep -Fq "package: name='$APK_PACKAGE' versionCode='23' versionName='$APK_VERSION'" "$RUNNER_TEMP/badging.txt"
+          grep -Fq "package: name='$APK_PACKAGE' versionCode='$APK_VERSION_CODE' versionName='$APK_VERSION'" "$RUNNER_TEMP/badging.txt"
           grep -Fxq "application-label:'$APK_LABEL'" "$RUNNER_TEMP/badging.txt"
           grep -q "^launchable-activity: name='com.blackboxstream.mobile.V90Activity'" "$RUNNER_TEMP/badging.txt"
           grep -q "^native-code: 'arm64-v8a'$" "$RUNNER_TEMP/badging.txt"

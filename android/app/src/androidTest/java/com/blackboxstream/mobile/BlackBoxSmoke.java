@@ -708,6 +708,14 @@ public final class BlackBoxSmoke extends Instrumentation {
         for (MusicPreparationBudget.Limit limit : MusicPreparationBudget.Limit.values())
             assertPass("Deadline is not labelled a connection error: " + limit.code,
                     limit.code.equals(OfflineMusicLibrary.classify(new OfflineMusicLibrary.Refusal(limit.code, limit.message))));
+        assertPass("Download Test exports the selected format without a media URL",
+                "format 140-drc | m4a | mp4a.40.2 | https | source duration 201 s | advertised 45678 B".equals(
+                        OfflineDownloadReport.describeFormat("{\"format_id\":\"140-drc\",\"ext\":\"m4a\",\"acodec\":\"mp4a.40.2\","
+                                + "\"protocol\":\"https\",\"duration\":200.5,\"filesize\":45678,\"url\":\"https://example.invalid/?token=PRIVATE\"}")));
+        assertPass("Download Test rejects unrecognized strings and unbounded metadata",
+                "format unknown | unknown | unknown | unknown".equals(OfflineDownloadReport.describeFormat(
+                        "{\"format_id\":\"PRIVATE_TOKEN\",\"ext\":\"private\",\"acodec\":\"different\\nERROR: HTTP Error 403\","
+                                + "\"protocol\":\"https://example.invalid\",\"duration\":999999,\"filesize_approx\":\"9999\"}")));
     }
 
     private void verifyMobileLookahead(File scratch, File fixture) throws Exception {

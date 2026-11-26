@@ -79,25 +79,28 @@ Espresso recording, with one explicit attempt at a time, separate empty audio st
 local result text. It does not import, update or overwrite either installed music app. Its
 fixture gate is not a live provider test.
 
-### Download Test: diagnose a failed save on the phone
+### Download Test 2: diagnose a failed save on the phone
 
 Dispatch the Offline workflow with **`publish_download_test=true`** for the separate, signed ARM64
-**BlackBox Stream v90 Download Test** APK. It installs alongside the normal app with its own empty
-Collection and runs the same 1.5.9 source selection, transfer, publication and retry path. The test
-adds reporting only; it does not run a second verification pass or change how refusals are handled.
+**BlackBox Stream v90 Download Test 2** APK. It installs alongside the normal app and the first
+Download Test with its own empty Collection. It runs the same 1.5.9 selection, transfer, publication,
+and retry path; it adds no network requests, verification pass, or refusal workaround.
 
-1. Use **Music → Find** in the test app to queue a song that repeatedly fails and one that normally
-   saves. For the current comparison, use **On the Low** (*African Giant*) and **Espresso**. Use the
-   same connection for both and wait for **Music → Downloads → Queue** to clear.
-2. Tap **Copy test report** in Downloads and paste the text into the support conversation. No IDs,
-   account sign-in, developer tools, or raw logs are needed. The same test works for any queued song.
+1. In **Music → Find**, queue just **JOY!** (*Echo The Angels*) and let the queue clear. Then queue a
+   known-good control, such as **Espresso**, on the same connection. Try **On the Low** (*African Giant*)
+   separately if diagnosing that recording too.
+2. Tap **Music → Downloads → Copy test report** and paste the text into the support conversation.
+   No IDs, account sign-in, developer tools, or raw logs are needed.
 
-The local report keeps the last 20 attempts. It records the selection route and public source ID,
-helper version, stage, result, recognized HTTP and provider signals, bytes, time, and whether the
-queue chose a fresh search or an automatic retry. It does not copy raw helper output, media URLs,
-audio, authentication details, or device identifiers. It sends nothing automatically. The emulator
-controls distinguish a 403 opening a source from a 403 transferring its audio, verify publication and
-fresh search, and check that the copyable report excludes raw output and survives reopening.
+The last 20 attempts record the search route and public source ID, fresh-search exclusion, stage
+and outcome, and a relative timeline from helper launch through search, open, first byte progress,
+conversion, and publication (when reached). They also include overlapping queue-job counts,
+start/end network type, and available media metadata (format ID, container, codec, protocol,
+reported size and duration). HTTP/error and solver warnings are reduced to known labels with a
+phase and time. Network snapshots do not detect every mid-attempt handoff, and a helper warning
+alone is not a diagnosis. No raw output, media URLs, headers, audio, network names, or device
+identifiers are copied, and nothing is sent automatically. Emulator fixtures cover open vs transfer
+403s, successful bytes, fresh search and redaction without contacting the live provider.
 
 ### Find, PC selection, and recording regression tests
 

@@ -51,7 +51,7 @@ public final class OfflineMusicService extends Service {
     }
 
     static boolean isDownloadTest(Context context) {
-        return "com.blackboxstream.mobile.offline.diagnostic".equals(context.getPackageName());
+        return "com.blackboxstream.mobile.offline.diagnostic2".equals(context.getPackageName());
     }
 
     static String snapshot() {

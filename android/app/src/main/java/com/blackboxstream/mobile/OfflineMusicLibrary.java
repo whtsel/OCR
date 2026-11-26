@@ -139,6 +139,7 @@ final class OfflineMusicLibrary {
         String phase = "preparing";
         long received, total;
         boolean resolving;
+        OfflineDownloadReport.Attempt test;
         Job(boolean resolving) { this.resolving = resolving; }
     }
 
@@ -211,9 +212,14 @@ final class OfflineMusicLibrary {
         return entry == null ? null : entry.track;
     }
 
-    private int link() {
+    private NetworkCapabilities linkCapabilities() {
         Network current = network == null ? null : network.getActiveNetwork();
-        NetworkCapabilities caps = current == null ? null : network.getNetworkCapabilities(current);
+        return current == null ? null : network.getNetworkCapabilities(current);
+    }
+
+    private int link() { return link(linkCapabilities()); }
+
+    private static int link(NetworkCapabilities caps) {
         if (caps == null || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return 0;
         // Metering is diagnostic only. Any available Internet transport can start the queue.
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) ? 2 : 1;
@@ -369,6 +375,7 @@ final class OfflineMusicLibrary {
         job.received = Math.max(job.received, received);
         if (total > 0) job.total = total;
         if (job.received > job.total) job.total = 0; // No trustworthy denominator yet.
+        if (job.test != null) job.test.progress(phase, received, active.size());
         if (job.resolving && ("downloading".equals(phase) || "finishing".equals(phase))) {
             // The same helper proceeds into transfer. Allow the next lookup without restarting it.
             job.resolving = false;
@@ -392,6 +399,9 @@ final class OfflineMusicLibrary {
             if (lookup) lookups++;
             Job job = new Job(lookup);
             active.put(entry.track.key, job);
+            if (downloadTest != null) for (Job other : active.values()) {
+                if (other.test != null) other.test.overlap(active.size());
+            }
             lastSnapshot = null;
             workers.execute(() -> download(entry, job, work));
         }
@@ -407,14 +417,17 @@ final class OfflineMusicLibrary {
         OfflineDownloadReport.Attempt test = null;
         long publishedBytes = 0;
         try {
-            int connection;
             synchronized (this) {
-                connection = paused ? 0 : link();
+                NetworkCapabilities caps = paused ? null : linkCapabilities();
+                int connection = link(caps);
                 deferred = connection == 0 || V90Api.expired() || cooldownUntil > SystemClock.elapsedRealtime();
+                if (!deferred && downloadTest != null) {
+                    job.test = test = new OfflineDownloadReport.Attempt(entry.track, entry.autoRetries,
+                            OfflineDownloadReport.link(caps, connection), entry.excludedSource, active.size());
+                }
             }
             if (!deferred) {
                 attempted = true;
-                if (downloadTest != null) test = new OfflineDownloadReport.Attempt(entry.track, entry.autoRetries, connection);
                 if (!directory(work) || !directory(saved)) throw new Refusal("storage");
                 Progress progress = (phase, received, total) -> report(key, job, phase, received, total);
                 if (test != null) {
@@ -476,8 +489,11 @@ final class OfflineMusicLibrary {
                 try { persist(); } catch (IOException | JSONException ignored) { Log.w(TAG, "Music job result could not be recorded"); }
             }
             if (test != null) {
-                try { downloadTest.record(test, failure.isEmpty() ? "saved" : failure, next, job.received, publishedBytes); }
-                catch (RuntimeException ignored) { /* Optional local reporting never changes a download. */ }
+                try {
+                    NetworkCapabilities caps = linkCapabilities();
+                    downloadTest.record(test, failure.isEmpty() ? "saved" : failure, next, job.received, publishedBytes,
+                            OfflineDownloadReport.link(caps, link(caps)));
+                } catch (RuntimeException ignored) { /* Optional local reporting never changes a download. */ }
             }
             active.remove(key);
             lastSnapshot = null;

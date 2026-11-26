@@ -24,7 +24,7 @@ import check_blackbox_p11 as p11
 
 PKG = 'com.blackboxstream.mobile.offline.desktop'
 SIDE_PKG = 'com.blackboxstream.mobile.offline.search'
-DOWNLOAD_TEST_PKG = 'com.blackboxstream.mobile.offline.diagnostic'
+DOWNLOAD_TEST_PKG = 'com.blackboxstream.mobile.offline.diagnostic2'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -679,19 +679,44 @@ def check_download_test(apk, tone):
                 raise RuntimeError(f'Reporting changed the original provider requests: {counts}')
         report = js('OfflineMusic.downloadTestReport()')
         parts = report.split('\n\n')[1:]
-        if len(parts) != 6 or 'bundled helper 2026.10.26' not in report:
-            raise RuntimeError('The report did not include one row per real attempt and helper version')
+        if len(parts) != 6 or 'Download Test 2' not in report or 'bundled helper 2026.10.26' not in report:
+            raise RuntimeError('The detailed report did not include one row per real attempt and helper version')
+        peak = 0
+        for part in parts:
+            jobs = re.search(r'Queue jobs \(start/transfer/peak\): (\d)/([1-5]|–)/([1-5])', part)
+            points = re.search(r'(?m)^  Timeline: (.*)$', part)
+            if not jobs or not points or not 1 <= int(jobs[1]) <= int(jobs[3]):
+                raise RuntimeError(f'The report lost queue or phase timings: {part}')
+            times = [int(point.rsplit('=', 1)[1]) for point in points[1].split('; ')]
+            if times != sorted(times) or 'helper launched=' not in points[1] or 'helper ended=' not in points[1]:
+                raise RuntimeError(f'The report did not keep monotonic helper timings: {part}')
+            peak = max(peak, int(jobs[3]))
+        if peak < 2 or not re.search(r'Link: (?:Wi-Fi|cellular|ethernet|VPN|other transport), (?:un)?metered, (?:not )?validated', report):
+            raise RuntimeError('The report lost overlapping jobs or coarse Android network capabilities')
         for title, _, _, _, video, outcome, stage in cases:
             notes = [part for part in parts if part.startswith(title + ' — ')]
             source = 'TESTNEW0001' if video == 'TESTOLD0001' else video
-            if not any(f'Source: {source}' in n and f'Stage: {stage} | Result: {outcome}' in n for n in notes):
+            result = next((n for n in notes if f'Source: {source}' in n and f'Stage: {stage} | Result: {outcome}' in n), None)
+            if result is None:
                 raise RuntimeError(f'The test report lost the actual source, stage or result for {title}')
-            if video == 'TESTOLD0001' and not any('Next: fresh search' in n and 'source-unavailable' in n for n in notes):
-                raise RuntimeError('The report lost the original unavailable attempt before the fresh search')
-            if video in ('UFsskuvj8GQ', 'TESTBODY001') and not any('Errors: HTTP 403' in n for n in notes):
-                raise RuntimeError(f'The report lost the real HTTP status for {title}')
-        if f'Published: {len(tone)} B' not in report or re.search(r'://|127\.0\.0\.1|TEST_ONLY_SECRET', report):
-            raise RuntimeError('The report lost published bytes or copied a raw helper URL/token')
+            if video == 'TESTOLD0001':
+                if not any('Next: fresh search' in n and 'source-unavailable' in n for n in notes):
+                    raise RuntimeError('The report lost the original unavailable attempt before the fresh search')
+                if 'Excluded: TESTOLD0001' not in result or 'artist/title search=' not in result:
+                    raise RuntimeError('The report lost the excluded source and timing of the fresh search')
+            if video in ('UFsskuvj8GQ', 'TESTBODY001') and f'Errors: HTTP 403 ({stage} +' not in result:
+                raise RuntimeError(f'The report lost the real HTTP status and its phase for {title}')
+            if stage in ('audio transfer', 'publish file'):
+                if not re.search(r'(?m)^  Media: format .* \| (?:mp4|m4a) \| .* \| http\b', result) or 'audio transfer=' not in result:
+                    raise RuntimeError(f'The report lost the selected transport or media format for {title}')
+            elif 'Media:' in result or 'audio transfer=' in result:
+                raise RuntimeError(f'The report incorrectly marked a transfer for {title}')
+            if stage == 'publish file' and not all(mark in result for mark in ('first byte progress=', 'finish audio=', 'publish file=', f'Published: {len(tone)} B')):
+                raise RuntimeError(f'The report lost successful transfer/publication evidence for {title}')
+            if video == 'TESTBODY001' and ('first byte progress=' in result or 'Received: 0 B reported | Published: 0 B' not in result):
+                raise RuntimeError('A media 403 before the first byte was reported as partial or saved')
+        if re.search(r'://|127\.0\.0\.1|TEST_ONLY_SECRET', report):
+            raise RuntimeError('The report copied a raw helper URL/token')
         wait(js, "!document.querySelector('#om-copy-test').disabled", 'The test report was not copyable')
         click(js, '#om-copy-test')
     p11.adb('shell', 'am', 'force-stop', pkg)
@@ -812,9 +837,11 @@ def smoke(apk, root, upgrade_from=None, side_by_side=None, download_test=None):
             raise RuntimeError('Queue did not survive force-stop')
         click(js, '#om-tab-downloads')
         airplane(False)
+        # A busy emulator can miss the first two-second window. Check the visible
+        # retry indicator; exact retry count is enforced by the GETs below.
         wait(js, "JSON.parse(OfflineMusic.library()).tracks[0].state==='retrying' && "
-                 "document.querySelector('#om-pending').textContent.includes('Retry 1 of 3')",
-             'A short transfer was flagged before the first automatic retry', 35)
+                 "/Retry [1-3] of 3/.test(document.querySelector('#om-pending').textContent)",
+             'A short transfer did not show an automatic retry', 40)
         wait(js, "JSON.parse(OfflineMusic.library()).tracks.map(t=>t.state).join(',')==='failed,saved'",
              'An exhausted download was published or stopped the independent job', 115)
         failed, complete = entries(js)

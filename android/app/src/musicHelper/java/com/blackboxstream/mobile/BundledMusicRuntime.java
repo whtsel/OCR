@@ -112,6 +112,8 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                 "--print", "before_dl:BBX_DOWNLOAD_START %(ext)s",
                 "--max-filesize", "24M", "-f", "bestaudio[ext=m4a]/bestaudio",
                 "-x", "--audio-format", "m4a", "--audio-quality", "0", "-o", new File(scratch, "audio.%(ext)s").getAbsolutePath()));
+        if (test != null) options.addAll(Arrays.asList("--print", "before_dl:" + OfflineDownloadReport.FORMAT_MARKER
+                + "%(.{format_id,ext,acodec,protocol,filesize,filesize_approx,duration})j"));
         // A fresh resolution may pick a different transfer format; never append to old audio bytes.
         if (offline) options.add("--no-continue");
         File audio = new File(scratch, "audio.m4a");
@@ -276,13 +278,17 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         }
         // Local initialization and waiting for the helper lock do not spend an Offline lookup's
         // provider deadline. Keep the existing absolute selection guard for the streaming preview.
-        MusicPreparationBudget budget = new MusicPreparationBudget(progress == null ? initAt : SystemClock.elapsedRealtime());
+        long launched = SystemClock.elapsedRealtime();
+        MusicPreparationBudget budget = new MusicPreparationBudget(progress == null ? initAt : launched);
+        OfflineDownloadReport.Attempt test = progress == null ? null : progress.downloadTest();
+        if (test != null) test.helperStarted(!discover, launched);
         control.attach(child);
         StringBuffer captured = new StringBuffer();
         Thread reader = new Thread(() -> {
             try (BufferedReader lines = new BufferedReader(new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8))) {
                 for (String line; (line = lines.readLine()) != null;) {
-                    MusicPreparationBudget.Phase phase = budget.marker(line, SystemClock.elapsedRealtime());
+                    long now = SystemClock.elapsedRealtime();
+                    MusicPreparationBudget.Phase phase = budget.marker(line, now);
                     if (phase == MusicPreparationBudget.Phase.TRANSFER) control.stage("resolved, transfer audio");
                     else if (phase == MusicPreparationBudget.Phase.FINALIZE) control.stage("downloaded, finalize audio");
                     else if ("BBX_CATALOGUE_QUERY".equals(line)) control.stage("search catalogue");
@@ -293,9 +299,14 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                         if (probe && line.length() <= 1000) Log.i("BlackBoxMusic", line);
                         continue; // Diagnostics must never influence the failure classification.
                     }
+                    if (test != null) {
+                        try { test.helperLine(line, now); }
+                        catch (RuntimeException ignored) { /* Observation cannot stop the reader. */ }
+                        if (line.startsWith(OfflineDownloadReport.FORMAT_MARKER)) continue;
+                    }
                     if (progress == null) maybeOfferStream(line, discover, scratch, control);
                     else reportProgress(line, progress);
-                    // Capture bounded output for diagnostics; never impose a line reading limit on the child.
+                    // Capture bounded output for failure classification; never impose a line reading limit on the child.
                     int keep = Math.min(line.length(), OUTPUT_LIMIT - captured.length());
                     if (keep > 0) captured.append(line, 0, keep).append('\n');
                 }
@@ -303,7 +314,6 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
         }, "music-helper-output");
         reader.setDaemon(true);
         reader.start();
-        OfflineDownloadReport.Attempt test = progress == null ? null : progress.downloadTest();
         int exit = -1;
         try {
             for (;;) {
@@ -333,7 +343,7 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
             child.destroy();
             control.detach();
             if (test != null) {
-                try { test.helperOutput(captured.toString(), budget.currentPhase(), exit); }
+                try { test.helperEnded(budget.currentPhase(), exit, SystemClock.elapsedRealtime()); }
                 catch (RuntimeException ignored) { /* Reporting must never affect the original helper result. */ }
             }
         }
