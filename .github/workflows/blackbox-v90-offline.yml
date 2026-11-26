@@ -7,7 +7,7 @@ on:
         type: boolean
         default: false
       publish_download_test:
-        description: Publish the separate ARM64 Download Test 2 APK with detailed local reports
+        description: Publish the separate ARM64 Download Test 3 APK with detailed local reports
         type: boolean
         default: false
       verify_live_catalogue:
@@ -24,6 +24,7 @@ on:
       - 'android/app/**'
       - 'android/vendor/**'
       - 'android/tests/test_catalogue_music.py'
+      - 'android/tests/MusicBudgetChecks.java'
       - 'android/tests/test_offline_find.cjs'
       - 'android/tests/test_pc_offline_selection.cjs'
       - '.github/ci/smoke_v90_offline.py'
@@ -40,11 +41,11 @@ jobs:
     timeout-minutes: 25
     env:
       GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx3g
-      APK_PACKAGE: ${{ inputs.publish_download_test && 'com.blackboxstream.mobile.offline.diagnostic2' || inputs.publish_apk && 'com.blackboxstream.mobile.offline.search' || 'com.blackboxstream.mobile.offline.desktop' }}
-      ARTIFACT_NAME: ${{ inputs.publish_download_test && 'BlackBox-Stream-v90-Download-Test-2-ARM64' || inputs.publish_apk && 'BlackBox-Stream-v90-Offline-1.5.9-ARM64' || 'BlackBox-Stream-v90-Offline-test-only' }}
-      APK_VERSION: ${{ inputs.publish_download_test && '1.5.9-download-test.2' || '1.5.9-offline' }}
-      APK_VERSION_CODE: ${{ inputs.publish_download_test && '24' || '23' }}
-      APK_LABEL: ${{ inputs.publish_download_test && 'BlackBox Stream v90 Download Test 2' || 'BlackBox Stream v90 Offline 1.5.9' }}
+      APK_PACKAGE: ${{ inputs.publish_download_test && 'com.blackboxstream.mobile.offline.diagnostic3' || inputs.publish_apk && 'com.blackboxstream.mobile.offline.parallel' || 'com.blackboxstream.mobile.offline.desktop' }}
+      ARTIFACT_NAME: ${{ inputs.publish_download_test && 'BlackBox-Stream-v90-Download-Test-3-ARM64' || inputs.publish_apk && 'BlackBox-Stream-v90-Offline-1.5.10-ARM64' || 'BlackBox-Stream-v90-Offline-test-only' }}
+      APK_VERSION: ${{ inputs.publish_download_test && '1.5.10-download-test.3' || '1.5.10-offline' }}
+      APK_VERSION_CODE: ${{ inputs.publish_download_test && '25' || '24' }}
+      APK_LABEL: ${{ inputs.publish_download_test && 'BlackBox Stream v90 Download Test 3' || 'BlackBox Stream v90 Offline 1.5.10' }}
     steps:
       - name: Verify the selected build mode
         if: ${{ inputs.publish_download_test && (inputs.publish_apk || inputs.verify_live_catalogue) }}
@@ -72,6 +73,10 @@ jobs:
           node --check android/app/src/offlineMusic/assets/v90-offline/offline-music.js
           node --test android/tests/test_offline_find.cjs android/tests/test_pc_offline_selection.cjs
           python3 -B android/tests/test_catalogue_music.py
+          budget="$RUNNER_TEMP/offline-budget-check"
+          mkdir -p "$budget"
+          javac -d "$budget" android/app/src/main/java/com/blackboxstream/mobile/MusicPreparationBudget.java android/tests/MusicBudgetChecks.java
+          java -cp "$budget" com.blackboxstream.mobile.MusicBudgetChecks
       - name: Build the v90 ARM64 candidate
         if: ${{ !inputs.verify_live_catalogue }}
         run: |

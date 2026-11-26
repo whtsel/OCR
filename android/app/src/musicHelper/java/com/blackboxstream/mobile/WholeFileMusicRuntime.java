@@ -19,8 +19,6 @@ final class WholeFileMusicRuntime implements OfflineMusicLibrary.Downloader {
         fixtureListings = new File(app.getFilesDir(), "offline-music/fixture-listings");
     }
 
-    @Override public boolean needsLookup(PreparedMusic.Track track) { return pinned(track).isEmpty(); }
-
     @Override public void published(PreparedMusic.Track track, File staging) {
         if (fixtureOnly || !pinned(track).isEmpty()) return;
         // Remember an ID only after a completed transfer has been published.

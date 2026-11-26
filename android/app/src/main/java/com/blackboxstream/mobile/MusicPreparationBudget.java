@@ -3,6 +3,7 @@ package com.blackboxstream.mobile;
 /** Separate deadlines for finding audio, receiving it, and writing the playable file. */
 final class MusicPreparationBudget {
     static final long LOOKUP_MS = 80_000;
+    static final long OPEN_MS = 80_000;
     static final long TRANSFER_MS = 145_000;
     static final long IDLE_MS = 40_000;
     static final long FINALIZE_MS = 25_000;
@@ -21,8 +22,17 @@ final class MusicPreparationBudget {
 
     private Phase phase = Phase.LOOKUP;
     private long phaseAt, bytesAt, highWater;
+    private boolean opening;
 
     MusicPreparationBudget(long now) { phaseAt = bytesAt = now; }
+
+    // Only the Offline resolver's selected-ID marker starts this window. A repeat marker
+    // cannot extend it, nor can a selection that arrived after the lookup deadline.
+    synchronized void openSelectedSource(long now) {
+        if (phase != Phase.LOOKUP || opening || now - phaseAt >= LOOKUP_MS) return;
+        opening = true;
+        phaseAt = now;
+    }
 
     // Markers are produced by the bundled CLI, not taken from the upload title or description.
     synchronized Phase marker(String line, long now) {
@@ -48,7 +58,7 @@ final class MusicPreparationBudget {
 
     synchronized Limit timeout(long now) {
         long age = now - phaseAt;
-        if (phase == Phase.LOOKUP && age >= LOOKUP_MS) return Limit.LOOKUP;
+        if (phase == Phase.LOOKUP && age >= (opening ? OPEN_MS : LOOKUP_MS)) return Limit.LOOKUP;
         if (phase == Phase.TRANSFER) {
             if (age >= TRANSFER_MS) return Limit.TRANSFER;
             if (now - bytesAt >= IDLE_MS) return Limit.IDLE;

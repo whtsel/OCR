@@ -293,8 +293,11 @@ final class BundledMusicRuntime implements PreparedMusic.Runtime {
                     else if (phase == MusicPreparationBudget.Phase.FINALIZE) control.stage("downloaded, finalize audio");
                     else if ("BBX_CATALOGUE_QUERY".equals(line)) control.stage("search catalogue");
                     else if ("BBX_CATALOGUE_ALTERNATE".equals(line)) control.stage("search alternate wording");
-                    else if (line.startsWith(PC_OPEN)) control.stage("open selected source");
-                    else if ("BBX_CATALOGUE_VERIFY".equals(line)) control.stage("verify source metadata");
+                    else if (line.startsWith(PC_OPEN)) {
+                        if ("".equals(offlineSource) && PreparedMusic.videoId(line.substring(PC_OPEN.length())))
+                            budget.openSelectedSource(now);
+                        control.stage("open selected source");
+                    } else if ("BBX_CATALOGUE_VERIFY".equals(line)) control.stage("verify source metadata");
                     if (line.startsWith("BBX_PUBLIC_PROBE:")) {
                         if (probe && line.length() <= 1000) Log.i("BlackBoxMusic", line);
                         continue; // Diagnostics must never influence the failure classification.

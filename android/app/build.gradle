@@ -9,8 +9,8 @@ def helperAbi = providers.gradleProperty('bbxHelperAbi').getOrElse('arm64-v8a')
 def offlineMusic = providers.gradleProperty('bbxOfflineMusic').getOrElse('false') == 'true'
 def offlineSideBySide = offlineMusic && providers.gradleProperty('bbxOfflineSideBySide').getOrElse('false') == 'true'
 def offlineDownloadTest = offlineMusic && providers.gradleProperty('bbxOfflineDownloadTest').getOrElse('false') == 'true'
-def offlineId = offlineDownloadTest ? 'com.blackboxstream.mobile.offline.diagnostic2' : offlineSideBySide ? 'com.blackboxstream.mobile.offline.search' : 'com.blackboxstream.mobile.offline.desktop'
-def offlineVersion = offlineDownloadTest ? '1.5.9-download-test.2' : '1.5.9-offline'
+def offlineId = offlineDownloadTest ? 'com.blackboxstream.mobile.offline.diagnostic3' : offlineSideBySide ? 'com.blackboxstream.mobile.offline.parallel' : 'com.blackboxstream.mobile.offline.desktop'
+def offlineVersion = offlineDownloadTest ? '1.5.10-download-test.3' : '1.5.10-offline'
 if (offlineMusic && !musicHelper) throw new GradleException('The offline v90 build requires the pinned music helper.')
 def fastPreview = !offlineMusic && providers.gradleProperty('bbxFastStartPreview').getOrElse('false') == 'true'
 def preview = offlineMusic || fastPreview || providers.gradleProperty('bbxHelperPreview').getOrElse('false') == 'true'
@@ -29,7 +29,7 @@ android {
         versionName '1.4.4-transport'
         testInstrumentationRunner 'com.blackboxstream.mobile.BlackBoxSmoke'
         if (musicHelper) {
-            versionCode(offlineDownloadTest ? 24 : offlineMusic ? 23 : 13)
+            versionCode(offlineDownloadTest ? 25 : offlineMusic ? 24 : 13)
             if (offlineMusic) applicationId(offlineId)
             versionName(offlineMusic ? offlineVersion : fastPreview ? '1.4.8-fast' : preview ? '1.4.8-music' : '1.4.8')
             if (!(helperAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException('Unsupported helper ABI: ' + helperAbi)
@@ -88,7 +88,7 @@ if (musicHelper) {
             if (preview) {
                 def label = previewRes.get().file('values/strings.xml').asFile
                 label.parentFile.mkdirs()
-                def appName = offlineDownloadTest ? 'BlackBox Stream v90 Download Test 2' : offlineMusic ? 'BlackBox Stream v90 Offline 1.5.9' : fastPreview ? 'BlackBox Music Fast Start' : 'BlackBox Music v90'
+                def appName = offlineDownloadTest ? 'BlackBox Stream v90 Download Test 3' : offlineMusic ? 'BlackBox Stream v90 Offline 1.5.10' : fastPreview ? 'BlackBox Music Fast Start' : 'BlackBox Music v90'
                 label.text = "<resources><string name=\"app_name\">${appName}</string></resources>"
             }
         }

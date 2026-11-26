@@ -30,8 +30,8 @@ final class OfflineMusicLibrary {
     static final int MAX_RECORDS = 1000;
     static final int MAX_BATCH = 120; // The largest packaged v90 album has 100 rows.
     private static final int MAX_PLAYLISTS = 100;
+    // One slot per song for the whole lookup, transfer, and publication attempt.
     private static final int PARALLEL_DOWNLOADS = 5;
-    private static final int PARALLEL_LOOKUPS = 2;
     private static final int MAX_AUTO_RETRIES = 3;
     private static final long FIRST_RETRY_DELAY_MS = 2_000;
     static final String TAG = "BlackBoxOfflineMusic";
@@ -40,7 +40,6 @@ final class OfflineMusicLibrary {
     // Loading the standalone v90 build does not load any helper dependencies.
     interface Downloader {
         File fetch(PreparedMusic.Track track, File staging, String excludedSource, Progress progress) throws Exception;
-        default boolean needsLookup(PreparedMusic.Track track) { return true; }
         default void published(PreparedMusic.Track track, File staging) { }
     }
     interface Progress {
@@ -138,9 +137,7 @@ final class OfflineMusicLibrary {
     private static final class Job {
         String phase = "preparing";
         long received, total;
-        boolean resolving;
         OfflineDownloadReport.Attempt test;
-        Job(boolean resolving) { this.resolving = resolving; }
     }
 
     private final ExecutorService workers = Executors.newFixedThreadPool(PARALLEL_DOWNLOADS);
@@ -376,28 +373,18 @@ final class OfflineMusicLibrary {
         if (total > 0) job.total = total;
         if (job.received > job.total) job.total = 0; // No trustworthy denominator yet.
         if (job.test != null) job.test.progress(phase, received, active.size());
-        if (job.resolving && ("downloading".equals(phase) || "finishing".equals(phase))) {
-            // The same helper proceeds into transfer. Allow the next lookup without restarting it.
-            job.resolving = false;
-            kick();
-        }
     }
 
     private synchronized void kick() {
         long now = SystemClock.elapsedRealtime();
         if (paused || active.size() >= PARALLEL_DOWNLOADS || downloader == null || V90Api.expired()
                 || cooldownUntil > now || link() == 0) return;
-        int lookups = 0;
-        for (Job job : active.values()) if (job.resolving) lookups++;
         for (Entry entry : entries.values()) {
             if (active.size() >= PARALLEL_DOWNLOADS) break;
             if (entry.complete || !entry.failure.isEmpty() || entry.retryAt > now
                     || active.containsKey(entry.track.key) || ready(entry) != null) continue;
             File work = new File(stage, entry.track.key);
-            boolean lookup = !entry.excludedSource.isEmpty() || downloader.needsLookup(entry.track);
-            if (lookup && lookups >= PARALLEL_LOOKUPS) continue;
-            if (lookup) lookups++;
-            Job job = new Job(lookup);
+            Job job = new Job();
             active.put(entry.track.key, job);
             if (downloadTest != null) for (Job other : active.values()) {
                 if (other.test != null) other.test.overlap(active.size());
@@ -467,12 +454,12 @@ final class OfflineMusicLibrary {
             String next = deferred ? "wait for connection" : "none";
             if (!deferred) {
                 if (!unavailable.isEmpty()) {
-                    // Give the fresh search a normal lookup slot. Do not spend a transfer retry,
+                    // Give the fresh search a normal queue slot. Do not spend a transfer retry,
                     // and keep the failed source excluded if a subsequent transfer is interrupted.
                     entries.put(key, entry.refresh(unavailable));
                     next = "fresh search";
                 } else if (entry.autoRetries < MAX_AUTO_RETRIES && retryAutomatically(failure)) {
-                    // Release both queue slots during backoff. The normal scheduler checks pause,
+                    // Release the queue slot during backoff. The normal scheduler checks pause,
                     // network and cooldown again before starting any new helper process.
                     long delay = FIRST_RETRY_DELAY_MS << entry.autoRetries;
                     entries.put(key, entry.retryAt(SystemClock.elapsedRealtime() + delay));

@@ -81,7 +81,7 @@ final class OfflineDownloadReport {
 
     String text() {
         if (!ready()) return "";
-        return "BlackBox Stream v90 Download Test 2 (Offline 1.5.9 path)\nAndroid API " + Build.VERSION.SDK_INT
+        return "BlackBox Stream v90 Download Test 3 (Offline 1.5.10 path)\nAndroid API " + Build.VERSION.SDK_INT
                 + " | bundled helper " + PreparedMusic.VERSION + " | no provider account\n"
                 + "Timeline: milliseconds from attempt start. Queue counts include this song.\n\n"
                 + TextUtils.join("\n\n", attempts);

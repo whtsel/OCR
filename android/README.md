@@ -4,10 +4,10 @@ This build ports the **actual v90 desktop interface**, not the previous Android 
 
 ## Full v90 Android with offline Music
 
-**BlackBox Stream v90 Offline 1.5.9** extends fresh search to a plain “Video unavailable”
-response when opening a selected source. The installable ARM64 APK uses
-`com.blackboxstream.mobile.offline.search`, so it installs alongside 1.5.8 without removing
-the older app. It starts with its own Collection.
+**BlackBox Stream v90 Offline 1.5.10** lets five songs start together and gives a selected
+source its own opening deadline. The installable ARM64 APK uses
+`com.blackboxstream.mobile.offline.parallel`, so it installs alongside previous versions
+without removing them. It starts with its own Collection.
 The default source build still uses `com.blackboxstream.mobile.offline.desktop`. Updating
 1.5.4 requires the original signing key, which that workflow did not retain. The temporary
 preview signing key is not an update key for an older installation. Android 7.0 or later
@@ -20,11 +20,15 @@ and an up-to-date System WebView are required. The original v90 expiry still app
   a provider or filled with an unrelated song. The download buttons explicitly add a song, selected
   group, or album. A partial album offers **Play saved** and **Queue missing**. The catalogue holds
   metadata, not bundled audio or a live provider-wide search.
-- **Downloads** allows up to five active jobs, with at most two unresolved recording lookups at
-  once. A job releases its lookup slot as it starts transferring, without reopening the source.
-  Known source IDs can transfer without a lookup. Pause lets active jobs finish but does not start
-  another; a provider rate limit pauses new jobs briefly. Progress rings show actual received bytes
-  against a known transfer size, or spin during lookup and unknown-length transfers.
+- **Downloads** allows five jobs to start together, including five songs that all need a lookup.
+  A song occupies one slot from lookup through publication, so a sixth waits for a slot to free up.
+  Offline artist/title resolution has up to 80 seconds after helper launch to select a source, then
+  up to 80 seconds to open the first selected source and start transfer. A repeated or late
+  selection cannot reset that deadline. Direct known-ID opens and the streaming preview keep
+  their previous deadlines. This addresses lookup timeouts, not sources that fail to open early.
+  Pause lets active jobs finish but does not start another; a provider rate limit pauses new jobs
+  briefly. Progress rings show actual received bytes against a known transfer size, or spin during
+  lookup and unknown-length transfers.
   The 1.5.4 **artist + song** ranking, known IDs, and existing fallback for titles that the PC
   tokenizer cannot represent are unchanged. If the selected source was removed or its open
   request returns only “Video unavailable,” Downloads requeues the same song for one fresh
@@ -79,12 +83,12 @@ Espresso recording, with one explicit attempt at a time, separate empty audio st
 local result text. It does not import, update or overwrite either installed music app. Its
 fixture gate is not a live provider test.
 
-### Download Test 2: diagnose a failed save on the phone
+### Download Test 3: diagnose a failed save on the phone
 
 Dispatch the Offline workflow with **`publish_download_test=true`** for the separate, signed ARM64
-**BlackBox Stream v90 Download Test 2** APK. It installs alongside the normal app and the first
-Download Test with its own empty Collection. It runs the same 1.5.9 selection, transfer, publication,
-and retry path; it adds no network requests, verification pass, or refusal workaround.
+**BlackBox Stream v90 Download Test 3** APK. It installs alongside the normal app and the previous
+Download Tests with its own empty Collection. It runs the same 1.5.10 queue, deadlines, selection,
+transfer, publication, and retries; it adds no network requests, verification pass, or refusal workaround.
 
 1. In **Music → Find**, queue just **JOY!** (*Echo The Angels*) and let the queue clear. Then queue a
    known-good control, such as **Espresso**, on the same connection. Try **On the Low** (*African Giant*)

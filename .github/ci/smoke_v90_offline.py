@@ -23,8 +23,8 @@ from websocket import create_connection
 import check_blackbox_p11 as p11
 
 PKG = 'com.blackboxstream.mobile.offline.desktop'
-SIDE_PKG = 'com.blackboxstream.mobile.offline.search'
-DOWNLOAD_TEST_PKG = 'com.blackboxstream.mobile.offline.diagnostic2'
+SIDE_PKG = 'com.blackboxstream.mobile.offline.parallel'
+DOWNLOAD_TEST_PKG = 'com.blackboxstream.mobile.offline.diagnostic3'
 ACTIVITY = PKG + '/com.blackboxstream.mobile.V90Activity'
 KWAKU, ESPRESSO = 'Kwaku the Traveller', 'Espresso'
 TRACKS = {title: (video, seconds) for title, video, seconds in p11.SONGS}
@@ -267,24 +267,25 @@ def check_parallel(js, tone):
         raise RuntimeError('Six controlled jobs did not wait for an Internet connection')
     if js("/Wi-Fi by default|Use mobile data/.test(document.querySelector('#offline-downloads').textContent)"):
         raise RuntimeError('Obsolete Wi-Fi/mobile download controls still in the UI')
-    gate, last_gate = threading.Event(), threading.Event()
-    paths = [f'/{key}.m4a' for key in keys]
+    paths = []
+    for i, row in enumerate(rows, 1):
+        video = f'PARALL{i:05d}'
+        write_listing(row, [dict(id=video, title=row['title'], channel=row['artist'], duration=row['seconds'])])
+        paths.append(f'/{video}.m4a')
+    gate, last_gate, headers = threading.Event(), threading.Event(), threading.Event()
     holds = {path: gate if i < 5 else last_gate for i, path in enumerate(paths)}
-    first, second = threading.Event(), threading.Event()
+    first_five = set(paths[:5])
     started = set()
     with recording_server(dict.fromkeys(paths, tone), holds, unknown=(paths[-1],),
-                          before_headers={paths[0]: first, paths[1]: second}, started=started) as seen:
+                          before_headers=dict.fromkeys(first_five, headers), started=started) as seen:
         metered_connection(js)  # Pending jobs must start automatically, without a Resume tap.
-        wait(js, f"Object.keys(JSON.parse(OfflineMusic.progress())).sort().join(',')==="
-             f"{json.dumps(','.join(sorted(keys[:2])))}", 'Two unresolved jobs did not start on reconnect', 11,
-             accept=lambda ready: ready and paths[0] in started and paths[1] in started)
-        if started != set(paths[:2]):
-            raise RuntimeError('More than two unresolved jobs made a request')
-        first.set()
-        wait(js, f"JSON.parse(OfflineMusic.progress())[{json.dumps(keys[0])}]?.phase==='downloading'",
-             'The next resolver did not start while the first transfer was still in flight', 10,
-             accept=lambda ready: ready and paths[2] in started)
-        second.set()
+        wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.progress()),keys={json.dumps(keys[:5])};"
+                 "return Object.keys(p).length===5 && keys.every(k=>p[k]?.phase==='opening' && p[k].received===0)})()",
+             'Five selected sources did not start opening before any audio transfer', 17,
+             accept=lambda ready: ready and first_five.issubset(started))
+        if started != first_five:
+            raise RuntimeError('The sixth job opened a source before a slot was available')
+        headers.set()
         wait(js, f"(()=>{{const p=JSON.parse(OfflineMusic.progress()),keys={json.dumps(keys[:5])};"
                  f"return Object.keys(p).length===5 && keys.every(k=>p[k]?.phase==='downloading' && "
                  f"p[k].total==={len(tone)} && p[k].received>0 && p[k].received<p[k].total)}})()",
@@ -317,7 +318,7 @@ def check_parallel(js, tone):
             raise RuntimeError('The last job bypassed the fixture transfer')
         for row in rows:
             verify_bytes(row, tone)
-    print('::notice::PASS two unresolved jobs at a time, then five overlapping transfers with byte-accurate rings, pause, and sixth indeterminate transfer')
+    print('::notice::PASS five source openings before any transfer, five overlapping transfers, and a sixth waiting for a slot and Resume')
 
 
 def check_find(js):
@@ -679,7 +680,7 @@ def check_download_test(apk, tone):
                 raise RuntimeError(f'Reporting changed the original provider requests: {counts}')
         report = js('OfflineMusic.downloadTestReport()')
         parts = report.split('\n\n')[1:]
-        if len(parts) != 6 or 'Download Test 2' not in report or 'bundled helper 2026.10.26' not in report:
+        if len(parts) != 6 or 'Download Test 3' not in report or 'bundled helper 2026.10.26' not in report:
             raise RuntimeError('The detailed report did not include one row per real attempt and helper version')
         peak = 0
         for part in parts:
